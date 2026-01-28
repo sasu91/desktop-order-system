@@ -1,0 +1,49 @@
+date,sku,event,qty,receipt_date,note
+2026-01-21,SKU001,SNAPSHOT,50,,Inventario iniziale
+2026-01-21,SKU002,SNAPSHOT,100,,Inventario iniziale
+2026-01-21,SKU003,SNAPSHOT,75,,Inventario iniziale
+2026-01-21,SKU004,SNAPSHOT,120,,Inventario iniziale
+2026-01-21,SKU005,SNAPSHOT,80,,Inventario iniziale
+2026-01-21,SKU006,SNAPSHOT,60,,Inventario iniziale
+2026-01-21,SKU007,SNAPSHOT,40,,Inventario iniziale
+2026-01-21,SKU008,SNAPSHOT,90,,Inventario iniziale
+2026-01-21,SKU009,SNAPSHOT,150,,Inventario iniziale
+2026-01-21,SKU010,SNAPSHOT,200,,Inventario iniziale
+2026-01-22,SKU001,ORDER,30,2026-01-25,Ordine fornitore A
+2026-01-22,SKU003,ORDER,50,2026-01-26,Ordine fornitore B
+2026-01-22,SKU001,SALE,-8,,Vendite giornaliere
+2026-01-22,SKU002,SALE,-15,,Vendite giornaliere
+2026-01-22,SKU004,SALE,-12,,Vendite giornaliere
+2026-01-22,SKU009,SALE,-20,,Vendite giornaliere
+2026-01-23,SKU001,SALE,-6,,Vendite giornaliere
+2026-01-23,SKU002,SALE,-18,,Vendite giornaliere
+2026-01-23,SKU003,SALE,-9,,Vendite giornaliere
+2026-01-23,SKU005,SALE,-10,,Vendite giornaliere
+2026-01-23,SKU006,ORDER,40,2026-01-27,Ordine fornitore C
+2026-01-23,SKU010,SALE,-25,,Vendite giornaliere
+2026-01-24,SKU001,SALE,-7,,Vendite giornaliere
+2026-01-24,SKU004,SALE,-14,,Vendite giornaliere
+2026-01-24,SKU007,SALE,-5,,Vendite giornaliere
+2026-01-24,SKU009,SALE,-22,,Vendite giornaliere
+2026-01-24,SKU010,SALE,-30,,Vendite giornaliere
+2026-01-24,SKU002,WASTE,-3,,Scaduto
+2026-01-25,SKU001,RECEIPT,30,2026-01-25,Ricevuto ordine fornitore A
+2026-01-25,SKU001,SALE,-9,,Vendite giornaliere
+2026-01-25,SKU002,SALE,-16,,Vendite giornaliere
+2026-01-25,SKU003,SALE,-8,,Vendite giornaliere
+2026-01-25,SKU008,SALE,-11,,Vendite giornaliere
+2026-01-25,SKU004,ORDER,80,2026-01-29,Ordine fornitore A
+2026-01-26,SKU003,RECEIPT,50,2026-01-26,Ricevuto ordine fornitore B
+2026-01-26,SKU001,SALE,-10,,Vendite giornaliere
+2026-01-26,SKU002,SALE,-20,,Vendite giornaliere
+2026-01-26,SKU005,SALE,-12,,Vendite giornaliere
+2026-01-26,SKU009,SALE,-25,,Vendite giornaliere
+2026-01-26,SKU010,SALE,-28,,Vendite giornaliere
+2026-01-26,SKU007,ADJUST,10,,Rettifica inventario
+2026-01-27,SKU001,SALE,-8,,Vendite giornaliere
+2026-01-27,SKU003,SALE,-11,,Vendite giornaliere
+2026-01-27,SKU004,SALE,-13,,Vendite giornaliere
+2026-01-27,SKU006,SALE,-7,,Vendite giornaliere
+2026-01-27,SKU009,SALE,-18,,Vendite giornaliere
+2026-01-27,SKU006,RECEIPT,40,2026-01-27,Ricevuto ordine fornitore C
+2026-01-27,SKU005,UNFULFILLED,5,,Cliente richiesto ma mancante
