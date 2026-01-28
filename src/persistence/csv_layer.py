@@ -117,6 +117,161 @@ class CSVLayer:
         skus = self.read_skus()
         return [s.sku for s in skus]
     
+    def sku_exists(self, sku_id: str) -> bool:
+        """Check if SKU exists in skus.csv."""
+        return sku_id in self.get_all_sku_ids()
+    
+    def search_skus(self, query: str) -> List[SKU]:
+        """
+        Search SKUs by SKU code or description (case-insensitive, client-side).
+        
+        Args:
+            query: Search query string
+            
+        Returns:
+            List of SKUs matching the query
+        """
+        if not query or not query.strip():
+            return self.read_skus()
+        
+        query_lower = query.strip().lower()
+        all_skus = self.read_skus()
+        
+        return [
+            sku for sku in all_skus
+            if query_lower in sku.sku.lower() or query_lower in sku.description.lower()
+        ]
+    
+    def update_sku(self, old_sku_id: str, new_sku_id: str, new_description: str, new_ean: Optional[str]) -> bool:
+        """
+        Update SKU (code, description, and/or EAN).
+        If SKU code changes, automatically updates all ledger references.
+        
+        Args:
+            old_sku_id: Current SKU identifier
+            new_sku_id: New SKU identifier (can be same as old)
+            new_description: New description
+            new_ean: New EAN (or None)
+            
+        Returns:
+            True if updated, False if not found
+        """
+        rows = self._read_csv("skus.csv")
+        updated = False
+        
+        for row in rows:
+            if row.get("sku") == old_sku_id:
+                row["sku"] = new_sku_id
+                row["description"] = new_description
+                row["ean"] = new_ean or ""
+                updated = True
+                break
+        
+        if not updated:
+            return False
+        
+        self._write_csv("skus.csv", rows)
+        
+        # If SKU code changed, update all ledger references
+        if old_sku_id != new_sku_id:
+            self._update_sku_references_in_ledger(old_sku_id, new_sku_id)
+        
+        return True
+    
+    def delete_sku(self, sku_id: str) -> bool:
+        """
+        Hard delete SKU from skus.csv.
+        
+        WARNING: Does NOT check if SKU is referenced in ledger.
+        Use can_delete_sku() first to validate.
+        
+        Args:
+            sku_id: SKU identifier to delete
+            
+        Returns:
+            True if deleted, False if not found
+        """
+        rows = self._read_csv("skus.csv")
+        filtered = [row for row in rows if row.get("sku") != sku_id]
+        
+        if len(filtered) < len(rows):
+            self._write_csv("skus.csv", filtered)
+            return True
+        
+        return False
+    
+    def can_delete_sku(self, sku_id: str) -> tuple[bool, str]:
+        """
+        Check if SKU can be safely deleted (no ledger references).
+        
+        Args:
+            sku_id: SKU identifier to check
+            
+        Returns:
+            (can_delete, reason_if_not)
+        """
+        # Check transactions
+        txns = self.read_transactions()
+        if any(t.sku == sku_id for t in txns):
+            return False, f"SKU {sku_id} has transactions in ledger"
+        
+        # Check sales
+        sales = self.read_sales()
+        if any(s.sku == sku_id for s in sales):
+            return False, f"SKU {sku_id} has sales records"
+        
+        # Check order logs
+        orders = self.read_order_logs()
+        if any(o.get("sku") == sku_id for o in orders):
+            return False, f"SKU {sku_id} has order history"
+        
+        # Check receiving logs
+        receives = self.read_receiving_logs()
+        if any(r.get("sku") == sku_id for r in receives):
+            return False, f"SKU {sku_id} has receiving history"
+        
+        return True, ""
+    
+    def _update_sku_references_in_ledger(self, old_sku: str, new_sku: str):
+        """
+        Update all references to old SKU with new SKU in ledger files.
+        
+        Args:
+            old_sku: Old SKU identifier
+            new_sku: New SKU identifier
+        """
+        # Update transactions
+        txn_rows = self._read_csv("transactions.csv")
+        for row in txn_rows:
+            if row.get("sku") == old_sku:
+                row["sku"] = new_sku
+        if txn_rows:
+            self._write_csv("transactions.csv", txn_rows)
+        
+        # Update sales
+        sales_rows = self._read_csv("sales.csv")
+        for row in sales_rows:
+            if row.get("sku") == old_sku:
+                row["sku"] = new_sku
+        if sales_rows:
+            self._write_csv("sales.csv", sales_rows)
+        
+        # Update order logs
+        order_rows = self._read_csv("order_logs.csv")
+        for row in order_rows:
+            if row.get("sku") == old_sku:
+                row["sku"] = new_sku
+        if order_rows:
+            self._write_csv("order_logs.csv", order_rows)
+        
+        # Update receiving logs
+        recv_rows = self._read_csv("receiving_logs.csv")
+        for row in recv_rows:
+            if row.get("sku") == old_sku:
+                row["sku"] = new_sku
+        if recv_rows:
+            self._write_csv("receiving_logs.csv", recv_rows)
+    
     # ============ Transaction Operations ============
     
     def read_transactions(self) -> List[Transaction]:

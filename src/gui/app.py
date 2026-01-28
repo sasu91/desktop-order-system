@@ -9,7 +9,8 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from ..persistence.csv_layer import CSVLayer
-from ..domain.ledger import StockCalculator
+from ..domain.ledger import StockCalculator, validate_ean
+from ..domain.models import SKU
 from ..workflows.order import OrderWorkflow, calculate_daily_sales_average
 from ..workflows.receiving import ReceivingWorkflow, ExceptionWorkflow
 
@@ -130,11 +131,313 @@ class DesktopOrderApp:
     
     def _build_admin_tab(self):
         """Build Admin tab (SKU management, data view)."""
-        frame = ttk.Frame(self.admin_tab)
-        frame.pack(fill="both", expand=True, padx=5, pady=5)
+        main_frame = ttk.Frame(self.admin_tab)
+        main_frame.pack(fill="both", expand=True, padx=5, pady=5)
         
-        ttk.Label(frame, text="Admin (TBD)", font=("Helvetica", 12)).pack(pady=10)
-        ttk.Label(frame, text="SKU management, legacy migration, data import").pack()
+        # Title
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(side="top", fill="x", pady=(0, 10))
+        ttk.Label(title_frame, text="SKU Management", font=("Helvetica", 14, "bold")).pack(side="left")
+        
+        # Search bar
+        search_frame = ttk.Frame(main_frame)
+        search_frame.pack(side="top", fill="x", pady=(0, 5))
+        
+        ttk.Label(search_frame, text="Search:").pack(side="left", padx=5)
+        self.search_var = tk.StringVar()
+        self.search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=30)
+        self.search_entry.pack(side="left", padx=5)
+        ttk.Button(search_frame, text="Search", command=self._search_skus).pack(side="left", padx=5)
+        ttk.Button(search_frame, text="Clear", command=self._clear_search).pack(side="left", padx=2)
+        
+        # Bind Enter key to search
+        self.search_entry.bind("<Return>", lambda e: self._search_skus())
+        
+        # Toolbar
+        toolbar_frame = ttk.Frame(main_frame)
+        toolbar_frame.pack(side="top", fill="x", pady=(0, 5))
+        
+        ttk.Button(toolbar_frame, text="➕ New SKU", command=self._new_sku).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="✏️ Edit SKU", command=self._edit_sku).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="🗑️ Delete SKU", command=self._delete_sku).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="🔄 Refresh", command=self._refresh_admin_tab).pack(side="left", padx=5)
+        
+        # SKU table
+        table_frame = ttk.Frame(main_frame)
+        table_frame.pack(fill="both", expand=True)
+        
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(table_frame)
+        scrollbar.pack(side="right", fill="y")
+        
+        self.admin_treeview = ttk.Treeview(
+            table_frame,
+            columns=("SKU", "Description", "EAN"),
+            height=20,
+            yscrollcommand=scrollbar.set,
+        )
+        scrollbar.config(command=self.admin_treeview.yview)
+        
+        self.admin_treeview.column("#0", width=0, stretch=tk.NO)
+        self.admin_treeview.column("SKU", anchor=tk.W, width=120)
+        self.admin_treeview.column("Description", anchor=tk.W, width=400)
+        self.admin_treeview.column("EAN", anchor=tk.W, width=150)
+        
+        self.admin_treeview.heading("SKU", text="SKU Code", anchor=tk.W)
+        self.admin_treeview.heading("Description", text="Description", anchor=tk.W)
+        self.admin_treeview.heading("EAN", text="EAN", anchor=tk.W)
+        
+        self.admin_treeview.pack(fill="both", expand=True)
+        
+        # Bind double-click to edit
+        self.admin_treeview.bind("<Double-1>", lambda e: self._edit_sku())
+    
+    def _refresh_admin_tab(self):
+        """Refresh SKU table with all SKUs."""
+        self.admin_treeview.delete(*self.admin_treeview.get_children())
+        
+        skus = self.csv_layer.read_skus()
+        for sku in skus:
+            self.admin_treeview.insert(
+                "",
+                "end",
+                values=(sku.sku, sku.description, sku.ean or ""),
+            )
+    
+    def _search_skus(self):
+        """Search SKUs by code or description."""
+        query = self.search_var.get()
+        self.admin_treeview.delete(*self.admin_treeview.get_children())
+        
+        skus = self.csv_layer.search_skus(query)
+        for sku in skus:
+            self.admin_treeview.insert(
+                "",
+                "end",
+                values=(sku.sku, sku.description, sku.ean or ""),
+            )
+    
+    def _clear_search(self):
+        """Clear search and show all SKUs."""
+        self.search_var.set("")
+        self._refresh_admin_tab()
+    
+    def _new_sku(self):
+        """Open form to create new SKU."""
+        self._show_sku_form(mode="new")
+    
+    def _edit_sku(self):
+        """Open form to edit selected SKU."""
+        selected = self.admin_treeview.selection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select a SKU to edit.")
+            return
+        
+        # Get selected SKU data
+        item = self.admin_treeview.item(selected[0])
+        values = item["values"]
+        selected_sku = values[0]  # SKU code
+        
+        self._show_sku_form(mode="edit", sku_code=selected_sku)
+    
+    def _delete_sku(self):
+        """Delete selected SKU after confirmation."""
+        selected = self.admin_treeview.selection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select a SKU to delete.")
+            return
+        
+        # Get selected SKU data
+        item = self.admin_treeview.item(selected[0])
+        values = item["values"]
+        sku_code = values[0]
+        
+        # Check if can delete
+        can_delete, reason = self.csv_layer.can_delete_sku(sku_code)
+        if not can_delete:
+            messagebox.showerror("Cannot Delete", f"Cannot delete SKU:\n{reason}")
+            return
+        
+        # Confirm deletion
+        confirm = messagebox.askyesno(
+            "Confirm Delete",
+            f"Are you sure you want to delete SKU '{sku_code}'?\n\nThis action cannot be undone.",
+        )
+        if not confirm:
+            return
+        
+        # Delete SKU
+        success = self.csv_layer.delete_sku(sku_code)
+        if success:
+            messagebox.showinfo("Success", f"SKU '{sku_code}' deleted successfully.")
+            self._refresh_admin_tab()
+        else:
+            messagebox.showerror("Error", f"Failed to delete SKU '{sku_code}'.")
+    
+    def _show_sku_form(self, mode="new", sku_code=None):
+        """
+        Show SKU form in popup window.
+        
+        Args:
+            mode: "new" or "edit"
+            sku_code: SKU code to edit (for edit mode)
+        """
+        # Create popup window
+        popup = tk.Toplevel(self.root)
+        popup.title("New SKU" if mode == "new" else "Edit SKU")
+        popup.geometry("500x300")
+        popup.resizable(False, False)
+        
+        # Center popup
+        popup.transient(self.root)
+        popup.grab_set()
+        
+        # Form frame
+        form_frame = ttk.Frame(popup, padding=20)
+        form_frame.pack(fill="both", expand=True)
+        
+        # Load existing SKU data if editing
+        current_sku = None
+        if mode == "edit" and sku_code:
+            skus = self.csv_layer.read_skus()
+            current_sku = next((s for s in skus if s.sku == sku_code), None)
+            if not current_sku:
+                messagebox.showerror("Error", f"SKU '{sku_code}' not found.")
+                popup.destroy()
+                return
+        
+        # SKU Code field
+        ttk.Label(form_frame, text="SKU Code:", font=("Helvetica", 10, "bold")).grid(
+            row=0, column=0, sticky="w", pady=5
+        )
+        sku_var = tk.StringVar(value=current_sku.sku if current_sku else "")
+        sku_entry = ttk.Entry(form_frame, textvariable=sku_var, width=40)
+        sku_entry.grid(row=0, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # Description field
+        ttk.Label(form_frame, text="Description:", font=("Helvetica", 10, "bold")).grid(
+            row=1, column=0, sticky="w", pady=5
+        )
+        desc_var = tk.StringVar(value=current_sku.description if current_sku else "")
+        desc_entry = ttk.Entry(form_frame, textvariable=desc_var, width=40)
+        desc_entry.grid(row=1, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # EAN field
+        ttk.Label(form_frame, text="EAN (optional):", font=("Helvetica", 10, "bold")).grid(
+            row=2, column=0, sticky="w", pady=5
+        )
+        ean_var = tk.StringVar(value=current_sku.ean if current_sku and current_sku.ean else "")
+        ean_entry = ttk.Entry(form_frame, textvariable=ean_var, width=40)
+        ean_entry.grid(row=2, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # Validate EAN button and status label
+        ean_status_var = tk.StringVar(value="")
+        ttk.Button(
+            form_frame, 
+            text="Validate EAN", 
+            command=lambda: self._validate_ean_field(ean_var.get(), ean_status_var)
+        ).grid(row=3, column=1, sticky="w", pady=5, padx=(10, 0))
+        
+        ean_status_label = ttk.Label(form_frame, textvariable=ean_status_var, foreground="green")
+        ean_status_label.grid(row=4, column=1, sticky="w", padx=(10, 0))
+        
+        # Configure grid
+        form_frame.columnconfigure(1, weight=1)
+        
+        # Button frame
+        button_frame = ttk.Frame(popup, padding=10)
+        button_frame.pack(side="bottom", fill="x")
+        
+        ttk.Button(
+            button_frame,
+            text="Save",
+            command=lambda: self._save_sku_form(
+                popup, mode, sku_var.get(), desc_var.get(), ean_var.get(), current_sku
+            ),
+        ).pack(side="right", padx=5)
+        
+        ttk.Button(button_frame, text="Cancel", command=popup.destroy).pack(side="right", padx=5)
+        
+        # Focus on first field
+        if mode == "new":
+            sku_entry.focus()
+        else:
+            desc_entry.focus()
+    
+    def _validate_ean_field(self, ean: str, status_var: tk.StringVar):
+        """Validate EAN and update status label."""
+        if not ean or not ean.strip():
+            status_var.set("✓ Empty EAN is valid")
+            return
+        
+        is_valid, error = validate_ean(ean.strip())
+        if is_valid:
+            status_var.set("✓ Valid EAN")
+        else:
+            status_var.set(f"✗ {error}")
+    
+    def _save_sku_form(self, popup, mode, sku_code, description, ean, current_sku):
+        """Save SKU from form."""
+        # Validate inputs
+        if not sku_code or not sku_code.strip():
+            messagebox.showerror("Validation Error", "SKU code cannot be empty.", parent=popup)
+            return
+        
+        if not description or not description.strip():
+            messagebox.showerror("Validation Error", "Description cannot be empty.", parent=popup)
+            return
+        
+        sku_code = sku_code.strip()
+        description = description.strip()
+        ean = ean.strip() if ean else None
+        
+        # Validate EAN if provided
+        if ean:
+            is_valid, error = validate_ean(ean)
+            if not is_valid:
+                messagebox.showerror("Invalid EAN", error, parent=popup)
+                return
+        
+        # Check for duplicate SKU code (only for new or if code changed)
+        if mode == "new" or (current_sku and sku_code != current_sku.sku):
+            if self.csv_layer.sku_exists(sku_code):
+                messagebox.showerror(
+                    "Duplicate SKU",
+                    f"SKU code '{sku_code}' already exists. Please use a different code.",
+                    parent=popup,
+                )
+                return
+        
+        try:
+            if mode == "new":
+                # Create new SKU
+                new_sku = SKU(sku=sku_code, description=description, ean=ean)
+                self.csv_layer.write_sku(new_sku)
+                messagebox.showinfo("Success", f"SKU '{sku_code}' created successfully.", parent=popup)
+            else:
+                # Update existing SKU
+                old_sku_code = current_sku.sku
+                success = self.csv_layer.update_sku(old_sku_code, sku_code, description, ean)
+                if success:
+                    if old_sku_code != sku_code:
+                        messagebox.showinfo(
+                            "Success",
+                            f"SKU updated successfully.\nSKU code changed from '{old_sku_code}' to '{sku_code}'.\nAll ledger references have been updated.",
+                            parent=popup,
+                        )
+                    else:
+                        messagebox.showinfo("Success", f"SKU '{sku_code}' updated successfully.", parent=popup)
+                else:
+                    messagebox.showerror("Error", "Failed to update SKU.", parent=popup)
+                    return
+            
+            # Refresh table and close popup
+            popup.destroy()
+            self._refresh_admin_tab()
+            
+        except ValueError as e:
+            messagebox.showerror("Error", str(e), parent=popup)
+
     
     def _refresh_stock_tab(self):
         """Refresh stock calculations and update tab."""
@@ -184,6 +487,7 @@ class DesktopOrderApp:
     def _refresh_all(self):
         """Refresh all tabs."""
         self._refresh_stock_tab()
+        self._refresh_admin_tab()
 
 
 def main():
