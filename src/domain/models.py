@@ -19,6 +19,8 @@ class EventType(Enum):
     WASTE = "WASTE"            # Waste: on_hand -= qty
     ADJUST = "ADJUST"          # Signed adjustment: on_hand ± qty
     UNFULFILLED = "UNFULFILLED"  # Tracking only (no impact on stock)
+    SKU_EDIT = "SKU_EDIT"      # SKU metadata change (description/EAN) - no stock impact
+    EXPORT_LOG = "EXPORT_LOG"  # Export operation log - no stock impact
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,16 @@ class Stock:
     def available(self) -> int:
         """Total available inventory (on_hand + on_order)."""
         return self.on_hand + self.on_order
+
+
+@dataclass(frozen=True)
+class AuditLog:
+    """Audit trail entry for tracking operations."""
+    timestamp: str      # ISO format with time: YYYY-MM-DD HH:MM:SS
+    operation: str      # SKU_EDIT, EXPORT, etc.
+    sku: Optional[str]  # Affected SKU (if applicable)
+    details: str        # Human-readable description
+    user: str = "system"  # User/operator (default: system)
 
 
 @dataclass(frozen=True)

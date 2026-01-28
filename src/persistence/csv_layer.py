@@ -10,7 +10,7 @@ from datetime import date
 from pathlib import Path
 from typing import List, Dict, Optional
 
-from ..domain.models import Transaction, EventType, SKU, SalesRecord
+from ..domain.models import Transaction, EventType, SKU, SalesRecord, AuditLog
 
 
 class CSVLayer:
@@ -26,6 +26,7 @@ class CSVLayer:
         "sales.csv": ["date", "sku", "qty_sold"],
         "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "status"],
         "receiving_logs.csv": ["receipt_id", "date", "sku", "qty_received", "receipt_date"],
+        "audit_log.csv": ["timestamp", "operation", "sku", "details", "user"],
     }
     
     def __init__(self, data_dir: Optional[Path] = None):
@@ -375,3 +376,66 @@ class CSVLayer:
             "qty_received": str(qty),
             "receipt_date": receipt_date,
         })
+    
+    # ============ Audit Log Operations ============
+    
+    def log_audit(self, operation: str, details: str, sku: Optional[str] = None, user: str = "system"):
+        """
+        Write audit log entry.
+        
+        Args:
+            operation: Operation type (SKU_EDIT, EXPORT, etc.)
+            details: Human-readable description
+            sku: Affected SKU (optional)
+            user: User/operator name
+        """
+        from datetime import datetime
+        
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        row = {
+            "timestamp": timestamp,
+            "operation": operation,
+            "sku": sku or "",
+            "details": details,
+            "user": user,
+        }
+        
+        self._append_csv("audit_log.csv", row)
+    
+    def read_audit_log(self, sku: Optional[str] = None, limit: Optional[int] = None) -> List[AuditLog]:
+        """
+        Read audit log entries, optionally filtered by SKU.
+        
+        Args:
+            sku: Filter by SKU (optional)
+            limit: Max number of records to return (most recent first)
+        
+        Returns:
+            List of AuditLog objects (sorted by timestamp desc)
+        """
+        rows = self._read_csv("audit_log.csv")
+        
+        # Filter by SKU if provided
+        if sku:
+            rows = [r for r in rows if r.get("sku") == sku]
+        
+        # Sort by timestamp descending (most recent first)
+        rows = sorted(rows, key=lambda r: r.get("timestamp", ""), reverse=True)
+        
+        # Apply limit
+        if limit:
+            rows = rows[:limit]
+        
+        # Convert to AuditLog objects
+        audit_logs = []
+        for row in rows:
+            audit_logs.append(AuditLog(
+                timestamp=row.get("timestamp", ""),
+                operation=row.get("operation", ""),
+                sku=row.get("sku") if row.get("sku") else None,
+                details=row.get("details", ""),
+                user=row.get("user", "system"),
+            ))
+        
+        return audit_logs

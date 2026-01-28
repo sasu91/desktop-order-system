@@ -10,6 +10,17 @@ from pathlib import Path
 import tempfile
 import os
 import csv
+from collections import defaultdict
+
+try:
+    import matplotlib
+    matplotlib.use('TkAgg')
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+    print("Warning: matplotlib not installed. Dashboard charts disabled.")
 
 try:
     from PIL import Image, ImageTk
@@ -91,12 +102,14 @@ class DesktopOrderApp:
         self.notebook.pack(fill="both", expand=True, padx=5, pady=5)
         
         # Create tabs
+        self.dashboard_tab = ttk.Frame(self.notebook)
         self.stock_tab = ttk.Frame(self.notebook)
         self.order_tab = ttk.Frame(self.notebook)
         self.receiving_tab = ttk.Frame(self.notebook)
         self.exception_tab = ttk.Frame(self.notebook)
         self.admin_tab = ttk.Frame(self.notebook)
         
+        self.notebook.add(self.dashboard_tab, text="📊 Dashboard")
         self.notebook.add(self.stock_tab, text="Stock (CalcolAto)")
         self.notebook.add(self.order_tab, text="Ordini")
         self.notebook.add(self.receiving_tab, text="Ricevimenti")
@@ -104,6 +117,7 @@ class DesktopOrderApp:
         self.notebook.add(self.admin_tab, text="Admin")
         
         # Build tab contents
+        self._build_dashboard_tab()
         self._build_stock_tab()
         self._build_order_tab()
         self._build_receiving_tab()
@@ -111,12 +125,17 @@ class DesktopOrderApp:
         self._build_admin_tab()
     
     def _build_stock_tab(self):
-        """Build Stock tab (read-only stock view)."""
-        frame = ttk.Frame(self.stock_tab)
-        frame.pack(fill="both", expand=True, padx=5, pady=5)
+        """Build Stock tab (read-only stock view with audit timeline)."""
+        # Main container with horizontal split
+        main_frame = ttk.Frame(self.stock_tab)
+        main_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # Left panel: Stock table
+        left_panel = ttk.Frame(main_frame)
+        left_panel.pack(side="left", fill="both", expand=True, padx=(0, 5))
         
         # Date picker
-        date_frame = ttk.Frame(frame)
+        date_frame = ttk.Frame(left_panel)
         date_frame.pack(side="top", fill="x", pady=5)
         
         ttk.Label(date_frame, text="AsOf Date:").pack(side="left", padx=5)
@@ -125,11 +144,20 @@ class DesktopOrderApp:
         ttk.Button(date_frame, text="Update", command=self._refresh_stock_tab).pack(side="left", padx=5)
         
         # Stock table
+        stock_frame = ttk.Frame(left_panel)
+        stock_frame.pack(fill="both", expand=True)
+        
+        stock_scroll = ttk.Scrollbar(stock_frame)
+        stock_scroll.pack(side="right", fill="y")
+        
         self.stock_treeview = ttk.Treeview(
-            frame,
+            stock_frame,
             columns=("SKU", "Description", "On Hand", "On Order", "Available"),
             height=15,
+            yscrollcommand=stock_scroll.set,
         )
+        stock_scroll.config(command=self.stock_treeview.yview)
+        
         self.stock_treeview.column("#0", width=0, stretch=tk.NO)
         self.stock_treeview.column("SKU", anchor=tk.W, width=80)
         self.stock_treeview.column("Description", anchor=tk.W, width=250)
@@ -144,6 +172,354 @@ class DesktopOrderApp:
         self.stock_treeview.heading("Available", text="Available", anchor=tk.CENTER)
         
         self.stock_treeview.pack(fill="both", expand=True)
+        
+        # Bind selection to show audit trail
+        self.stock_treeview.bind("<<TreeviewSelect>>", self._on_stock_select)
+        
+        # Right panel: Audit Timeline
+        right_panel = ttk.LabelFrame(main_frame, text="📋 Audit Timeline (Select SKU)", padding=5)
+        right_panel.pack(side="right", fill="both", expand=False, ipadx=10)
+        
+        # Timeline header
+        timeline_header = ttk.Frame(right_panel)
+        timeline_header.pack(side="top", fill="x", pady=(0, 5))
+        
+        self.audit_sku_label = ttk.Label(timeline_header, text="No SKU selected", font=("Helvetica", 10, "bold"))
+        self.audit_sku_label.pack(side="left")
+        
+        ttk.Button(timeline_header, text="🔄", command=self._refresh_audit_timeline, width=3).pack(side="right")
+        
+        # Timeline treeview
+        timeline_frame = ttk.Frame(right_panel)
+        timeline_frame.pack(fill="both", expand=True)
+        
+        timeline_scroll = ttk.Scrollbar(timeline_frame)
+        timeline_scroll.pack(side="right", fill="y")
+        
+        self.audit_timeline_treeview = ttk.Treeview(
+            timeline_frame,
+            columns=("Timestamp", "Event", "Qty", "Note"),
+            height=20,
+            show="tree headings",
+            yscrollcommand=timeline_scroll.set,
+        )
+        timeline_scroll.config(command=self.audit_timeline_treeview.yview)
+        
+        self.audit_timeline_treeview.column("#0", width=0, stretch=tk.NO)
+        self.audit_timeline_treeview.column("Timestamp", anchor=tk.W, width=130)
+        self.audit_timeline_treeview.column("Event", anchor=tk.W, width=100)
+        self.audit_timeline_treeview.column("Qty", anchor=tk.CENTER, width=50)
+        self.audit_timeline_treeview.column("Note", anchor=tk.W, width=150)
+        
+        self.audit_timeline_treeview.heading("Timestamp", text="Timestamp", anchor=tk.W)
+        self.audit_timeline_treeview.heading("Event", text="Event", anchor=tk.W)
+        self.audit_timeline_treeview.heading("Qty", text="Qty", anchor=tk.CENTER)
+        self.audit_timeline_treeview.heading("Note", text="Note", anchor=tk.W)
+        
+        self.audit_timeline_treeview.pack(fill="both", expand=True)
+        
+        # Store selected SKU for audit
+        self.selected_sku_for_audit = None
+    
+    def _build_dashboard_tab(self):
+        """Build Dashboard tab with KPI analytics and charts."""
+        main_frame = ttk.Frame(self.dashboard_tab)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Title
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(side="top", fill="x", pady=(0, 10))
+        ttk.Label(title_frame, text="📊 Dashboard & KPI Analytics", font=("Helvetica", 16, "bold")).pack(side="left")
+        ttk.Button(title_frame, text="🔄 Refresh", command=self._refresh_dashboard).pack(side="right", padx=5)
+        
+        # === KPI CARDS ===
+        kpi_frame = ttk.LabelFrame(main_frame, text="Key Performance Indicators", padding=10)
+        kpi_frame.pack(side="top", fill="x", pady=(0, 10))
+        
+        # Row 1: Main KPIs
+        kpi_row1 = ttk.Frame(kpi_frame)
+        kpi_row1.pack(side="top", fill="x", pady=5)
+        
+        # Total SKUs
+        self.kpi_total_skus_label = ttk.Label(kpi_row1, text="Total SKUs: -", font=("Helvetica", 11, "bold"))
+        self.kpi_total_skus_label.pack(side="left", padx=20)
+        
+        # Total Stock Value
+        self.kpi_stock_value_label = ttk.Label(kpi_row1, text="Stock Value: -", font=("Helvetica", 11, "bold"))
+        self.kpi_stock_value_label.pack(side="left", padx=20)
+        
+        # Avg Days Cover
+        self.kpi_days_cover_label = ttk.Label(kpi_row1, text="Avg Days Cover: -", font=("Helvetica", 11, "bold"))
+        self.kpi_days_cover_label.pack(side="left", padx=20)
+        
+        # Row 2: Alerts and Turnover
+        kpi_row2 = ttk.Frame(kpi_frame)
+        kpi_row2.pack(side="top", fill="x", pady=5)
+        
+        # Low Stock Alerts
+        self.kpi_low_stock_label = ttk.Label(kpi_row2, text="⚠️ Low Stock Alerts: -", font=("Helvetica", 11, "bold"), foreground="red")
+        self.kpi_low_stock_label.pack(side="left", padx=20)
+        
+        # Turnover Ratio
+        self.kpi_turnover_label = ttk.Label(kpi_row2, text="Turnover Ratio: -", font=("Helvetica", 11, "bold"))
+        self.kpi_turnover_label.pack(side="left", padx=20)
+        
+        # === CONTENT AREA (CHARTS + TABLES) ===
+        content_frame = ttk.Frame(main_frame)
+        content_frame.pack(fill="both", expand=True)
+        
+        # Left panel: Charts
+        charts_frame = ttk.LabelFrame(content_frame, text="Charts & Trends", padding=5)
+        charts_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
+        
+        if MATPLOTLIB_AVAILABLE:
+            # Create matplotlib figure with 2 subplots
+            self.dashboard_figure = Figure(figsize=(8, 6), dpi=80)
+            
+            # Subplot 1: Stock Trend (top)
+            self.stock_trend_ax = self.dashboard_figure.add_subplot(2, 1, 1)
+            self.stock_trend_ax.set_title("Stock Trend (Last 30 Days)")
+            self.stock_trend_ax.set_xlabel("Date")
+            self.stock_trend_ax.set_ylabel("Total Stock Units")
+            self.stock_trend_ax.grid(True, alpha=0.3)
+            
+            # Subplot 2: Sales Comparison (bottom)
+            self.sales_comparison_ax = self.dashboard_figure.add_subplot(2, 1, 2)
+            self.sales_comparison_ax.set_title("Sales Comparison (This Month vs Last Month)")
+            self.sales_comparison_ax.set_xlabel("Period")
+            self.sales_comparison_ax.set_ylabel("Total Sales")
+            self.sales_comparison_ax.grid(True, alpha=0.3)
+            
+            self.dashboard_figure.tight_layout()
+            
+            # Embed in Tkinter
+            self.dashboard_canvas = FigureCanvasTkAgg(self.dashboard_figure, master=charts_frame)
+            self.dashboard_canvas.draw()
+            self.dashboard_canvas.get_tk_widget().pack(fill="both", expand=True)
+        else:
+            ttk.Label(charts_frame, text="Charts disabled (matplotlib not installed)", foreground="gray").pack(pady=50)
+        
+        # Right panel: Top SKUs
+        right_panel = ttk.Frame(content_frame)
+        right_panel.pack(side="right", fill="both", expand=False, ipadx=10)
+        
+        # Top 10 by Movement
+        movement_frame = ttk.LabelFrame(right_panel, text="Top 10 SKUs by Movement", padding=5)
+        movement_frame.pack(side="top", fill="both", expand=True, pady=(0, 5))
+        
+        movement_scroll = ttk.Scrollbar(movement_frame)
+        movement_scroll.pack(side="right", fill="y")
+        
+        self.movement_treeview = ttk.Treeview(
+            movement_frame,
+            columns=("SKU", "Sales"),
+            height=10,
+            yscrollcommand=movement_scroll.set,
+            show="headings"
+        )
+        movement_scroll.config(command=self.movement_treeview.yview)
+        
+        self.movement_treeview.column("SKU", anchor=tk.W, width=100)
+        self.movement_treeview.column("Sales", anchor=tk.CENTER, width=80)
+        
+        self.movement_treeview.heading("SKU", text="SKU", anchor=tk.W)
+        self.movement_treeview.heading("Sales", text="Total Sales", anchor=tk.CENTER)
+        
+        self.movement_treeview.pack(fill="both", expand=True)
+        
+        # Top 10 by Stock Value
+        value_frame = ttk.LabelFrame(right_panel, text="Top 10 SKUs by Stock Value", padding=5)
+        value_frame.pack(side="top", fill="both", expand=True)
+        
+        value_scroll = ttk.Scrollbar(value_frame)
+        value_scroll.pack(side="right", fill="y")
+        
+        self.value_treeview = ttk.Treeview(
+            value_frame,
+            columns=("SKU", "Units", "Value"),
+            height=10,
+            yscrollcommand=value_scroll.set,
+            show="headings"
+        )
+        value_scroll.config(command=self.value_treeview.yview)
+        
+        self.value_treeview.column("SKU", anchor=tk.W, width=80)
+        self.value_treeview.column("Units", anchor=tk.CENTER, width=60)
+        self.value_treeview.column("Value", anchor=tk.CENTER, width=80)
+        
+        self.value_treeview.heading("SKU", text="SKU", anchor=tk.W)
+        self.value_treeview.heading("Units", text="Units", anchor=tk.CENTER)
+        self.value_treeview.heading("Value", text="Value", anchor=tk.CENTER)
+        
+        self.value_treeview.pack(fill="both", expand=True)
+        
+        # Initial load
+        self._refresh_dashboard()
+    
+    def _refresh_dashboard(self):
+        """Refresh all dashboard KPIs and charts."""
+        try:
+            # Get data
+            sku_ids = self.csv_layer.get_all_sku_ids()
+            skus_by_id = {sku.sku: sku for sku in self.csv_layer.read_skus()}
+            transactions = self.csv_layer.read_transactions()
+            sales_records = self.csv_layer.read_sales()
+            
+            today = date.today()
+            
+            # Calculate current stock for all SKUs
+            stocks = StockCalculator.calculate_all_skus(
+                sku_ids,
+                today,
+                transactions,
+                sales_records,
+            )
+            
+            # === KPI CALCULATIONS ===
+            
+            # 1. Total SKUs
+            total_skus = len(sku_ids)
+            self.kpi_total_skus_label.config(text=f"Total SKUs: {total_skus}")
+            
+            # 2. Total Stock Value (assuming unit price = 10 for demo; ideally from SKU data)
+            # TODO: Add price field to SKU model
+            unit_price = 10  # Default price
+            total_stock_units = sum(stock.on_hand for stock in stocks.values())
+            total_stock_value = total_stock_units * unit_price
+            self.kpi_stock_value_label.config(text=f"Stock Value: €{total_stock_value:,.0f}")
+            
+            # 3. Average Days Cover
+            total_days_cover = 0
+            skus_with_sales = 0
+            for sku_id in sku_ids:
+                stock = stocks[sku_id]
+                daily_sales = calculate_daily_sales_average(sales_records, sku_id, days_lookback=30)
+                if daily_sales > 0:
+                    days_cover = stock.on_hand / daily_sales
+                    total_days_cover += days_cover
+                    skus_with_sales += 1
+            
+            avg_days_cover = total_days_cover / skus_with_sales if skus_with_sales > 0 else 0
+            self.kpi_days_cover_label.config(text=f"Avg Days Cover: {avg_days_cover:.1f} days")
+            
+            # 4. Low Stock Alerts (stock < 10 units or days_cover < 7)
+            low_stock_count = 0
+            for sku_id in sku_ids:
+                stock = stocks[sku_id]
+                daily_sales = calculate_daily_sales_average(sales_records, sku_id, days_lookback=30)
+                days_cover = stock.on_hand / daily_sales if daily_sales > 0 else 999
+                
+                if stock.on_hand < 10 or days_cover < 7:
+                    low_stock_count += 1
+            
+            self.kpi_low_stock_label.config(text=f"⚠️ Low Stock Alerts: {low_stock_count}")
+            
+            # 5. Turnover Ratio (Total Sales Last 30 Days / Avg Stock)
+            thirty_days_ago = today - timedelta(days=30)
+            recent_sales = [sr for sr in sales_records if sr.date >= thirty_days_ago]
+            total_recent_sales = sum(sr.qty_sold for sr in recent_sales)
+            avg_stock = total_stock_units  # Simplified; ideally average over period
+            turnover_ratio = total_recent_sales / avg_stock if avg_stock > 0 else 0
+            self.kpi_turnover_label.config(text=f"Turnover Ratio: {turnover_ratio:.2f}")
+            
+            # === CHARTS ===
+            
+            if MATPLOTLIB_AVAILABLE:
+                # Chart 1: Stock Trend (Last 30 Days)
+                self.stock_trend_ax.clear()
+                self.stock_trend_ax.set_title("Stock Trend (Last 30 Days)")
+                self.stock_trend_ax.set_xlabel("Date")
+                self.stock_trend_ax.set_ylabel("Total Stock Units")
+                self.stock_trend_ax.grid(True, alpha=0.3)
+                
+                # Calculate stock for each day in last 30 days
+                dates = []
+                stock_levels = []
+                for i in range(30, -1, -1):
+                    calc_date = today - timedelta(days=i)
+                    daily_stocks = StockCalculator.calculate_all_skus(
+                        sku_ids,
+                        calc_date,
+                        transactions,
+                        sales_records,
+                    )
+                    total_stock = sum(s.on_hand for s in daily_stocks.values())
+                    dates.append(calc_date.strftime("%m-%d"))
+                    stock_levels.append(total_stock)
+                
+                self.stock_trend_ax.plot(dates, stock_levels, marker='o', linewidth=2, markersize=4, color='#2E86AB')
+                self.stock_trend_ax.set_xticks(range(0, len(dates), 5))
+                self.stock_trend_ax.set_xticklabels([dates[i] for i in range(0, len(dates), 5)], rotation=45)
+                
+                # Chart 2: Sales Comparison (This Month vs Last Month)
+                self.sales_comparison_ax.clear()
+                self.sales_comparison_ax.set_title("Sales Comparison (This Month vs Last Month)")
+                self.sales_comparison_ax.set_xlabel("Period")
+                self.sales_comparison_ax.set_ylabel("Total Sales")
+                self.sales_comparison_ax.grid(True, alpha=0.3)
+                
+                # Calculate this month and last month sales
+                first_day_this_month = today.replace(day=1)
+                last_month_end = first_day_this_month - timedelta(days=1)
+                first_day_last_month = last_month_end.replace(day=1)
+                
+                this_month_sales = [sr for sr in sales_records if sr.date >= first_day_this_month]
+                last_month_sales = [sr for sr in sales_records if first_day_last_month <= sr.date < first_day_this_month]
+                
+                this_month_total = sum(sr.qty_sold for sr in this_month_sales)
+                last_month_total = sum(sr.qty_sold for sr in last_month_sales)
+                
+                periods = ['Last Month', 'This Month']
+                values = [last_month_total, this_month_total]
+                colors = ['#A23B72', '#F18F01']
+                
+                bars = self.sales_comparison_ax.bar(periods, values, color=colors, width=0.6)
+                
+                # Add value labels on bars
+                for bar, value in zip(bars, values):
+                    height = bar.get_height()
+                    self.sales_comparison_ax.text(
+                        bar.get_x() + bar.get_width() / 2.,
+                        height,
+                        f'{int(value)}',
+                        ha='center',
+                        va='bottom',
+                        fontweight='bold'
+                    )
+                
+                self.dashboard_figure.tight_layout()
+                self.dashboard_canvas.draw()
+            
+            # === TOP 10 TABLES ===
+            
+            # Top 10 by Movement (Total Sales)
+            self.movement_treeview.delete(*self.movement_treeview.get_children())
+            
+            sales_by_sku = defaultdict(int)
+            for sr in sales_records:
+                sales_by_sku[sr.sku] += sr.qty_sold
+            
+            top_movement = sorted(sales_by_sku.items(), key=lambda x: x[1], reverse=True)[:10]
+            
+            for sku, total_sales in top_movement:
+                self.movement_treeview.insert("", "end", values=(sku, total_sales))
+            
+            # Top 10 by Stock Value
+            self.value_treeview.delete(*self.value_treeview.get_children())
+            
+            stock_values = []
+            for sku_id in sku_ids:
+                stock = stocks[sku_id]
+                value = stock.on_hand * unit_price
+                stock_values.append((sku_id, stock.on_hand, value))
+            
+            top_values = sorted(stock_values, key=lambda x: x[2], reverse=True)[:10]
+            
+            for sku, units, value in top_values:
+                self.value_treeview.insert("", "end", values=(sku, units, f"€{value:,.0f}"))
+        
+        except Exception as e:
+            messagebox.showerror("Dashboard Error", f"Failed to refresh dashboard: {str(e)}")
     
     def _build_order_tab(self):
         """Build Order tab (proposal + confirmation)."""
@@ -1503,6 +1879,13 @@ class DesktopOrderApp:
         # Delete SKU
         success = self.csv_layer.delete_sku(sku_code)
         if success:
+            # Log audit trail
+            self.csv_layer.log_audit(
+                operation="SKU_DELETE",
+                details=f"Deleted SKU: {sku_code}",
+                sku=sku_code,
+            )
+            
             messagebox.showinfo("Success", f"SKU '{sku_code}' deleted successfully.")
             self._refresh_admin_tab()
         else:
@@ -1647,12 +2030,38 @@ class DesktopOrderApp:
                 # Create new SKU
                 new_sku = SKU(sku=sku_code, description=description, ean=ean)
                 self.csv_layer.write_sku(new_sku)
+                
+                # Log audit trail
+                self.csv_layer.log_audit(
+                    operation="SKU_CREATE",
+                    details=f"Created SKU: {description} (EAN: {ean or 'N/A'})",
+                    sku=sku_code,
+                )
+                
                 messagebox.showinfo("Success", f"SKU '{sku_code}' created successfully.", parent=popup)
             else:
                 # Update existing SKU
                 old_sku_code = current_sku.sku
                 success = self.csv_layer.update_sku(old_sku_code, sku_code, description, ean)
                 if success:
+                    # Build change details
+                    changes = []
+                    if old_sku_code != sku_code:
+                        changes.append(f"Code: {old_sku_code} → {sku_code}")
+                    if current_sku.description != description:
+                        changes.append(f"Description: {current_sku.description} → {description}")
+                    if current_sku.ean != ean:
+                        changes.append(f"EAN: {current_sku.ean or 'N/A'} → {ean or 'N/A'}")
+                    
+                    change_details = ", ".join(changes) if changes else "No changes"
+                    
+                    # Log audit trail
+                    self.csv_layer.log_audit(
+                        operation="SKU_EDIT",
+                        details=f"Updated SKU: {change_details}",
+                        sku=sku_code,
+                    )
+                    
                     if old_sku_code != sku_code:
                         messagebox.showinfo(
                             "Success",
@@ -1718,6 +2127,89 @@ class DesktopOrderApp:
                 ),
             )
     
+    def _on_stock_select(self, event):
+        """Handle stock treeview selection to show audit timeline."""
+        selection = self.stock_treeview.selection()
+        if not selection:
+            self.selected_sku_for_audit = None
+            self.audit_sku_label.config(text="No SKU selected")
+            self.audit_timeline_treeview.delete(*self.audit_timeline_treeview.get_children())
+            return
+        
+        # Get selected SKU
+        item = self.stock_treeview.item(selection[0])
+        sku_code = item["values"][0]
+        self.selected_sku_for_audit = sku_code
+        
+        # Update label
+        self.audit_sku_label.config(text=f"Timeline for: {sku_code}")
+        
+        # Refresh timeline
+        self._refresh_audit_timeline()
+    
+    def _refresh_audit_timeline(self):
+        """Refresh audit timeline for selected SKU."""
+        self.audit_timeline_treeview.delete(*self.audit_timeline_treeview.get_children())
+        
+        if not self.selected_sku_for_audit:
+            return
+        
+        try:
+            # Get all transactions for this SKU
+            transactions = self.csv_layer.read_transactions()
+            sku_transactions = [t for t in transactions if t.sku == self.selected_sku_for_audit]
+            
+            # Sort by date (most recent first)
+            sku_transactions = sorted(sku_transactions, key=lambda t: t.date, reverse=True)
+            
+            # Get audit log entries for this SKU
+            audit_logs = self.csv_layer.read_audit_log(sku=self.selected_sku_for_audit, limit=50)
+            
+            # Combine and display
+            # First, show audit logs (SKU edits, etc.)
+            if audit_logs:
+                # Insert separator
+                self.audit_timeline_treeview.insert("", "end", values=("=== AUDIT LOG ===", "", "", ""))
+                
+                for log in audit_logs:
+                    self.audit_timeline_treeview.insert(
+                        "",
+                        "end",
+                        values=(
+                            log.timestamp,
+                            log.operation,
+                            "",
+                            log.details,
+                        ),
+                    )
+            
+            # Then, show transactions
+            if sku_transactions:
+                # Insert separator
+                self.audit_timeline_treeview.insert("", "end", values=("=== LEDGER EVENTS ===", "", "", ""))
+                
+                for txn in sku_transactions:
+                    note = txn.note or ""
+                    if txn.receipt_date:
+                        note = f"Receipt: {txn.receipt_date.isoformat()} | {note}"
+                    
+                    self.audit_timeline_treeview.insert(
+                        "",
+                        "end",
+                        values=(
+                            txn.date.isoformat(),
+                            txn.event.value,
+                            f"{txn.qty:+d}" if txn.qty else "",
+                            note,
+                        ),
+                    )
+            
+            if not audit_logs and not sku_transactions:
+                self.audit_timeline_treeview.insert("", "end", values=("No history found", "", "", ""))
+        
+        except Exception as e:
+            self.audit_timeline_treeview.insert("", "end", values=(f"Error: {str(e)}", "", "", ""))
+    
     # === EXPORT FUNCTIONALITY ===
     
     def _export_stock_snapshot(self):
@@ -1769,6 +2261,13 @@ class DesktopOrderApp:
                     ])
             
             messagebox.showinfo("Success", f"Stock snapshot exported to:\n{file_path}\n\n{len(sku_ids)} SKUs exported.")
+            
+            # Log export operation
+            self.csv_layer.log_audit(
+                operation="EXPORT",
+                details=f"Stock snapshot exported ({len(sku_ids)} SKUs, AsOf {self.asof_date.isoformat()})",
+                sku=None,
+            )
         
         except Exception as e:
             messagebox.showerror("Export Error", f"Failed to export stock snapshot: {str(e)}")
@@ -1803,6 +2302,13 @@ class DesktopOrderApp:
                     ])
             
             messagebox.showinfo("Success", f"Ledger exported to:\n{file_path}\n\n{len(transactions)} transactions exported.")
+            
+            # Log export operation
+            self.csv_layer.log_audit(
+                operation="EXPORT",
+                details=f"Ledger exported ({len(transactions)} transactions)",
+                sku=None,
+            )
         
         except Exception as e:
             messagebox.showerror("Export Error", f"Failed to export ledger: {str(e)}")
@@ -1830,6 +2336,13 @@ class DesktopOrderApp:
                     writer.writerow([sku.sku, sku.description, sku.ean])
             
             messagebox.showinfo("Success", f"SKU list exported to:\n{file_path}\n\n{len(skus)} SKUs exported.")
+            
+            # Log export operation
+            self.csv_layer.log_audit(
+                operation="EXPORT",
+                details=f"SKU list exported ({len(skus)} SKUs)",
+                sku=None,
+            )
         
         except Exception as e:
             messagebox.showerror("Export Error", f"Failed to export SKU list: {str(e)}")
@@ -1864,6 +2377,13 @@ class DesktopOrderApp:
                     ])
             
             messagebox.showinfo("Success", f"Order logs exported to:\n{file_path}\n\n{len(logs)} orders exported.")
+            
+            # Log export operation
+            self.csv_layer.log_audit(
+                operation="EXPORT",
+                details=f"Order logs exported ({len(logs)} orders)",
+                sku=None,
+            )
         
         except Exception as e:
             messagebox.showerror("Export Error", f"Failed to export order logs: {str(e)}")
@@ -1897,12 +2417,20 @@ class DesktopOrderApp:
                     ])
             
             messagebox.showinfo("Success", f"Receiving logs exported to:\n{file_path}\n\n{len(logs)} receipts exported.")
+            
+            # Log export operation
+            self.csv_layer.log_audit(
+                operation="EXPORT",
+                details=f"Receiving logs exported ({len(logs)} receipts)",
+                sku=None,
+            )
         
         except Exception as e:
             messagebox.showerror("Export Error", f"Failed to export receiving logs: {str(e)}")
     
     def _refresh_all(self):
         """Refresh all tabs."""
+        self._refresh_dashboard()
         self._refresh_stock_tab()
         self._refresh_pending_orders()
         self._refresh_receiving_history()
