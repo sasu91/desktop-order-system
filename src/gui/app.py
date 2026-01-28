@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ..persistence.csv_layer import CSVLayer
 from ..domain.ledger import StockCalculator, validate_ean
-from ..domain.models import SKU
+from ..domain.models import SKU, EventType
 from ..workflows.order import OrderWorkflow, calculate_daily_sales_average
 from ..workflows.receiving import ReceivingWorkflow, ExceptionWorkflow
 
@@ -40,6 +40,9 @@ class DesktopOrderApp:
         
         # Current AsOf date (for stock view)
         self.asof_date = date.today()
+        
+        # Current exception date (for exception view)
+        self.exception_date = date.today()
         
         # Create GUI
         self._create_widgets()
@@ -123,11 +126,387 @@ class DesktopOrderApp:
     
     def _build_exception_tab(self):
         """Build Exception tab (WASTE, ADJUST, UNFULFILLED)."""
-        frame = ttk.Frame(self.exception_tab)
-        frame.pack(fill="both", expand=True, padx=5, pady=5)
+        main_frame = ttk.Frame(self.exception_tab)
+        main_frame.pack(fill="both", expand=True, padx=5, pady=5)
         
-        ttk.Label(frame, text="Exception Management (TBD)", font=("Helvetica", 12)).pack(pady=10)
-        ttk.Label(frame, text="Quick entry for WASTE, ADJUST, UNFULFILLED").pack()
+        # Title
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(side="top", fill="x", pady=(0, 10))
+        ttk.Label(title_frame, text="Exception Management", font=("Helvetica", 14, "bold")).pack(side="left")
+        
+        # === QUICK ENTRY FORM (INLINE) ===
+        form_frame = ttk.LabelFrame(main_frame, text="Quick Entry", padding=10)
+        form_frame.pack(side="top", fill="x", pady=(0, 10))
+        
+        # Row 1: Event Type and SKU
+        row1_frame = ttk.Frame(form_frame)
+        row1_frame.pack(side="top", fill="x", pady=5)
+        
+        ttk.Label(row1_frame, text="Event Type:", width=12).pack(side="left", padx=(0, 5))
+        self.exception_type_var = tk.StringVar(value="WASTE")
+        exception_type_combo = ttk.Combobox(
+            row1_frame,
+            textvariable=self.exception_type_var,
+            values=["WASTE", "ADJUST", "UNFULFILLED"],
+            state="readonly",
+            width=15,
+        )
+        exception_type_combo.pack(side="left", padx=(0, 20))
+        
+        ttk.Label(row1_frame, text="SKU:", width=8).pack(side="left", padx=(0, 5))
+        self.exception_sku_var = tk.StringVar()
+        self.exception_sku_combo = ttk.Combobox(
+            row1_frame,
+            textvariable=self.exception_sku_var,
+            width=20,
+        )
+        self.exception_sku_combo.pack(side="left", padx=(0, 20))
+        
+        # Populate SKU dropdown
+        self._populate_exception_sku_dropdown()
+        
+        ttk.Label(row1_frame, text="Quantity:", width=8).pack(side="left", padx=(0, 5))
+        self.exception_qty_var = tk.StringVar()
+        ttk.Entry(row1_frame, textvariable=self.exception_qty_var, width=10).pack(side="left", padx=(0, 20))
+        
+        # Row 2: Date and Notes
+        row2_frame = ttk.Frame(form_frame)
+        row2_frame.pack(side="top", fill="x", pady=5)
+        
+        ttk.Label(row2_frame, text="Date:", width=12).pack(side="left", padx=(0, 5))
+        self.exception_date_var = tk.StringVar(value=self.exception_date.isoformat())
+        ttk.Entry(row2_frame, textvariable=self.exception_date_var, width=15).pack(side="left", padx=(0, 20))
+        
+        ttk.Label(row2_frame, text="Notes:", width=8).pack(side="left", padx=(0, 5))
+        self.exception_notes_var = tk.StringVar()
+        ttk.Entry(row2_frame, textvariable=self.exception_notes_var, width=40).pack(side="left", padx=(0, 20))
+        
+        # Row 3: Buttons
+        row3_frame = ttk.Frame(form_frame)
+        row3_frame.pack(side="top", fill="x", pady=5)
+        
+        ttk.Button(row3_frame, text="✓ Submit Exception", command=self._submit_exception).pack(side="left", padx=5)
+        ttk.Button(row3_frame, text="✗ Clear Form", command=self._clear_exception_form).pack(side="left", padx=5)
+        
+        # === HISTORY TABLE ===
+        history_frame = ttk.LabelFrame(main_frame, text="Exception History", padding=5)
+        history_frame.pack(fill="both", expand=True)
+        
+        # Toolbar
+        toolbar_frame = ttk.Frame(history_frame)
+        toolbar_frame.pack(side="top", fill="x", pady=(0, 5))
+        
+        ttk.Label(toolbar_frame, text="View Date:", font=("Helvetica", 9)).pack(side="left", padx=(0, 5))
+        self.exception_view_date_var = tk.StringVar(value=self.exception_date.isoformat())
+        ttk.Entry(toolbar_frame, textvariable=self.exception_view_date_var, width=15).pack(side="left", padx=(0, 5))
+        ttk.Button(toolbar_frame, text="🔄 Refresh", command=self._refresh_exception_tab).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="📅 Today", command=self._set_exception_today).pack(side="left", padx=5)
+        
+        # Separator
+        ttk.Separator(toolbar_frame, orient="vertical").pack(side="left", fill="y", padx=10)
+        
+        ttk.Button(toolbar_frame, text="🗑️ Revert Selected", command=self._revert_selected_exception).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="🗑️ Revert All...", command=self._revert_bulk_exceptions).pack(side="left", padx=5)
+        
+        # Table
+        table_frame = ttk.Frame(history_frame)
+        table_frame.pack(fill="both", expand=True)
+        
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(table_frame)
+        scrollbar.pack(side="right", fill="y")
+        
+        self.exception_treeview = ttk.Treeview(
+            table_frame,
+            columns=("Type", "SKU", "Qty", "Notes", "Date"),
+            height=15,
+            yscrollcommand=scrollbar.set,
+        )
+        scrollbar.config(command=self.exception_treeview.yview)
+        
+        self.exception_treeview.column("#0", width=0, stretch=tk.NO)
+        self.exception_treeview.column("Type", anchor=tk.W, width=100)
+        self.exception_treeview.column("SKU", anchor=tk.W, width=100)
+        self.exception_treeview.column("Qty", anchor=tk.CENTER, width=80)
+        self.exception_treeview.column("Notes", anchor=tk.W, width=300)
+        self.exception_treeview.column("Date", anchor=tk.CENTER, width=100)
+        
+        self.exception_treeview.heading("Type", text="Type", anchor=tk.W)
+        self.exception_treeview.heading("SKU", text="SKU", anchor=tk.W)
+        self.exception_treeview.heading("Qty", text="Qty", anchor=tk.CENTER)
+        self.exception_treeview.heading("Notes", text="Notes", anchor=tk.W)
+        self.exception_treeview.heading("Date", text="Date", anchor=tk.CENTER)
+        
+        self.exception_treeview.pack(fill="both", expand=True)
+    
+    def _populate_exception_sku_dropdown(self):
+        """Populate SKU dropdown in exception form."""
+        sku_ids = self.csv_layer.get_all_sku_ids()
+        self.exception_sku_combo["values"] = sku_ids
+    
+    def _clear_exception_form(self):
+        """Clear exception form fields."""
+        self.exception_type_var.set("WASTE")
+        self.exception_sku_var.set("")
+        self.exception_qty_var.set("")
+        self.exception_date_var.set(date.today().isoformat())
+        self.exception_notes_var.set("")
+    
+    def _submit_exception(self):
+        """Submit exception from quick entry form."""
+        # Validate inputs
+        event_type_str = self.exception_type_var.get()
+        sku = self.exception_sku_var.get().strip()
+        qty_str = self.exception_qty_var.get().strip()
+        date_str = self.exception_date_var.get().strip()
+        notes = self.exception_notes_var.get().strip()
+        
+        if not sku:
+            messagebox.showerror("Validation Error", "Please select a SKU.")
+            return
+        
+        if not qty_str:
+            messagebox.showerror("Validation Error", "Please enter a quantity.")
+            return
+        
+        try:
+            qty = int(qty_str)
+        except ValueError:
+            messagebox.showerror("Validation Error", "Quantity must be an integer.")
+            return
+        
+        try:
+            event_date = date.fromisoformat(date_str)
+        except ValueError:
+            messagebox.showerror("Validation Error", "Invalid date format. Use YYYY-MM-DD.")
+            return
+        
+        # Map string to EventType
+        event_type_map = {
+            "WASTE": EventType.WASTE,
+            "ADJUST": EventType.ADJUST,
+            "UNFULFILLED": EventType.UNFULFILLED,
+        }
+        event_type = event_type_map.get(event_type_str)
+        
+        if not event_type:
+            messagebox.showerror("Error", f"Invalid event type: {event_type_str}")
+            return
+        
+        # Record exception
+        try:
+            txn, already_recorded = self.exception_workflow.record_exception(
+                event_type=event_type,
+                sku=sku,
+                qty=qty,
+                event_date=event_date,
+                notes=notes,
+            )
+            
+            if already_recorded:
+                messagebox.showwarning(
+                    "Already Recorded",
+                    f"Exception of type {event_type_str} for SKU '{sku}' on {event_date.isoformat()} was already recorded today.",
+                )
+            else:
+                messagebox.showinfo(
+                    "Success",
+                    f"Exception recorded successfully:\n{event_type_str} - {sku} - Qty: {qty}",
+                )
+                self._clear_exception_form()
+                self._refresh_exception_tab()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to record exception: {str(e)}")
+    
+    def _refresh_exception_tab(self):
+        """Refresh exception history table."""
+        try:
+            view_date_str = self.exception_view_date_var.get()
+            view_date = date.fromisoformat(view_date_str)
+        except ValueError:
+            messagebox.showerror("Error", "Invalid view date format. Use YYYY-MM-DD.")
+            return
+        
+        self.exception_treeview.delete(*self.exception_treeview.get_children())
+        
+        # Read all transactions and filter for exceptions on view_date
+        all_txns = self.csv_layer.read_transactions()
+        exception_txns = [
+            t for t in all_txns
+            if t.event in [EventType.WASTE, EventType.ADJUST, EventType.UNFULFILLED]
+            and t.date == view_date
+        ]
+        
+        # Populate table
+        for txn in exception_txns:
+            # Extract notes (remove exception_key prefix)
+            notes = txn.note or ""
+            if ";" in notes:
+                notes = notes.split(";", 1)[1].strip()
+            
+            self.exception_treeview.insert(
+                "",
+                "end",
+                values=(
+                    txn.event.value,
+                    txn.sku,
+                    f"{txn.qty:+d}" if txn.event == EventType.ADJUST else str(txn.qty),
+                    notes,
+                    txn.date.isoformat(),
+                ),
+            )
+    
+    def _set_exception_today(self):
+        """Set exception view date to today."""
+        today = date.today()
+        self.exception_view_date_var.set(today.isoformat())
+        self._refresh_exception_tab()
+    
+    def _revert_selected_exception(self):
+        """Revert selected exception from table."""
+        selected = self.exception_treeview.selection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select an exception to revert.")
+            return
+        
+        # Get selected exception data
+        item = self.exception_treeview.item(selected[0])
+        values = item["values"]
+        event_type_str = values[0]
+        sku = values[1]
+        date_str = values[4]
+        
+        # Map string to EventType
+        event_type_map = {
+            "WASTE": EventType.WASTE,
+            "ADJUST": EventType.ADJUST,
+            "UNFULFILLED": EventType.UNFULFILLED,
+        }
+        event_type = event_type_map.get(event_type_str)
+        event_date = date.fromisoformat(date_str)
+        
+        # Confirm revert
+        confirm = messagebox.askyesno(
+            "Confirm Revert",
+            f"Revert all {event_type_str} exceptions for SKU '{sku}' on {date_str}?\n\nThis action cannot be undone.",
+        )
+        if not confirm:
+            return
+        
+        # Revert
+        try:
+            reverted_count = self.exception_workflow.revert_exception_day(
+                event_date=event_date,
+                sku=sku,
+                event_type=event_type,
+            )
+            
+            if reverted_count > 0:
+                messagebox.showinfo(
+                    "Success",
+                    f"Reverted {reverted_count} exception(s) for {event_type_str} - {sku} on {date_str}.",
+                )
+                self._refresh_exception_tab()
+            else:
+                messagebox.showwarning("No Changes", "No exceptions found to revert.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to revert exception: {str(e)}")
+    
+    def _revert_bulk_exceptions(self):
+        """Revert bulk exceptions with filters (popup dialog)."""
+        # Create popup
+        popup = tk.Toplevel(self.root)
+        popup.title("Bulk Revert Exceptions")
+        popup.geometry("400x250")
+        popup.resizable(False, False)
+        popup.transient(self.root)
+        popup.grab_set()
+        
+        # Form frame
+        form_frame = ttk.Frame(popup, padding=20)
+        form_frame.pack(fill="both", expand=True)
+        
+        ttk.Label(form_frame, text="Bulk Revert Exceptions", font=("Helvetica", 12, "bold")).pack(pady=(0, 15))
+        
+        # Event Type
+        ttk.Label(form_frame, text="Event Type:", font=("Helvetica", 10)).pack(anchor="w", pady=(0, 5))
+        bulk_type_var = tk.StringVar(value="WASTE")
+        ttk.Combobox(
+            form_frame,
+            textvariable=bulk_type_var,
+            values=["WASTE", "ADJUST", "UNFULFILLED"],
+            state="readonly",
+            width=30,
+        ).pack(fill="x", pady=(0, 10))
+        
+        # SKU
+        ttk.Label(form_frame, text="SKU:", font=("Helvetica", 10)).pack(anchor="w", pady=(0, 5))
+        bulk_sku_var = tk.StringVar()
+        bulk_sku_combo = ttk.Combobox(form_frame, textvariable=bulk_sku_var, width=30)
+        bulk_sku_combo["values"] = self.csv_layer.get_all_sku_ids()
+        bulk_sku_combo.pack(fill="x", pady=(0, 10))
+        
+        # Date
+        ttk.Label(form_frame, text="Date:", font=("Helvetica", 10)).pack(anchor="w", pady=(0, 5))
+        bulk_date_var = tk.StringVar(value=self.exception_view_date_var.get())
+        ttk.Entry(form_frame, textvariable=bulk_date_var, width=30).pack(fill="x", pady=(0, 15))
+        
+        # Buttons
+        button_frame = ttk.Frame(form_frame)
+        button_frame.pack(fill="x")
+        
+        def do_bulk_revert():
+            event_type_str = bulk_type_var.get()
+            sku = bulk_sku_var.get().strip()
+            date_str = bulk_date_var.get().strip()
+            
+            if not sku:
+                messagebox.showerror("Validation Error", "Please select a SKU.", parent=popup)
+                return
+            
+            try:
+                event_date = date.fromisoformat(date_str)
+            except ValueError:
+                messagebox.showerror("Validation Error", "Invalid date format. Use YYYY-MM-DD.", parent=popup)
+                return
+            
+            event_type_map = {
+                "WASTE": EventType.WASTE,
+                "ADJUST": EventType.ADJUST,
+                "UNFULFILLED": EventType.UNFULFILLED,
+            }
+            event_type = event_type_map.get(event_type_str)
+            
+            # Confirm
+            confirm = messagebox.askyesno(
+                "Confirm Bulk Revert",
+                f"Revert ALL {event_type_str} exceptions for SKU '{sku}' on {date_str}?\n\nThis action cannot be undone.",
+                parent=popup,
+            )
+            if not confirm:
+                return
+            
+            # Revert
+            try:
+                reverted_count = self.exception_workflow.revert_exception_day(
+                    event_date=event_date,
+                    sku=sku,
+                    event_type=event_type,
+                )
+                
+                messagebox.showinfo(
+                    "Success",
+                    f"Reverted {reverted_count} exception(s).",
+                    parent=popup,
+                )
+                popup.destroy()
+                self._refresh_exception_tab()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to revert: {str(e)}", parent=popup)
+        
+        ttk.Button(button_frame, text="Revert", command=do_bulk_revert).pack(side="right", padx=5)
+        ttk.Button(button_frame, text="Cancel", command=popup.destroy).pack(side="right", padx=5)
+
     
     def _build_admin_tab(self):
         """Build Admin tab (SKU management, data view)."""
@@ -488,6 +867,7 @@ class DesktopOrderApp:
         """Refresh all tabs."""
         self._refresh_stock_tab()
         self._refresh_admin_tab()
+        self._refresh_exception_tab()
 
 
 def main():
