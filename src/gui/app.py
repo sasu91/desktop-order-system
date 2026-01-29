@@ -1341,59 +1341,76 @@ class DesktopOrderApp:
         title_frame.pack(side="top", fill="x", pady=(0, 10))
         ttk.Label(title_frame, text="Gestione Eccezioni", font=("Helvetica", 14, "bold")).pack(side="left")
         
-        # === QUICK ENTRY FORM (INLINE) ===
-        form_frame = ttk.LabelFrame(main_frame, text="Inserimento Rapido", padding=10)
+        # === QUICK ENTRY FORM (GRID LAYOUT) ===
+        form_frame = ttk.LabelFrame(main_frame, text="Inserimento Rapido", padding=15)
         form_frame.pack(side="top", fill="x", pady=(0, 10))
         
-        # Row 1: Event Type and SKU
-        row1_frame = ttk.Frame(form_frame)
-        row1_frame.pack(side="top", fill="x", pady=5)
+        # Grid configuration (3 columns x 3 rows + buttons)
+        form_frame.columnconfigure(1, weight=1)  # Column per widget input
+        form_frame.columnconfigure(3, weight=1)
         
-        ttk.Label(row1_frame, text="Tipo Evento:", width=12).pack(side="left", padx=(0, 5))
+        # ROW 0: SKU (obbligatorio) - PRIMA POSIZIONE
+        ttk.Label(form_frame, text="SKU: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=0, column=0, sticky="e", padx=(0, 8), pady=8)
+        self.exception_sku_var = tk.StringVar()
+        self.exception_sku_combo = ttk.Combobox(
+            form_frame,
+            textvariable=self.exception_sku_var,
+            width=25,
+        )
+        self.exception_sku_combo.grid(row=0, column=1, sticky="w", pady=8)
+        self.exception_sku_var.trace('w', lambda *args: self._validate_exception_form())
+        
+        # Populate SKU dropdown
+        self._populate_exception_sku_dropdown()
+        
+        # ROW 0 col 2: Tipo Evento (obbligatorio)
+        ttk.Label(form_frame, text="Tipo Evento: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=0, column=2, sticky="e", padx=(20, 8), pady=8)
         self.exception_type_var = tk.StringVar(value="WASTE")
         exception_type_combo = ttk.Combobox(
-            row1_frame,
+            form_frame,
             textvariable=self.exception_type_var,
             values=["WASTE", "ADJUST"],
             state="readonly",
             width=15,
         )
-        exception_type_combo.pack(side="left", padx=(0, 20))
+        exception_type_combo.grid(row=0, column=3, sticky="w", pady=8)
+        exception_type_combo.bind("<<ComboboxSelected>>", self._on_exception_type_change)
         
-        ttk.Label(row1_frame, text="SKU:", width=8).pack(side="left", padx=(0, 5))
-        self.exception_sku_var = tk.StringVar()
-        self.exception_sku_combo = ttk.Combobox(
-            row1_frame,
-            textvariable=self.exception_sku_var,
-            width=20,
-        )
-        self.exception_sku_combo.pack(side="left", padx=(0, 20))
+        # ROW 1: Quantità (obbligatorio) + Hint dinamico
+        ttk.Label(form_frame, text="Quantità: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=1, column=0, sticky="e", padx=(0, 8), pady=8)
+        qty_frame = ttk.Frame(form_frame)
+        qty_frame.grid(row=1, column=1, sticky="w", pady=8)
         
-        # Populate SKU dropdown
-        self._populate_exception_sku_dropdown()
-        
-        ttk.Label(row1_frame, text="Quantità:", width=8).pack(side="left", padx=(0, 5))
         self.exception_qty_var = tk.StringVar()
-        ttk.Entry(row1_frame, textvariable=self.exception_qty_var, width=10).pack(side="left", padx=(0, 20))
+        ttk.Entry(qty_frame, textvariable=self.exception_qty_var, width=12).pack(side="left", padx=(0, 10))
+        self.exception_qty_var.trace('w', lambda *args: self._validate_exception_form())
         
-        # Row 2: Date and Notes
-        row2_frame = ttk.Frame(form_frame)
-        row2_frame.pack(side="top", fill="x", pady=5)
+        # Hint dinamico per quantità
+        self.exception_qty_hint = ttk.Label(qty_frame, text="(scartato)", font=("Helvetica", 8, "italic"), foreground="#777")
+        self.exception_qty_hint.pack(side="left")
         
-        ttk.Label(row2_frame, text="Data:", width=12).pack(side="left", padx=(0, 5))
+        # ROW 1 col 2: Data (obbligatorio)
+        ttk.Label(form_frame, text="Data: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=1, column=2, sticky="e", padx=(20, 8), pady=8)
         self.exception_date_var = tk.StringVar(value=self.exception_date.isoformat())
-        ttk.Entry(row2_frame, textvariable=self.exception_date_var, width=15).pack(side="left", padx=(0, 20))
+        ttk.Entry(form_frame, textvariable=self.exception_date_var, width=15).grid(row=1, column=3, sticky="w", pady=8)
+        self.exception_date_var.trace('w', lambda *args: self._validate_exception_form())
         
-        ttk.Label(row2_frame, text="Notes:", width=8).pack(side="left", padx=(0, 5))
+        # ROW 2: Notes (opzionale) - span 4 colonne
+        ttk.Label(form_frame, text="Note:", font=("Helvetica", 9)).grid(row=2, column=0, sticky="e", padx=(0, 8), pady=8)
         self.exception_notes_var = tk.StringVar()
-        ttk.Entry(row2_frame, textvariable=self.exception_notes_var, width=40).pack(side="left", padx=(0, 20))
+        ttk.Entry(form_frame, textvariable=self.exception_notes_var, width=70).grid(row=2, column=1, columnspan=3, sticky="ew", pady=8)
         
-        # Row 3: Buttons
-        row3_frame = ttk.Frame(form_frame)
-        row3_frame.pack(side="top", fill="x", pady=5)
+        # ROW 3: Buttons
+        button_frame = ttk.Frame(form_frame)
+        button_frame.grid(row=3, column=0, columnspan=4, sticky="w", pady=(10, 0))
         
-        ttk.Button(row3_frame, text="✓ Invia Eccezione", command=self._submit_exception).pack(side="left", padx=5)
-        ttk.Button(row3_frame, text="✗ Cancella Modulo", command=self._clear_exception_form).pack(side="left", padx=5)
+        self.exception_submit_btn = ttk.Button(button_frame, text="✓ Invia Eccezione", command=self._submit_exception, state="disabled")
+        self.exception_submit_btn.pack(side="left", padx=5)
+        ttk.Button(button_frame, text="✗ Cancella Modulo", command=self._clear_exception_form).pack(side="left", padx=5)
+        
+        # Validation status label
+        self.exception_validation_label = ttk.Label(button_frame, text="", font=("Helvetica", 8), foreground="#d9534f")
+        self.exception_validation_label.pack(side="left", padx=15)
         
         # === HISTORY TABLE ===
         history_frame = ttk.LabelFrame(main_frame, text="Storico Eccezioni", padding=5)
@@ -1426,17 +1443,17 @@ class DesktopOrderApp:
         self.exception_treeview = ttk.Treeview(
             table_frame,
             columns=("Type", "SKU", "Qty", "Notes", "Date"),
-            height=15,
+            height=9,
             yscrollcommand=scrollbar.set,
         )
         scrollbar.config(command=self.exception_treeview.yview)
         
         self.exception_treeview.column("#0", width=0, stretch=tk.NO)
         self.exception_treeview.column("Type", anchor=tk.W, width=100)
-        self.exception_treeview.column("SKU", anchor=tk.W, width=100)
-        self.exception_treeview.column("Qty", anchor=tk.CENTER, width=80)
-        self.exception_treeview.column("Notes", anchor=tk.W, width=300)
-        self.exception_treeview.column("Date", anchor=tk.CENTER, width=100)
+        self.exception_treeview.column("SKU", anchor=tk.W, width=120)
+        self.exception_treeview.column("Qty", anchor=tk.CENTER, width=90)
+        self.exception_treeview.column("Notes", anchor=tk.W, width=200)
+        self.exception_treeview.column("Date", anchor=tk.CENTER, width=110)
         
         self.exception_treeview.heading("Type", text="Type", anchor=tk.W)
         self.exception_treeview.heading("SKU", text="SKU", anchor=tk.W)
@@ -1451,6 +1468,54 @@ class DesktopOrderApp:
         sku_ids = self.csv_layer.get_all_sku_ids()
         self.exception_sku_combo["values"] = sku_ids
     
+    def _on_exception_type_change(self, event=None):
+        """Aggiorna hint dinamico quando cambia tipo evento."""
+        event_type = self.exception_type_var.get()
+        
+        if event_type == "WASTE":
+            self.exception_qty_hint.config(text="(scartato)", foreground="#d9534f")
+        elif event_type == "ADJUST":
+            self.exception_qty_hint.config(text="(± aggiustamento)", foreground="#5bc0de")
+        else:
+            self.exception_qty_hint.config(text="")
+        
+        # Re-valida form
+        self._validate_exception_form()
+    
+    def _validate_exception_form(self):
+        """Valida form eccezioni in real-time e abilita/disabilita bottone Invia."""
+        sku = self.exception_sku_var.get().strip()
+        qty_str = self.exception_qty_var.get().strip()
+        date_str = self.exception_date_var.get().strip()
+        
+        errors = []
+        
+        if not sku:
+            errors.append("SKU")
+        
+        if not qty_str:
+            errors.append("Quantità")
+        else:
+            try:
+                int(qty_str)
+            except ValueError:
+                errors.append("Quantità (deve essere numero)")
+        
+        if not date_str:
+            errors.append("Data")
+        else:
+            try:
+                date.fromisoformat(date_str)
+            except ValueError:
+                errors.append("Data (formato YYYY-MM-DD)")
+        
+        if errors:
+            self.exception_submit_btn.config(state="disabled")
+            self.exception_validation_label.config(text=f"Campi mancanti: {', '.join(errors)}")
+        else:
+            self.exception_submit_btn.config(state="normal")
+            self.exception_validation_label.config(text="✓ Pronto", foreground="#5cb85c")
+    
     def _clear_exception_form(self):
         """Clear exception form fields."""
         self.exception_type_var.set("WASTE")
@@ -1458,6 +1523,8 @@ class DesktopOrderApp:
         self.exception_qty_var.set("")
         self.exception_date_var.set(date.today().isoformat())
         self.exception_notes_var.set("")
+        self._on_exception_type_change()  # Reset hint
+        self._validate_exception_form()  # Reset validation
     
     def _submit_exception(self):
         """Submit exception from quick entry form."""
@@ -1492,7 +1559,6 @@ class DesktopOrderApp:
         event_type_map = {
             "WASTE": EventType.WASTE,
             "ADJUST": EventType.ADJUST,
-            "UNFULFILLED": EventType.UNFULFILLED,
         }
         event_type = event_type_map.get(event_type_str)
         
