@@ -213,6 +213,10 @@ class AutocompleteEntry:
         """Pack the entry widget."""
         self.entry.pack(**kwargs)
     
+    def bind(self, sequence, func):
+        """Bind event to entry widget."""
+        self.entry.bind(sequence, func)
+    
     def focus_set(self):
         """Set focus to entry."""
         self.entry.focus_set()
