@@ -350,8 +350,22 @@ class CSVLayer:
         })
     
     def write_transactions_batch(self, txns: List[Transaction]):
-        """Add multiple transactions at once."""
+        """Add multiple transactions at once (append mode)."""
         rows = self._read_csv("transactions.csv")
+        for txn in txns:
+            rows.append({
+                "date": txn.date.isoformat(),
+                "sku": txn.sku,
+                "event": txn.event.value,
+                "qty": str(txn.qty),
+                "receipt_date": txn.receipt_date.isoformat() if txn.receipt_date else "",
+                "note": txn.note or "",
+            })
+        self._write_csv("transactions.csv", rows)
+    
+    def overwrite_transactions(self, txns: List[Transaction]):
+        """Overwrite entire transactions.csv with given list (for deletions/filtering)."""
+        rows = []
         for txn in txns:
             rows.append({
                 "date": txn.date.isoformat(),

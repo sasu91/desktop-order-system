@@ -254,6 +254,6 @@ class ExceptionWorkflow:
         reverted_count = len(existing_txns) - len(filtered_txns)
         
         if reverted_count > 0:
-            self.csv_layer.write_transactions_batch(filtered_txns)
+            self.csv_layer.overwrite_transactions(filtered_txns)
         
         return reverted_count

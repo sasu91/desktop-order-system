@@ -17,6 +17,8 @@ try:
     matplotlib.use('TkAgg')
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    import matplotlib.pyplot as plt
+    import numpy as np
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
@@ -306,19 +308,19 @@ class DesktopOrderApp:
             # Create matplotlib figure with 2 subplots
             self.dashboard_figure = Figure(figsize=(8, 6), dpi=80)
             
-            # Subplot 1: Stock Trend (top)
-            self.stock_trend_ax = self.dashboard_figure.add_subplot(2, 1, 1)
-            self.stock_trend_ax.set_title("Stock Trend (Last 30 Days)")
-            self.stock_trend_ax.set_xlabel("Date")
-            self.stock_trend_ax.set_ylabel("Total Stock Units")
-            self.stock_trend_ax.grid(True, alpha=0.3)
+            # Subplot 1: Daily Sales (Last 30 Days) - top
+            self.daily_sales_ax = self.dashboard_figure.add_subplot(2, 1, 1)
+            self.daily_sales_ax.set_title("Vendite Giornaliere (Ultimi 30 Giorni)")
+            self.daily_sales_ax.set_xlabel("Data")
+            self.daily_sales_ax.set_ylabel("Unità Vendute")
+            self.daily_sales_ax.grid(True, alpha=0.3)
             
-            # Subplot 2: Sales Comparison (bottom)
-            self.sales_comparison_ax = self.dashboard_figure.add_subplot(2, 1, 2)
-            self.sales_comparison_ax.set_title("Sales Comparison (This Month vs Last Month)")
-            self.sales_comparison_ax.set_xlabel("Period")
-            self.sales_comparison_ax.set_ylabel("Total Sales")
-            self.sales_comparison_ax.grid(True, alpha=0.3)
+            # Subplot 2: Weekly Sales Comparison (Last 8 Weeks) - bottom
+            self.weekly_sales_ax = self.dashboard_figure.add_subplot(2, 1, 2)
+            self.weekly_sales_ax.set_title("Confronto Vendite Settimanali (Ultime 8 Settimane)")
+            self.weekly_sales_ax.set_xlabel("Settimana")
+            self.weekly_sales_ax.set_ylabel("Unità Vendute")
+            self.weekly_sales_ax.grid(True, alpha=0.3)
             
             self.dashboard_figure.tight_layout()
             
@@ -455,67 +457,93 @@ class DesktopOrderApp:
             # === CHARTS ===
             
             if MATPLOTLIB_AVAILABLE:
-                # Chart 1: Stock Trend (Last 30 Days)
-                self.stock_trend_ax.clear()
-                self.stock_trend_ax.set_title("Stock Trend (Last 30 Days)")
-                self.stock_trend_ax.set_xlabel("Date")
-                self.stock_trend_ax.set_ylabel("Total Stock Units")
-                self.stock_trend_ax.grid(True, alpha=0.3)
+                # Chart 1: Daily Sales (Last 30 Days)
+                self.daily_sales_ax.clear()
+                self.daily_sales_ax.set_title("Vendite Giornaliere (Ultimi 30 Giorni)")
+                self.daily_sales_ax.set_xlabel("Data")
+                self.daily_sales_ax.set_ylabel("Unità Vendute")
+                self.daily_sales_ax.grid(True, alpha=0.3)
                 
-                # Calculate stock for each day in last 30 days
+                # Calculate daily sales for last 30 days
                 dates = []
-                stock_levels = []
-                for i in range(30, -1, -1):
+                daily_totals = []
+                for i in range(29, -1, -1):  # Last 30 days
                     calc_date = today - timedelta(days=i)
-                    daily_stocks = StockCalculator.calculate_all_skus(
-                        sku_ids,
-                        calc_date,
-                        transactions,
-                        sales_records,
-                    )
-                    total_stock = sum(s.on_hand for s in daily_stocks.values())
-                    dates.append(calc_date.strftime("%m-%d"))
-                    stock_levels.append(total_stock)
+                    day_sales = [sr for sr in sales_records if sr.date == calc_date]
+                    total_sold = sum(sr.qty_sold for sr in day_sales)
+                    dates.append(calc_date.strftime("%d/%m"))
+                    daily_totals.append(total_sold)
                 
-                self.stock_trend_ax.plot(dates, stock_levels, marker='o', linewidth=2, markersize=4, color='#2E86AB')
-                self.stock_trend_ax.set_xticks(range(0, len(dates), 5))
-                self.stock_trend_ax.set_xticklabels([dates[i] for i in range(0, len(dates), 5)], rotation=45)
+                # Plot with bar chart
+                self.daily_sales_ax.bar(range(len(dates)), daily_totals, color='#2E86AB', alpha=0.7, width=0.8)
+                self.daily_sales_ax.set_xticks(range(0, len(dates), 5))
+                self.daily_sales_ax.set_xticklabels([dates[i] for i in range(0, len(dates), 5)], rotation=45, ha='right')
                 
-                # Chart 2: Sales Comparison (This Month vs Last Month)
-                self.sales_comparison_ax.clear()
-                self.sales_comparison_ax.set_title("Sales Comparison (This Month vs Last Month)")
-                self.sales_comparison_ax.set_xlabel("Period")
-                self.sales_comparison_ax.set_ylabel("Total Sales")
-                self.sales_comparison_ax.grid(True, alpha=0.3)
+                # Add trend line
+                if daily_totals and any(daily_totals):
+                    x = np.arange(len(daily_totals))
+                    z = np.polyfit(x, daily_totals, 1)
+                    p = np.poly1d(z)
+                    self.daily_sales_ax.plot(x, p(x), "r--", alpha=0.6, linewidth=2, label=f'Trend: {z[0]:.1f}/giorno')
+                    self.daily_sales_ax.legend(loc='upper left', fontsize=9)
                 
-                # Calculate this month and last month sales
-                first_day_this_month = today.replace(day=1)
-                last_month_end = first_day_this_month - timedelta(days=1)
-                first_day_last_month = last_month_end.replace(day=1)
+                # Chart 2: Weekly Sales Comparison (Last 8 Weeks)
+                self.weekly_sales_ax.clear()
+                self.weekly_sales_ax.set_title("Confronto Vendite Settimanali (Ultime 8 Settimane)")
+                self.weekly_sales_ax.set_xlabel("Settimana")
+                self.weekly_sales_ax.set_ylabel("Unità Vendute")
+                self.weekly_sales_ax.grid(True, alpha=0.3)
                 
-                this_month_sales = [sr for sr in sales_records if sr.date >= first_day_this_month]
-                last_month_sales = [sr for sr in sales_records if first_day_last_month <= sr.date < first_day_this_month]
+                # Calculate weekly sales for last 8 weeks
+                weekly_labels = []
+                weekly_totals = []
                 
-                this_month_total = sum(sr.qty_sold for sr in this_month_sales)
-                last_month_total = sum(sr.qty_sold for sr in last_month_sales)
+                for week_offset in range(7, -1, -1):  # Last 8 weeks, oldest to newest
+                    # Calculate start and end of week
+                    week_end = today - timedelta(days=week_offset * 7)
+                    week_start = week_end - timedelta(days=6)
+                    
+                    # Calculate sales for this week
+                    week_sales = [
+                        sr for sr in sales_records 
+                        if week_start <= sr.date <= week_end
+                    ]
+                    total_sold = sum(sr.qty_sold for sr in week_sales)
+                    
+                    # Label: "W-7" (7 weeks ago) to "W-0" (current week)
+                    if week_offset == 0:
+                        label = "Corrente"
+                    else:
+                        label = f"-{week_offset}w"
+                    
+                    weekly_labels.append(label)
+                    weekly_totals.append(total_sold)
                 
-                periods = ['Last Month', 'This Month']
-                values = [last_month_total, this_month_total]
-                colors = ['#A23B72', '#F18F01']
-                
-                bars = self.sales_comparison_ax.bar(periods, values, color=colors, width=0.6)
+                # Create bar chart with color gradient
+                colors = plt.cm.viridis(np.linspace(0.3, 0.9, len(weekly_totals)))
+                bars = self.weekly_sales_ax.bar(range(len(weekly_labels)), weekly_totals, color=colors, width=0.7)
                 
                 # Add value labels on bars
-                for bar, value in zip(bars, values):
+                for bar, value in zip(bars, weekly_totals):
                     height = bar.get_height()
-                    self.sales_comparison_ax.text(
+                    self.weekly_sales_ax.text(
                         bar.get_x() + bar.get_width() / 2.,
                         height,
                         f'{int(value)}',
                         ha='center',
                         va='bottom',
+                        fontsize=8,
                         fontweight='bold'
                     )
+                
+                # Set x-axis labels
+                self.weekly_sales_ax.set_xticks(range(len(weekly_labels)))
+                self.weekly_sales_ax.set_xticklabels(weekly_labels, rotation=0)
+                
+                # Calculate and show average
+                avg_weekly = sum(weekly_totals) / len(weekly_totals) if weekly_totals else 0
+                self.weekly_sales_ax.axhline(y=avg_weekly, color='r', linestyle='--', alpha=0.6, linewidth=2, label=f'Media: {avg_weekly:.0f}')
+                self.weekly_sales_ax.legend(loc='upper left', fontsize=9)
                 
                 self.dashboard_figure.tight_layout()
                 self.dashboard_canvas.draw()
