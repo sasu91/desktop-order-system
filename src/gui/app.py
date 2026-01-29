@@ -1487,7 +1487,7 @@ class DesktopOrderApp:
         exception_type_combo = ttk.Combobox(
             form_frame,
             textvariable=self.exception_type_var,
-            values=["WASTE", "ADJUST"],
+            values=["WASTE", "ADJUST", "UNFULFILLED"],
             state="readonly",
             width=15,
         )
@@ -1735,6 +1735,8 @@ class DesktopOrderApp:
             self.exception_qty_hint.config(text="(scartato)", foreground="#d9534f")
         elif event_type == "ADJUST":
             self.exception_qty_hint.config(text="(quantità corretta)", foreground="#5bc0de")
+        elif event_type == "UNFULFILLED":
+            self.exception_qty_hint.config(text="(inevaso)", foreground="#f0ad4e")
         else:
             self.exception_qty_hint.config(text="")
         
@@ -1830,6 +1832,7 @@ class DesktopOrderApp:
         event_type_map = {
             "WASTE": EventType.WASTE,
             "ADJUST": EventType.ADJUST,
+            "UNFULFILLED": EventType.UNFULFILLED,
         }
         event_type = event_type_map.get(event_type_str)
         
@@ -1924,6 +1927,7 @@ class DesktopOrderApp:
         event_type_map = {
             "WASTE": EventType.WASTE,
             "ADJUST": EventType.ADJUST,
+            "UNFULFILLED": EventType.UNFULFILLED,
         }
         event_type = event_type_map.get(event_type_str)
         event_date = date.fromisoformat(date_str)
@@ -1977,7 +1981,7 @@ class DesktopOrderApp:
         ttk.Combobox(
             form_frame,
             textvariable=bulk_type_var,
-            values=["WASTE", "ADJUST"],
+            values=["WASTE", "ADJUST", "UNFULFILLED"],
             state="readonly",
             width=30,
         ).pack(fill="x", pady=(0, 10))
@@ -2021,6 +2025,7 @@ class DesktopOrderApp:
             event_type_map = {
                 "WASTE": EventType.WASTE,
                 "ADJUST": EventType.ADJUST,
+                "UNFULFILLED": EventType.UNFULFILLED,
             }
             event_type = event_type_map.get(event_type_str)
             

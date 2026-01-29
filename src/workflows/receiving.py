@@ -49,10 +49,15 @@ class ReceivingWorkflow:
         """
         Close a receipt and update ledger idempotently.
         
+        NEW BEHAVIOR: Auto-creates UNFULFILLED events for unshipped quantities.
+        - Compares qty_received vs qty_ordered (from order_logs)
+        - If qty_received < qty_ordered: creates UNFULFILLED event for difference
+        - UNFULFILLED reduces on_order (preventing indefinite "in order" status)
+        
         Idempotency strategy:
         - Check if receipt_id already exists in receiving_logs.csv
         - If yes: skip (receipt already processed) → return empty txns, True
-        - If no: create RECEIPT events, write logs → return txns, False
+        - If no: create RECEIPT events (+ UNFULFILLED if needed), write logs → return txns, False
         
         Args:
             receipt_id: Unique receipt identifier
@@ -77,9 +82,24 @@ class ReceivingWorkflow:
         today = date.today()
         transactions = []
         
-        # Create RECEIPT event for each SKU
+        # Read order_logs to get qty_ordered for each SKU
+        order_logs = self.csv_layer.read_order_logs()
+        qty_ordered_map = {}  # {sku: total_qty_ordered}
+        
+        for log in order_logs:
+            # Filter orders matching this receipt (same date range or explicit link)
+            # For simplicity: sum all "pending" orders for each SKU
+            sku_log = log.get("sku", "")
+            qty_log = int(log.get("qty_ordered", 0))
+            status = log.get("status", "")
+            
+            if status == "pending":  # Only consider pending orders
+                qty_ordered_map[sku_log] = qty_ordered_map.get(sku_log, 0) + qty_log
+        
+        # Create RECEIPT events + UNFULFILLED events for each SKU
         for sku, qty_received in sku_quantities.items():
-            txn = Transaction(
+            # RECEIPT event
+            txn_receipt = Transaction(
                 date=today,
                 sku=sku,
                 event=EventType.RECEIPT,
@@ -87,7 +107,22 @@ class ReceivingWorkflow:
                 receipt_date=receipt_date,
                 note=f"Receipt {receipt_id}; {notes}".strip(),
             )
-            transactions.append(txn)
+            transactions.append(txn_receipt)
+            
+            # Check for unfulfilled quantity
+            qty_ordered = qty_ordered_map.get(sku, 0)
+            qty_unfulfilled = qty_ordered - qty_received
+            
+            if qty_unfulfilled > 0:
+                # Create UNFULFILLED event
+                txn_unfulfilled = Transaction(
+                    date=today,
+                    sku=sku,
+                    event=EventType.UNFULFILLED,
+                    qty=qty_unfulfilled,
+                    note=f"Auto-generated for receipt {receipt_id}; qty_ordered={qty_ordered}, qty_received={qty_received}",
+                )
+                transactions.append(txn_unfulfilled)
         
         # Write transactions to ledger
         if transactions:
@@ -107,7 +142,7 @@ class ReceivingWorkflow:
 
 
 class ExceptionWorkflow:
-    """Quick entry for exceptions: WASTE, ADJUST."""
+    """Quick entry for exceptions: WASTE, ADJUST, UNFULFILLED."""
     
     def __init__(self, csv_layer: CSVLayer):
         """
@@ -142,7 +177,7 @@ class ExceptionWorkflow:
         notes: str = "",
     ) -> Tuple[Transaction, bool]:
         """
-        Record an exception (WASTE, ADJUST).
+        Record an exception (WASTE, ADJUST, UNFULFILLED).
         
         Idempotency:
         - Check if exception key already exists
@@ -150,7 +185,7 @@ class ExceptionWorkflow:
         - If no: write transaction → return txn, False
         
         Args:
-            event_type: EventType (WASTE, ADJUST)
+            event_type: EventType (WASTE, ADJUST, UNFULFILLED)
             sku: SKU identifier
             qty: Quantity (signed for ADJUST)
             event_date: Event date (defaults to today)
@@ -159,7 +194,7 @@ class ExceptionWorkflow:
         Returns:
             (transaction, already_recorded)
         """
-        if event_type not in [EventType.WASTE, EventType.ADJUST]:
+        if event_type not in [EventType.WASTE, EventType.ADJUST, EventType.UNFULFILLED]:
             raise ValueError(f"Invalid exception type: {event_type}")
         
         event_date = event_date or date.today()

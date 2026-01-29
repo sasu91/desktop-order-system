@@ -97,8 +97,8 @@ class StockCalculator:
                 # ADJUST sostituisce on_hand con il valore specificato (come SNAPSHOT)
                 on_hand = txn.qty
             elif txn.event == EventType.UNFULFILLED:
-                # Tracking only; no impact on on_hand or on_order
-                pass
+                # Reduce on_order for unfulfilled quantities (unshipped/cancelled)
+                on_order -= txn.qty
         
         return Stock(sku=sku, on_hand=on_hand, on_order=on_order, asof_date=asof_date)
     
