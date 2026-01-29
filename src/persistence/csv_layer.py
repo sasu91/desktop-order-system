@@ -10,7 +10,7 @@ from datetime import date
 from pathlib import Path
 from typing import List, Dict, Optional
 
-from ..domain.models import Transaction, EventType, SKU, SalesRecord, AuditLog
+from ..domain.models import Transaction, EventType, SKU, SalesRecord, AuditLog, DemandVariability
 
 
 class CSVLayer:
@@ -21,7 +21,7 @@ class CSVLayer:
     
     # CSV file schemas (filename -> list of columns)
     SCHEMAS = {
-        "skus.csv": ["sku", "description", "ean"],
+        "skus.csv": ["sku", "description", "ean", "moq", "lead_time_days", "max_stock", "reorder_point", "supplier", "demand_variability"],
         "transactions.csv": ["date", "sku", "event", "qty", "receipt_date", "note"],
         "sales.csv": ["date", "sku", "qty_sold"],
         "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "status"],
@@ -87,18 +87,32 @@ class CSVLayer:
     # ============ SKU Operations ============
     
     def read_skus(self) -> List[SKU]:
-        """Read all SKUs from skus.csv."""
+        """Read all SKUs from skus.csv (with backward-compatibility for legacy files)."""
         rows = self._read_csv("skus.csv")
         skus = []
         for row in rows:
             try:
+                # Parse demand_variability with fallback
+                demand_var_str = row.get("demand_variability", "STABLE").strip().upper()
+                try:
+                    demand_var = DemandVariability[demand_var_str]
+                except KeyError:
+                    demand_var = DemandVariability.STABLE
+                
                 sku = SKU(
                     sku=row.get("sku", "").strip(),
                     description=row.get("description", "").strip(),
                     ean=row.get("ean", "").strip() or None,
+                    # New parameters with defaults for backward-compatibility
+                    moq=int(row.get("moq", "1")),
+                    lead_time_days=int(row.get("lead_time_days", "7")),
+                    max_stock=int(row.get("max_stock", "999")),
+                    reorder_point=int(row.get("reorder_point", "10")),
+                    supplier=row.get("supplier", "").strip(),
+                    demand_variability=demand_var,
                 )
                 skus.append(sku)
-            except ValueError as e:
+            except (ValueError, KeyError) as e:
                 # Log but don't crash
                 print(f"Warning: Invalid SKU in skus.csv: {e}")
         return skus
@@ -110,6 +124,12 @@ class CSVLayer:
             "sku": sku.sku,
             "description": sku.description,
             "ean": sku.ean or "",
+            "moq": str(sku.moq),
+            "lead_time_days": str(sku.lead_time_days),
+            "max_stock": str(sku.max_stock),
+            "reorder_point": str(sku.reorder_point),
+            "supplier": sku.supplier,
+            "demand_variability": sku.demand_variability.value,
         })
         self._write_csv("skus.csv", rows)
     
@@ -143,9 +163,21 @@ class CSVLayer:
             if query_lower in sku.sku.lower() or query_lower in sku.description.lower()
         ]
     
-    def update_sku(self, old_sku_id: str, new_sku_id: str, new_description: str, new_ean: Optional[str]) -> bool:
+    def update_sku(
+        self, 
+        old_sku_id: str, 
+        new_sku_id: str, 
+        new_description: str, 
+        new_ean: Optional[str],
+        moq: int = 1,
+        lead_time_days: int = 7,
+        max_stock: int = 999,
+        reorder_point: int = 10,
+        supplier: str = "",
+        demand_variability: DemandVariability = DemandVariability.STABLE,
+    ) -> bool:
         """
-        Update SKU (code, description, and/or EAN).
+        Update SKU (code, description, EAN, and parameters).
         If SKU code changes, automatically updates all ledger references.
         
         Args:
@@ -153,6 +185,12 @@ class CSVLayer:
             new_sku_id: New SKU identifier (can be same as old)
             new_description: New description
             new_ean: New EAN (or None)
+            moq: Minimum Order Quantity
+            lead_time_days: Lead time in days
+            max_stock: Maximum stock level
+            reorder_point: Reorder trigger point
+            supplier: Default supplier
+            demand_variability: Demand variability enum
             
         Returns:
             True if updated, False if not found
@@ -165,6 +203,12 @@ class CSVLayer:
                 row["sku"] = new_sku_id
                 row["description"] = new_description
                 row["ean"] = new_ean or ""
+                row["moq"] = str(moq)
+                row["lead_time_days"] = str(lead_time_days)
+                row["max_stock"] = str(max_stock)
+                row["reorder_point"] = str(reorder_point)
+                row["supplier"] = supplier
+                row["demand_variability"] = demand_variability.value
                 updated = True
                 break
         

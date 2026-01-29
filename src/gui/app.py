@@ -649,7 +649,7 @@ class DesktopOrderApp:
             # Calculate daily sales average
             daily_sales = calculate_daily_sales_average(sales_records, sku_id, days_lookback=30)
             
-            # Generate proposal
+            # Generate proposal (pass sku_obj for MOQ, lead_time_days, reorder_point)
             proposal = self.order_workflow.generate_proposal(
                 sku=sku_id,
                 description=description,
@@ -657,6 +657,7 @@ class DesktopOrderApp:
                 daily_sales_avg=daily_sales,
                 min_stock=min_stock,
                 days_cover=days_cover,
+                sku_obj=sku_obj,
             )
             self.current_proposals.append(proposal)
         
@@ -1902,7 +1903,7 @@ class DesktopOrderApp:
         # Create popup window
         popup = tk.Toplevel(self.root)
         popup.title("New SKU" if mode == "new" else "Edit SKU")
-        popup.geometry("500x300")
+        popup.geometry("600x500")
         popup.resizable(False, False)
         
         # Center popup
@@ -1947,16 +1948,59 @@ class DesktopOrderApp:
         ean_entry = ttk.Entry(form_frame, textvariable=ean_var, width=40)
         ean_entry.grid(row=2, column=1, sticky="ew", pady=5, padx=(10, 0))
         
+        # MOQ field
+        ttk.Label(form_frame, text="MOQ:", font=("Helvetica", 10, "bold")).grid(
+            row=3, column=0, sticky="w", pady=5
+        )
+        moq_var = tk.StringVar(value=str(current_sku.moq) if current_sku else "1")
+        ttk.Entry(form_frame, textvariable=moq_var, width=40).grid(row=3, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # Lead Time field
+        ttk.Label(form_frame, text="Lead Time (days):", font=("Helvetica", 10, "bold")).grid(
+            row=4, column=0, sticky="w", pady=5
+        )
+        lead_time_var = tk.StringVar(value=str(current_sku.lead_time_days) if current_sku else "7")
+        ttk.Entry(form_frame, textvariable=lead_time_var, width=40).grid(row=4, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # Max Stock field
+        ttk.Label(form_frame, text="Max Stock:", font=("Helvetica", 10, "bold")).grid(
+            row=5, column=0, sticky="w", pady=5
+        )
+        max_stock_var = tk.StringVar(value=str(current_sku.max_stock) if current_sku else "999")
+        ttk.Entry(form_frame, textvariable=max_stock_var, width=40).grid(row=5, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # Reorder Point field
+        ttk.Label(form_frame, text="Reorder Point:", font=("Helvetica", 10, "bold")).grid(
+            row=6, column=0, sticky="w", pady=5
+        )
+        reorder_point_var = tk.StringVar(value=str(current_sku.reorder_point) if current_sku else "10")
+        ttk.Entry(form_frame, textvariable=reorder_point_var, width=40).grid(row=6, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # Supplier field
+        ttk.Label(form_frame, text="Supplier:", font=("Helvetica", 10, "bold")).grid(
+            row=7, column=0, sticky="w", pady=5
+        )
+        supplier_var = tk.StringVar(value=current_sku.supplier if current_sku else "")
+        ttk.Entry(form_frame, textvariable=supplier_var, width=40).grid(row=7, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # Demand Variability field
+        ttk.Label(form_frame, text="Demand Variability:", font=("Helvetica", 10, "bold")).grid(
+            row=8, column=0, sticky="w", pady=5
+        )
+        demand_var = tk.StringVar(value=current_sku.demand_variability.value if current_sku else "STABLE")
+        demand_combo = ttk.Combobox(form_frame, textvariable=demand_var, values=["STABLE", "LOW", "HIGH", "SEASONAL"], state="readonly", width=37)
+        demand_combo.grid(row=8, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
         # Validate EAN button and status label
         ean_status_var = tk.StringVar(value="")
         ttk.Button(
             form_frame, 
             text="Validate EAN", 
             command=lambda: self._validate_ean_field(ean_var.get(), ean_status_var)
-        ).grid(row=3, column=1, sticky="w", pady=5, padx=(10, 0))
+        ).grid(row=9, column=1, sticky="w", pady=5, padx=(10, 0))
         
         ean_status_label = ttk.Label(form_frame, textvariable=ean_status_var, foreground="green")
-        ean_status_label.grid(row=4, column=1, sticky="w", padx=(10, 0))
+        ean_status_label.grid(row=10, column=1, sticky="w", padx=(10, 0))
         
         # Configure grid
         form_frame.columnconfigure(1, weight=1)
@@ -1969,7 +2013,10 @@ class DesktopOrderApp:
             button_frame,
             text="Save",
             command=lambda: self._save_sku_form(
-                popup, mode, sku_var.get(), desc_var.get(), ean_var.get(), current_sku
+                popup, mode, sku_var.get(), desc_var.get(), ean_var.get(),
+                moq_var.get(), lead_time_var.get(), max_stock_var.get(),
+                reorder_point_var.get(), supplier_var.get(), demand_var.get(),
+                current_sku
             ),
         ).pack(side="right", padx=5)
         
@@ -1993,7 +2040,9 @@ class DesktopOrderApp:
         else:
             status_var.set(f"✗ {error}")
     
-    def _save_sku_form(self, popup, mode, sku_code, description, ean, current_sku):
+    def _save_sku_form(self, popup, mode, sku_code, description, ean,
+                        moq_str, lead_time_str, max_stock_str, reorder_point_str,
+                        supplier, demand_variability_str, current_sku):
         """Save SKU from form."""
         # Validate inputs
         if not sku_code or not sku_code.strip():
@@ -2007,6 +2056,24 @@ class DesktopOrderApp:
         sku_code = sku_code.strip()
         description = description.strip()
         ean = ean.strip() if ean else None
+        supplier = supplier.strip()
+        
+        # Parse and validate numeric fields
+        try:
+            moq = int(moq_str)
+            lead_time_days = int(lead_time_str)
+            max_stock = int(max_stock_str)
+            reorder_point = int(reorder_point_str)
+        except ValueError:
+            messagebox.showerror("Validation Error", "MOQ, Lead Time, Max Stock, and Reorder Point must be integers.", parent=popup)
+            return
+        
+        # Parse demand variability
+        from ..domain.models import DemandVariability
+        try:
+            demand_variability = DemandVariability[demand_variability_str]
+        except KeyError:
+            demand_variability = DemandVariability.STABLE
         
         # Validate EAN if provided
         if ean:
@@ -2028,13 +2095,23 @@ class DesktopOrderApp:
         try:
             if mode == "new":
                 # Create new SKU
-                new_sku = SKU(sku=sku_code, description=description, ean=ean)
+                new_sku = SKU(
+                    sku=sku_code,
+                    description=description,
+                    ean=ean,
+                    moq=moq,
+                    lead_time_days=lead_time_days,
+                    max_stock=max_stock,
+                    reorder_point=reorder_point,
+                    supplier=supplier,
+                    demand_variability=demand_variability,
+                )
                 self.csv_layer.write_sku(new_sku)
                 
                 # Log audit trail
                 self.csv_layer.log_audit(
                     operation="SKU_CREATE",
-                    details=f"Created SKU: {description} (EAN: {ean or 'N/A'})",
+                    details=f"Created SKU: {description} (MOQ: {moq}, Lead Time: {lead_time_days}d)",
                     sku=sku_code,
                 )
                 
@@ -2042,7 +2119,11 @@ class DesktopOrderApp:
             else:
                 # Update existing SKU
                 old_sku_code = current_sku.sku
-                success = self.csv_layer.update_sku(old_sku_code, sku_code, description, ean)
+                success = self.csv_layer.update_sku(
+                    old_sku_code, sku_code, description, ean,
+                    moq, lead_time_days, max_stock, reorder_point,
+                    supplier, demand_variability
+                )
                 if success:
                     # Build change details
                     changes = []

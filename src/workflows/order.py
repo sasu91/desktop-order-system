@@ -4,8 +4,7 @@ Order workflow: proposal, confirmation, and logging.
 from datetime import date, timedelta
 from typing import List, Optional, Tuple
 
-from ..domain.models import Stock, OrderProposal, OrderConfirmation, Transaction, EventType
-from ..persistence.csv_layer import CSVLayer
+from ..domain.models import Stock, OrderProposal, OrderConfirmation, Transaction, EventType, SKU
 
 
 class OrderWorkflow:
@@ -17,7 +16,7 @@ class OrderWorkflow:
         
         Args:
             csv_layer: CSV persistence layer
-            lead_time_days: Default lead time for orders (days)
+            lead_time_days: Default lead time for orders (days) - used only if SKU doesn't specify
         """
         self.csv_layer = csv_layer
         self.lead_time_days = lead_time_days
@@ -30,6 +29,7 @@ class OrderWorkflow:
         daily_sales_avg: float,
         min_stock: int = 10,
         days_cover: int = 30,
+        sku_obj: Optional[SKU] = None,
     ) -> OrderProposal:
         """
         Generate order proposal based on stock and sales history.
@@ -39,24 +39,37 @@ class OrderWorkflow:
             description: SKU description
             current_stock: Current stock state (on_hand, on_order)
             daily_sales_avg: Average daily sales (from historical data)
-            min_stock: Minimum stock threshold
+            min_stock: Minimum stock threshold (global default or SKU-specific reorder_point)
             days_cover: Days of sales to cover with on_order
+            sku_obj: SKU object (for MOQ, lead_time_days, reorder_point)
         
         Returns:
-            OrderProposal with suggested quantity
+            OrderProposal with suggested quantity (adjusted for MOQ)
         
         Logic:
-            target = min_stock + (daily_sales_avg * days_cover)
+            target = reorder_point + (daily_sales_avg * days_cover)
             available = current_stock.on_hand + current_stock.on_order
-            proposed_qty = max(0, target - available)
+            proposed_qty_raw = max(0, target - available)
+            proposed_qty = round up to nearest MOQ multiple
         """
-        target_inventory = min_stock + int(daily_sales_avg * days_cover)
+        # Use SKU-specific parameters if available
+        moq = sku_obj.moq if sku_obj else 1
+        lead_time = sku_obj.lead_time_days if sku_obj else self.lead_time_days
+        reorder_point = sku_obj.reorder_point if sku_obj else min_stock
+        
+        target_inventory = reorder_point + int(daily_sales_avg * days_cover)
         available_inventory = current_stock.on_hand + current_stock.on_order
-        proposed_qty = max(0, target_inventory - available_inventory)
+        proposed_qty_raw = max(0, target_inventory - available_inventory)
         
-        receipt_date = date.today() + timedelta(days=self.lead_time_days)
+        # Apply MOQ: round up to nearest multiple
+        if proposed_qty_raw > 0 and moq > 1:
+            proposed_qty = ((proposed_qty_raw + moq - 1) // moq) * moq
+        else:
+            proposed_qty = proposed_qty_raw
         
-        notes = f"Target: {target_inventory} units, Available: {available_inventory}, Lead time: {self.lead_time_days}d"
+        receipt_date = date.today() + timedelta(days=lead_time)
+        
+        notes = f"Target: {target_inventory} units, Available: {available_inventory}, MOQ: {moq}, Lead time: {lead_time}d"
         
         return OrderProposal(
             sku=sku,

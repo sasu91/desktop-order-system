@@ -23,6 +23,14 @@ class EventType(Enum):
     EXPORT_LOG = "EXPORT_LOG"  # Export operation log - no stock impact
 
 
+class DemandVariability(Enum):
+    """Demand variability classification for SKU forecasting."""
+    STABLE = "STABLE"      # Predictable, consistent demand
+    LOW = "LOW"            # Low movement, sporadic
+    HIGH = "HIGH"          # High volatility, unpredictable spikes
+    SEASONAL = "SEASONAL"  # Seasonal patterns
+
+
 @dataclass(frozen=True)
 class SKU:
     """Stock Keeping Unit (inventory item) - immutable."""
@@ -30,11 +38,27 @@ class SKU:
     description: str
     ean: Optional[str] = None  # EAN/GTIN; can be empty or invalid
     
+    # Order parameters
+    moq: int = 1                    # Minimum Order Quantity
+    lead_time_days: int = 7         # Delivery lead time in days
+    max_stock: int = 999            # Maximum stock level
+    reorder_point: int = 10         # Reorder trigger point
+    supplier: str = ""              # Default supplier
+    demand_variability: DemandVariability = DemandVariability.STABLE
+    
     def __post_init__(self):
         if not self.sku or not self.sku.strip():
             raise ValueError("SKU cannot be empty")
         if not self.description or not self.description.strip():
             raise ValueError("Description cannot be empty")
+        if self.moq < 1:
+            raise ValueError("MOQ must be >= 1")
+        if self.lead_time_days < 1 or self.lead_time_days > 365:
+            raise ValueError("Lead time must be between 1 and 365 days")
+        if self.max_stock < 1:
+            raise ValueError("Max stock must be >= 1")
+        if self.reorder_point < 0:
+            raise ValueError("Reorder point cannot be negative")
 
 
 @dataclass(frozen=True)
