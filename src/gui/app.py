@@ -1349,15 +1349,21 @@ class DesktopOrderApp:
         form_frame.columnconfigure(1, weight=1)  # Column per widget input
         form_frame.columnconfigure(3, weight=1)
         
-        # ROW 0: SKU (obbligatorio) - PRIMA POSIZIONE
+        # ROW 0: SKU (obbligatorio) - PRIMA POSIZIONE con ricerca filtrata
         ttk.Label(form_frame, text="SKU: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=0, column=0, sticky="e", padx=(0, 8), pady=8)
         self.exception_sku_var = tk.StringVar()
         self.exception_sku_combo = ttk.Combobox(
             form_frame,
             textvariable=self.exception_sku_var,
-            width=25,
+            width=35,
         )
         self.exception_sku_combo.grid(row=0, column=1, sticky="w", pady=8)
+        
+        # Dizionario per mapping display -> codice SKU
+        self.exception_sku_map = {}
+        
+        # Trace per filtro real-time e validazione
+        self.exception_sku_var.trace('w', lambda *args: self._filter_exception_sku())
         self.exception_sku_var.trace('w', lambda *args: self._validate_exception_form())
         
         # Populate SKU dropdown
@@ -1464,9 +1470,45 @@ class DesktopOrderApp:
         self.exception_treeview.pack(fill="both", expand=True)
     
     def _populate_exception_sku_dropdown(self):
-        """Populate SKU dropdown in exception form."""
-        sku_ids = self.csv_layer.get_all_sku_ids()
-        self.exception_sku_combo["values"] = sku_ids
+        """Popola la combo SKU con codice e descrizione, inizializzando il mapping."""
+        # Leggi tutti gli SKU con descrizioni
+        skus = self.csv_layer.read_skus()
+        
+        # Crea mapping e lista formattata
+        self.exception_sku_map = {}
+        sku_list = []
+        
+        for sku_obj in skus:
+            display_text = f"{sku_obj.sku} - {sku_obj.description}"
+            sku_list.append(display_text)
+            self.exception_sku_map[display_text] = sku_obj.sku  # Mapping display -> codice
+        
+        # Popola combo con tutti gli SKU
+        self.exception_sku_combo["values"] = sku_list
+    
+    def _filter_exception_sku(self):
+        """Filtra SKU in real-time mentre l'utente digita, mostrando codice e descrizione."""
+        search_text = self.exception_sku_var.get().strip().lower()
+        
+        if not search_text:
+            # Se vuoto, mostra tutti gli SKU
+            skus = self.csv_layer.read_skus()
+            sku_list = [f"{s.sku} - {s.description}" for s in skus]
+            self.exception_sku_combo["values"] = sku_list
+            return
+        
+        # Filtra SKU per match su codice o descrizione (case-insensitive)
+        skus = self.csv_layer.read_skus()
+        filtered = []
+        
+        for sku_obj in skus:
+            if (search_text in sku_obj.sku.lower() or 
+                search_text in sku_obj.description.lower()):
+                display_text = f"{sku_obj.sku} - {sku_obj.description}"
+                filtered.append(display_text)
+        
+        # Aggiorna la combo con risultati filtrati
+        self.exception_sku_combo["values"] = filtered
     
     def _on_exception_type_change(self, event=None):
         """Aggiorna hint dinamico quando cambia tipo evento."""
@@ -1484,9 +1526,15 @@ class DesktopOrderApp:
     
     def _validate_exception_form(self):
         """Valida form eccezioni in real-time e abilita/disabilita bottone Invia."""
-        sku = self.exception_sku_var.get().strip()
+        sku_display = self.exception_sku_var.get().strip()
         qty_str = self.exception_qty_var.get().strip()
         date_str = self.exception_date_var.get().strip()
+        
+        # Estrai codice SKU
+        if " - " in sku_display:
+            sku = sku_display.split(" - ")[0].strip()
+        else:
+            sku = sku_display
         
         errors = []
         
@@ -1530,10 +1578,16 @@ class DesktopOrderApp:
         """Submit exception from quick entry form."""
         # Validate inputs
         event_type_str = self.exception_type_var.get()
-        sku = self.exception_sku_var.get().strip()
+        sku_display = self.exception_sku_var.get().strip()
         qty_str = self.exception_qty_var.get().strip()
         date_str = self.exception_date_var.get().strip()
         notes = self.exception_notes_var.get().strip()
+        
+        # Estrai codice SKU dalla stringa formattata "SKU001 - Descrizione"
+        if " - " in sku_display:
+            sku = sku_display.split(" - ")[0].strip()
+        else:
+            sku = sku_display
         
         if not sku:
             messagebox.showerror("Errore di Validazione", "Seleziona uno SKU.")
