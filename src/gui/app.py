@@ -2609,13 +2609,24 @@ class DesktopOrderApp:
                     if txn.receipt_date:
                         note = f"Receipt: {txn.receipt_date.isoformat()} | {note}"
                     
+                    # Display quantity with correct sign:
+                    # - Events that reduce stock/orders: show negative (SALE, WASTE, RECEIPT, UNFULFILLED)
+                    # - Events that increase stock/orders: show positive (ORDER, SNAPSHOT, ADJUST)
+                    display_qty = txn.qty
+                    if txn.event in [EventType.UNFULFILLED, EventType.RECEIPT]:
+                        # These events reduce on_order, show as negative
+                        display_qty = -abs(txn.qty)
+                    elif txn.event in [EventType.SALE, EventType.WASTE]:
+                        # These events reduce on_hand, show as negative
+                        display_qty = -abs(txn.qty)
+                    
                     self.audit_timeline_treeview.insert(
                         "",
                         "end",
                         values=(
                             txn.date.isoformat(),
                             txn.event.value,
-                            f"{txn.qty:+d}" if txn.qty else "",
+                            f"{display_qty:+d}" if display_qty else "",
                             note,
                         ),
                     )
