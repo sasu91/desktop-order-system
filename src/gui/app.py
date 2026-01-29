@@ -4,7 +4,7 @@ Main GUI application for desktop-order-system.
 Tkinter-based desktop UI with multiple tabs.
 """
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, simpledialog
 from datetime import date, timedelta
 from pathlib import Path
 import tempfile
@@ -1000,11 +1000,18 @@ class DesktopOrderApp:
         pending_frame = ttk.LabelFrame(main_frame, text="Ordini in Sospeso (Non Completamente Ricevuti)", padding=5)
         pending_frame.pack(side="top", fill="both", expand=True, pady=(0, 10))
         
-        # Toolbar
+        # Toolbar con ricerca
         pending_toolbar = ttk.Frame(pending_frame)
         pending_toolbar.pack(side="top", fill="x", pady=(0, 5))
         ttk.Button(pending_toolbar, text="🔄 Aggiorna Sospesi", command=self._refresh_pending_orders).pack(side="left", padx=5)
-        ttk.Label(pending_toolbar, text="(Doppio click per precompilare modulo ricevimento)").pack(side="left", padx=20)
+        ttk.Label(pending_toolbar, text="Cerca:").pack(side="left", padx=(20, 5))
+        self.pending_search_var = tk.StringVar()
+        self.pending_search_var.trace('w', lambda *args: self._filter_pending_orders())
+        ttk.Entry(pending_toolbar, textvariable=self.pending_search_var, width=25).pack(side="left", padx=(0, 5))
+        ttk.Label(pending_toolbar, text="(SKU o Descrizione)").pack(side="left", padx=5)
+        
+        # Dizionario per quantità modificate in memoria: {tree_item_id: qty_received}
+        self.pending_qty_edits = {}
         
         # Pending orders table
         pending_scroll = ttk.Scrollbar(pending_frame)
@@ -1036,61 +1043,19 @@ class DesktopOrderApp:
         self.pending_treeview.heading("Receipt Date", text="Data Prevista", anchor=tk.CENTER)
         
         self.pending_treeview.pack(fill="both", expand=True)
-        self.pending_treeview.bind("<Double-1>", self._on_pending_order_double_click)
         
-        # === CLOSE RECEIPT FORM (INLINE) ===
-        form_frame = ttk.LabelFrame(main_frame, text="Chiudi Ricevimento (Idempotente)", padding=10)
-        form_frame.pack(side="top", fill="x", pady=(0, 10))
+        # Doppio click per editare quantità ricevuta
+        self.pending_treeview.bind("<Double-1>", self._on_pending_qty_double_click)
         
-        # Row 1: Receipt ID (auto + manual override)
-        row1 = ttk.Frame(form_frame)
-        row1.pack(side="top", fill="x", pady=5)
+        # Tag per evidenziare righe modificate
+        self.pending_treeview.tag_configure("edited", background="#ffffcc")
         
-        ttk.Label(row1, text="ID Ricevimento:", width=15).pack(side="left", padx=(0, 5))
-        self.receipt_id_var = tk.StringVar()
-        self.receipt_id_entry = ttk.Entry(row1, textvariable=self.receipt_id_var, width=30, state="disabled")
-        self.receipt_id_entry.pack(side="left", padx=(0, 10))
+        # === BULK RECEIPT CONFIRMATION ===
+        confirm_frame = ttk.Frame(main_frame)
+        confirm_frame.pack(side="top", fill="x", pady=(0, 10))
         
-        self.auto_receipt_id_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            row1,
-            text="Auto-genera",
-            variable=self.auto_receipt_id_var,
-            command=self._toggle_receipt_id_entry,
-        ).pack(side="left", padx=5)
-        
-        ttk.Label(row1, text="Data Ricevimento:", width=15).pack(side="left", padx=(20, 5))
-        self.receipt_date_var = tk.StringVar(value=date.today().isoformat())
-        ttk.Entry(row1, textvariable=self.receipt_date_var, width=15).pack(side="left", padx=(0, 5))
-        
-        # Row 2: SKU, Quantity
-        row2 = ttk.Frame(form_frame)
-        row2.pack(side="top", fill="x", pady=5)
-        
-        ttk.Label(row2, text="SKU:", width=15).pack(side="left", padx=(0, 5))
-        self.receipt_sku_var = tk.StringVar()
-        self.receipt_sku_combo = ttk.Combobox(row2, textvariable=self.receipt_sku_var, width=20, state="readonly")
-        self.receipt_sku_combo.pack(side="left", padx=(0, 10))
-        
-        ttk.Label(row2, text="Q.tà Ricevuta:", width=15).pack(side="left", padx=(20, 5))
-        self.receipt_qty_var = tk.StringVar()
-        ttk.Entry(row2, textvariable=self.receipt_qty_var, width=15).pack(side="left", padx=(0, 5))
-        
-        # Row 3: Notes
-        row3 = ttk.Frame(form_frame)
-        row3.pack(side="top", fill="x", pady=5)
-        
-        ttk.Label(row3, text="Note:", width=15).pack(side="left", padx=(0, 5))
-        self.receipt_notes_var = tk.StringVar()
-        ttk.Entry(row3, textvariable=self.receipt_notes_var, width=60).pack(side="left", padx=(0, 5))
-        
-        # Row 4: Buttons
-        row4 = ttk.Frame(form_frame)
-        row4.pack(side="top", fill="x", pady=(10, 0))
-        
-        ttk.Button(row4, text="✓ Chiudi Ricevimento", command=self._close_receipt).pack(side="left", padx=5)
-        ttk.Button(row4, text="✗ Cancella Modulo", command=self._clear_receipt_form).pack(side="left", padx=5)
-        ttk.Button(row4, text="🔄 Aggiorna Elenco SKU", command=self._refresh_receipt_sku_list).pack(side="left", padx=5)
+        ttk.Label(confirm_frame, text="Modifica le quantità ricevute nella tabella sopra (doppio click), poi:", font=("Helvetica", 10)).pack(side="left", padx=(10, 20))
+        ttk.Button(confirm_frame, text="✓ Chiudi Ricevimento (Conferma Tutte)", command=self._close_receipt_bulk, style="Accent.TButton").pack(side="left", padx=5)
         
         # === RECEIVING HISTORY ===
         history_frame = ttk.LabelFrame(main_frame, text="Storico Ricevimenti", padding=5)
@@ -1137,25 +1102,28 @@ class DesktopOrderApp:
         self.receiving_history_treeview.pack(fill="both", expand=True)
         
         # Initial load
-        self._refresh_receipt_sku_list()
         self._refresh_pending_orders()
         self._refresh_receiving_history()
     
-    def _toggle_receipt_id_entry(self):
-        """Toggle receipt ID entry based on auto-generate checkbox."""
-        if self.auto_receipt_id_var.get():
-            self.receipt_id_entry.config(state="disabled")
-            self.receipt_id_var.set("")
-        else:
-            self.receipt_id_entry.config(state="normal")
-    
-    def _refresh_receipt_sku_list(self):
-        """Refresh SKU dropdown list."""
-        sku_ids = self.csv_layer.get_all_sku_ids()
-        self.receipt_sku_combo['values'] = sku_ids
+    def _filter_pending_orders(self):
+        """Filtra ordini in sospeso per SKU o descrizione."""
+        search_text = self.pending_search_var.get().strip().lower()
+        
+        for item_id in self.pending_treeview.get_children():
+            values = self.pending_treeview.item(item_id)["values"]
+            sku = str(values[1]).lower()
+            description = str(values[2]).lower()
+            
+            # Mostra se match o se ricerca vuota
+            if not search_text or search_text in sku or search_text in description:
+                self.pending_treeview.reattach(item_id, "", "end")
+            else:
+                self.pending_treeview.detach(item_id)
     
     def _refresh_pending_orders(self):
         """Calculate and display pending orders (qty_ordered - qty_received > 0)."""
+        # Reset edits
+        self.pending_qty_edits = {}
         # Read order logs
         order_logs = self.csv_layer.read_order_logs()
         
@@ -1206,106 +1174,114 @@ class DesktopOrderApp:
                     ),
                 )
     
-    def _on_pending_order_double_click(self, event):
-        """Pre-fill receipt form from pending order."""
+    def _on_pending_qty_double_click(self, event):
+        """Edita quantità ricevuta con doppio click."""
+        region = self.pending_treeview.identify("region", event.x, event.y)
+        if region != "cell":
+            return
+        
+        column = self.pending_treeview.identify_column(event.x)
         selected = self.pending_treeview.selection()
+        
         if not selected:
             return
         
-        item = self.pending_treeview.item(selected[0])
-        values = item["values"]
+        item_id = selected[0]
+        values = self.pending_treeview.item(item_id)["values"]
         
-        order_id = values[0]
-        sku = values[1]
+        # Solo colonna "Qty Received" (indice #4 = colonna 5)
+        if column != "#5":
+            return
+        
+        current_qty_received = values[4]
         pending_qty = values[5]
-        receipt_date_str = values[6]
         
-        # Pre-fill form
-        self.receipt_sku_var.set(sku)
-        self.receipt_qty_var.set(str(pending_qty))
-        self.receipt_date_var.set(receipt_date_str if receipt_date_str else date.today().isoformat())
-        self.receipt_notes_var.set(f"From order {order_id}")
-        
-        messagebox.showinfo(
-            "Pre-filled",
-            f"Form pre-filled for SKU {sku} from order {order_id}.\n\nAdjust quantity and notes as needed.",
+        # Dialog per inserire nuova quantità
+        new_qty = tk.simpledialog.askinteger(
+            "Modifica Quantità Ricevuta",
+            f"SKU: {values[1]}\nInserisci quantità ricevuta:",
+            initialvalue=current_qty_received,
+            minvalue=0,
+            parent=self.root,
         )
+        
+        if new_qty is None:
+            return
+        
+        # Aggiorna valore nel treeview
+        new_values = list(values)
+        new_values[4] = new_qty
+        new_values[5] = max(0, values[3] - new_qty)  # Ricalcola pending
+        self.pending_treeview.item(item_id, values=new_values, tags=("edited",))
+        
+        # Salva in memoria
+        self.pending_qty_edits[item_id] = new_qty
     
-    def _close_receipt(self):
-        """Close receipt and update ledger."""
-        # Validate inputs
-        try:
-            receipt_date_obj = date.fromisoformat(self.receipt_date_var.get())
-        except ValueError:
-            messagebox.showerror("Errore di Validazione", "Formato data ricevimento non valido (usa YYYY-MM-DD).")
+    def _close_receipt_bulk(self):
+        """Chiudi ricevimento per tutte le quantità modificate."""
+        if not self.pending_qty_edits:
+            messagebox.showwarning(
+                "Nessuna Modifica",
+                "Nessuna quantità ricevuta modificata.\n\nModifica le quantità nella tabella (doppio click) prima di confermare.",
+            )
             return
         
-        sku = self.receipt_sku_var.get().strip()
-        if not sku:
-            messagebox.showerror("Errore di Validazione", "Seleziona uno SKU.")
+        # Conferma
+        confirm = messagebox.askyesno(
+            "Conferma Ricevimento",
+            f"Confermare ricevimento per {len(self.pending_qty_edits)} SKU modificati?\n\nQuesta azione creerà eventi RECEIPT nel ledger.",
+        )
+        
+        if not confirm:
             return
         
-        try:
-            qty = int(self.receipt_qty_var.get())
-            if qty <= 0:
-                messagebox.showerror("Errore di Validazione", "La quantità deve essere > 0.")
-                return
-        except ValueError:
-                messagebox.showerror("Errore di Validazione", "La quantità deve essere un numero intero.")
+        receipt_date_obj = date.today()
+        total_receipts = 0
+        errors = []
         
-        # Generate or use manual receipt_id
-        if self.auto_receipt_id_var.get():
-            # Auto-generate
+        # Per ogni SKU modificato, crea un receipt
+        for item_id, new_qty_received in self.pending_qty_edits.items():
+            if new_qty_received <= 0:
+                continue  # Skip se qty = 0
+            
+            values = self.pending_treeview.item(item_id)["values"]
+            sku = values[1]
+            
+            # Genera receipt_id univoco per questo SKU
             receipt_id = ReceivingWorkflow.generate_receipt_id(
                 receipt_date=receipt_date_obj,
-                origin="MANUAL",  # Default origin for manual entries
+                origin="MANUAL",
                 sku=sku,
             )
-        else:
-            receipt_id = self.receipt_id_var.get().strip()
-            if not receipt_id:
-                messagebox.showerror("Errore di Validazione", "Inserisci un ID ricevimento o abilita auto-genera.")
-                return
-        
-        notes = self.receipt_notes_var.get().strip()
-        
-        # Call workflow
-        try:
-            transactions, already_processed = self.receiving_workflow.close_receipt(
-                receipt_id=receipt_id,
-                receipt_date=receipt_date_obj,
-                sku_quantities={sku: qty},
-                notes=notes,
-            )
             
-            if already_processed:
-                messagebox.showwarning(
-                    "Già Elaborato",
-                    f"Ricevimento {receipt_id} già elaborato (idempotente).\n\nNessuna modifica effettuata.",
-                )
-            else:
-                messagebox.showinfo(
-                    "Successo",
-                    f"Ricevimento chiuso con successo!\n\nID Ricevimento: {receipt_id}\nSKU: {sku}\nQ.tà: {qty}\n\n{len(transactions)} evento/i RECEIPT creato/i.",
+            try:
+                transactions, already_processed = self.receiving_workflow.close_receipt(
+                    receipt_id=receipt_id,
+                    receipt_date=receipt_date_obj,
+                    sku_quantities={sku: new_qty_received},
+                    notes="Bulk receiving",
                 )
                 
-                # Clear form
-                self._clear_receipt_form()
-                
-                # Refresh views
-                self._refresh_pending_orders()
-                self._refresh_receiving_history()
+                if not already_processed:
+                    total_receipts += 1
+            except Exception as e:
+                errors.append(f"SKU {sku}: {str(e)}")
         
-        except Exception as e:
-            messagebox.showerror("Errore", f"Impossibile chiudere ricevimento: {str(e)}")
-    
-    def _clear_receipt_form(self):
-        """Clear receipt form."""
-        self.receipt_id_var.set("")
-        self.receipt_sku_var.set("")
-        self.receipt_qty_var.set("")
-        self.receipt_date_var.set(date.today().isoformat())
-        self.receipt_notes_var.set("")
+        # Mostra risultato
+        if errors:
+            messagebox.showerror(
+                "Errori durante ricevimento",
+                f"Completati {total_receipts} ricevimenti.\n\nErrori:\n" + "\n".join(errors),
+            )
+        else:
+            messagebox.showinfo(
+                "Successo",
+                f"Ricevimento completato per {total_receipts} SKU!",
+            )
+        
+        # Refresh views
+        self._refresh_pending_orders()
+        self._refresh_receiving_history()
     
     def _refresh_receiving_history(self):
         """Refresh receiving history table."""
@@ -1378,7 +1354,7 @@ class DesktopOrderApp:
         exception_type_combo = ttk.Combobox(
             row1_frame,
             textvariable=self.exception_type_var,
-            values=["WASTE", "ADJUST", "UNFULFILLED"],
+            values=["WASTE", "ADJUST"],
             state="readonly",
             width=15,
         )
@@ -1564,7 +1540,7 @@ class DesktopOrderApp:
         all_txns = self.csv_layer.read_transactions()
         exception_txns = [
             t for t in all_txns
-            if t.event in [EventType.WASTE, EventType.ADJUST, EventType.UNFULFILLED]
+            if t.event in [EventType.WASTE, EventType.ADJUST]
             and t.date == view_date
         ]
         
@@ -1611,7 +1587,6 @@ class DesktopOrderApp:
         event_type_map = {
             "WASTE": EventType.WASTE,
             "ADJUST": EventType.ADJUST,
-            "UNFULFILLED": EventType.UNFULFILLED,
         }
         event_type = event_type_map.get(event_type_str)
         event_date = date.fromisoformat(date_str)
@@ -1665,7 +1640,7 @@ class DesktopOrderApp:
         ttk.Combobox(
             form_frame,
             textvariable=bulk_type_var,
-            values=["WASTE", "ADJUST", "UNFULFILLED"],
+            values=["WASTE", "ADJUST"],
             state="readonly",
             width=30,
         ).pack(fill="x", pady=(0, 10))
@@ -1704,7 +1679,6 @@ class DesktopOrderApp:
             event_type_map = {
                 "WASTE": EventType.WASTE,
                 "ADJUST": EventType.ADJUST,
-                "UNFULFILLED": EventType.UNFULFILLED,
             }
             event_type = event_type_map.get(event_type_str)
             

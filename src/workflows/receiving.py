@@ -107,7 +107,7 @@ class ReceivingWorkflow:
 
 
 class ExceptionWorkflow:
-    """Quick entry for exceptions: WASTE, ADJUST, UNFULFILLED."""
+    """Quick entry for exceptions: WASTE, ADJUST."""
     
     def __init__(self, csv_layer: CSVLayer):
         """
@@ -142,7 +142,7 @@ class ExceptionWorkflow:
         notes: str = "",
     ) -> Tuple[Transaction, bool]:
         """
-        Record an exception (WASTE, ADJUST, UNFULFILLED).
+        Record an exception (WASTE, ADJUST).
         
         Idempotency:
         - Check if exception key already exists
@@ -150,7 +150,7 @@ class ExceptionWorkflow:
         - If no: write transaction → return txn, False
         
         Args:
-            event_type: EventType (WASTE, ADJUST, UNFULFILLED)
+            event_type: EventType (WASTE, ADJUST)
             sku: SKU identifier
             qty: Quantity (signed for ADJUST)
             event_date: Event date (defaults to today)
@@ -159,7 +159,7 @@ class ExceptionWorkflow:
         Returns:
             (transaction, already_recorded)
         """
-        if event_type not in [EventType.WASTE, EventType.ADJUST, EventType.UNFULFILLED]:
+        if event_type not in [EventType.WASTE, EventType.ADJUST]:
             raise ValueError(f"Invalid exception type: {event_type}")
         
         event_date = event_date or date.today()
