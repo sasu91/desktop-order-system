@@ -1,11 +1,11 @@
 """
-Order workflow: proposal, confirmation, and logging.
+Order workflow: proposal generation and confirmation.
 """
 from datetime import date, timedelta
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 from ..domain.models import Stock, OrderProposal, OrderConfirmation, Transaction, EventType, SKU
-
+from ..persistence.csv_layer import CSVLayer
 
 class OrderWorkflow:
     """Order processing: proposal generation and confirmation."""
