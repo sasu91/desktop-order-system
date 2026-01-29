@@ -1509,6 +1509,10 @@ class DesktopOrderApp:
         
         # Aggiorna la combo con risultati filtrati
         self.exception_sku_combo["values"] = filtered
+        
+        # Apri tendina automaticamente se ci sono risultati
+        if filtered:
+            self.exception_sku_combo.after(50, lambda: self.exception_sku_combo.event_generate("<Down>"))
     
     def _on_exception_type_change(self, event=None):
         """Aggiorna hint dinamico quando cambia tipo evento."""
