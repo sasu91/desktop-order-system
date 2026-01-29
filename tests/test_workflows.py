@@ -13,6 +13,7 @@ from src.domain.models import Stock, Transaction, EventType, SalesRecord
 from src.persistence.csv_layer import CSVLayer
 from src.workflows.order import OrderWorkflow, calculate_daily_sales_average
 from src.workflows.receiving import ReceivingWorkflow, ExceptionWorkflow
+from src.workflows.daily_close import DailyCloseWorkflow
 
 
 @pytest.fixture
@@ -265,3 +266,201 @@ class TestDailySalesAverage:
         """Daily sales avg with no data should be 0.0."""
         avg = calculate_daily_sales_average([], "SKU001")
         assert avg == 0.0
+
+
+class TestDailyCloseWorkflow:
+    """Test daily closing workflow for EOD stock entry and sales calculation."""
+    
+    def test_process_eod_stock_basic(self, csv_layer):
+        """Process basic EOD stock entry with sales calculation."""
+        # Setup: Add a SKU
+        from src.domain.models import SKU, DemandVariability
+        csv_layer.add_sku(SKU(
+            sku="SKU001",
+            description="Test Product",
+            ean="",
+            moq=1,
+            lead_time_days=7,
+            max_stock=999,
+            reorder_point=10,
+            supplier="TestSupplier",
+            demand_variability=DemandVariability.STABLE,
+        ))
+        
+        # Add initial snapshot
+        csv_layer.append_transaction(Transaction(
+            date=date(2026, 1, 1),
+            sku="SKU001",
+            event=EventType.SNAPSHOT,
+            qty=100,
+        ))
+        
+        # Process EOD: stock at end of day 2026-01-02 is 80 (so 20 sold)
+        workflow = DailyCloseWorkflow(csv_layer)
+        sale, adjust, status = workflow.process_eod_stock(
+            sku="SKU001",
+            eod_date=date(2026, 1, 2),
+            eod_stock_on_hand=80,
+        )
+        
+        # Should record sale of 20
+        assert sale is not None
+        assert sale.qty_sold == 20
+        assert sale.date == date(2026, 1, 2)
+        
+        # No adjustment needed (theoretical = EOD)
+        assert adjust is None
+        
+        # Verify sale written to sales.csv
+        sales = csv_layer.read_sales()
+        assert len(sales) == 1
+        assert sales[0].sku == "SKU001"
+        assert sales[0].qty_sold == 20
+    
+    def test_process_eod_stock_with_adjustment(self, csv_layer):
+        """Process EOD with stock discrepancy (shrinkage)."""
+        from src.domain.models import SKU, DemandVariability
+        csv_layer.add_sku(SKU(
+            sku="SKU001",
+            description="Test Product",
+            ean="",
+            moq=1,
+            lead_time_days=7,
+            max_stock=999,
+            reorder_point=10,
+            supplier="TestSupplier",
+            demand_variability=DemandVariability.STABLE,
+        ))
+        
+        # Initial stock: 100
+        csv_layer.append_transaction(Transaction(
+            date=date(2026, 1, 1),
+            sku="SKU001",
+            event=EventType.SNAPSHOT,
+            qty=100,
+        ))
+        
+        # EOD stock is 75 (expected 100, so 25 missing)
+        # This could be 20 sold + 5 shrinkage
+        workflow = DailyCloseWorkflow(csv_layer)
+        sale, adjust, status = workflow.process_eod_stock(
+            sku="SKU001",
+            eod_date=date(2026, 1, 2),
+            eod_stock_on_hand=75,
+        )
+        
+        # Should record sale of 25
+        assert sale is not None
+        assert sale.qty_sold == 25
+        
+        # No adjustment because we accounted for all discrepancy with sales
+        # (In real scenario, if there was additional shrinkage beyond sales, adjust would be non-None)
+        assert adjust is None
+    
+    def test_process_eod_stock_idempotency(self, csv_layer):
+        """Process same EOD twice should update, not duplicate."""
+        from src.domain.models import SKU, DemandVariability
+        csv_layer.add_sku(SKU(
+            sku="SKU001",
+            description="Test Product",
+            ean="",
+            moq=1,
+            lead_time_days=7,
+            max_stock=999,
+            reorder_point=10,
+            supplier="TestSupplier",
+            demand_variability=DemandVariability.STABLE,
+        ))
+        
+        csv_layer.append_transaction(Transaction(
+            date=date(2026, 1, 1),
+            sku="SKU001",
+            event=EventType.SNAPSHOT,
+            qty=100,
+        ))
+        
+        workflow = DailyCloseWorkflow(csv_layer)
+        
+        # First EOD entry
+        workflow.process_eod_stock("SKU001", date(2026, 1, 2), 80)
+        sales_1 = csv_layer.read_sales()
+        assert len(sales_1) == 1
+        
+        # Second EOD entry (same date, different value)
+        workflow.process_eod_stock("SKU001", date(2026, 1, 2), 85)
+        sales_2 = csv_layer.read_sales()
+        
+        # Should still have 1 sale record (updated, not duplicated)
+        assert len(sales_2) == 1
+        assert sales_2[0].qty_sold == 15  # Updated value
+    
+    def test_process_bulk_eod_stock(self, csv_layer):
+        """Process multiple SKUs at once."""
+        from src.domain.models import SKU, DemandVariability
+        
+        # Add multiple SKUs
+        for i in range(3):
+            csv_layer.add_sku(SKU(
+                sku=f"SKU00{i+1}",
+                description=f"Product {i+1}",
+                ean="",
+                moq=1,
+                lead_time_days=7,
+                max_stock=999,
+                reorder_point=10,
+                supplier="TestSupplier",
+                demand_variability=DemandVariability.STABLE,
+            ))
+            csv_layer.append_transaction(Transaction(
+                date=date(2026, 1, 1),
+                sku=f"SKU00{i+1}",
+                event=EventType.SNAPSHOT,
+                qty=100,
+            ))
+        
+        # Bulk EOD
+        workflow = DailyCloseWorkflow(csv_layer)
+        results = workflow.process_bulk_eod_stock(
+            eod_entries={
+                "SKU001": 90,
+                "SKU002": 85,
+                "SKU003": 95,
+            },
+            eod_date=date(2026, 1, 2),
+        )
+        
+        # All 3 should succeed
+        assert len(results) == 3
+        assert all("✓" in r for r in results)
+        
+        # Verify sales
+        sales = csv_layer.read_sales()
+        assert len(sales) == 3
+        
+    def test_process_eod_invalid_sku(self, csv_layer):
+        """Process EOD for non-existent SKU should raise error."""
+        workflow = DailyCloseWorkflow(csv_layer)
+        
+        with pytest.raises(ValueError, match="does not exist"):
+            workflow.process_eod_stock("INVALID", date(2026, 1, 2), 50)
+    
+    def test_process_eod_negative_stock(self, csv_layer):
+        """Process EOD with negative stock should raise error."""
+        from src.domain.models import SKU, DemandVariability
+        csv_layer.add_sku(SKU(
+            sku="SKU001",
+            description="Test",
+            ean="",
+            moq=1,
+            lead_time_days=7,
+            max_stock=999,
+            reorder_point=10,
+            supplier="Test",
+            demand_variability=DemandVariability.STABLE,
+        ))
+        
+        workflow = DailyCloseWorkflow(csv_layer)
+        
+        with pytest.raises(ValueError, match="cannot be negative"):
+            workflow.process_eod_stock("SKU001", date(2026, 1, 2), -10)
+

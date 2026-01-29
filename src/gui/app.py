@@ -36,6 +36,7 @@ from ..domain.ledger import StockCalculator, validate_ean
 from ..domain.models import SKU, EventType, OrderProposal, Stock
 from ..workflows.order import OrderWorkflow, calculate_daily_sales_average
 from ..workflows.receiving import ReceivingWorkflow, ExceptionWorkflow
+from ..workflows.daily_close import DailyCloseWorkflow
 from .widgets import AutocompleteEntry
 
 
@@ -61,6 +62,7 @@ class DesktopOrderApp:
         self.order_workflow = OrderWorkflow(self.csv_layer, lead_time_days=7)
         self.receiving_workflow = ReceivingWorkflow(self.csv_layer)
         self.exception_workflow = ExceptionWorkflow(self.csv_layer)
+        self.daily_close_workflow = DailyCloseWorkflow(self.csv_layer)
         
         # Current AsOf date (for stock view)
         self.asof_date = date.today()
@@ -70,6 +72,9 @@ class DesktopOrderApp:
         
         # Order proposals storage
         self.current_proposals = []  # List[OrderProposal]
+        
+        # EOD stock edits storage (for daily close)
+        self.eod_stock_edits = {}  # {sku: eod_stock_on_hand}
         
         # Create GUI
         self._create_widgets()
@@ -153,7 +158,7 @@ class DesktopOrderApp:
         
         self.stock_treeview = ttk.Treeview(
             stock_frame,
-            columns=("SKU", "Description", "On Hand", "On Order", "Available"),
+            columns=("SKU", "Description", "On Hand", "On Order", "Available", "EOD Stock"),
             height=15,
             yscrollcommand=stock_scroll.set,
         )
@@ -161,21 +166,45 @@ class DesktopOrderApp:
         
         self.stock_treeview.column("#0", width=0, stretch=tk.NO)
         self.stock_treeview.column("SKU", anchor=tk.W, width=80)
-        self.stock_treeview.column("Description", anchor=tk.W, width=250)
-        self.stock_treeview.column("On Hand", anchor=tk.CENTER, width=100)
-        self.stock_treeview.column("On Order", anchor=tk.CENTER, width=100)
-        self.stock_treeview.column("Available", anchor=tk.CENTER, width=100)
+        self.stock_treeview.column("Description", anchor=tk.W, width=200)
+        self.stock_treeview.column("On Hand", anchor=tk.CENTER, width=80)
+        self.stock_treeview.column("On Order", anchor=tk.CENTER, width=80)
+        self.stock_treeview.column("Available", anchor=tk.CENTER, width=80)
+        self.stock_treeview.column("EOD Stock", anchor=tk.CENTER, width=100)
         
         self.stock_treeview.heading("SKU", text="SKU", anchor=tk.W)
         self.stock_treeview.heading("Description", text="Descrizione", anchor=tk.W)
         self.stock_treeview.heading("On Hand", text="Disponibile", anchor=tk.CENTER)
         self.stock_treeview.heading("On Order", text="In Ordine", anchor=tk.CENTER)
         self.stock_treeview.heading("Available", text="Totale", anchor=tk.CENTER)
+        self.stock_treeview.heading("EOD Stock", text="Stock EOD 📝", anchor=tk.CENTER)
         
         self.stock_treeview.pack(fill="both", expand=True)
         
+        # Tag for edited EOD stock
+        self.stock_treeview.tag_configure("eod_edited", background="#ffffcc")
+        
         # Bind selection to show audit trail
         self.stock_treeview.bind("<<TreeviewSelect>>", self._on_stock_select)
+        # Bind double-click on EOD Stock column for editing
+        self.stock_treeview.bind("<Double-Button-1>", self._on_stock_eod_double_click)
+        
+        # Search and EOD controls below table
+        controls_frame = ttk.Frame(left_panel)
+        controls_frame.pack(side="top", fill="x", pady=5)
+        
+        # Search bar
+        ttk.Label(controls_frame, text="🔍 Cerca SKU:").pack(side="left", padx=5)
+        self.stock_search_var = tk.StringVar()
+        self.stock_search_var.trace('w', lambda *args: self._filter_stock_table())
+        ttk.Entry(controls_frame, textvariable=self.stock_search_var, width=30).pack(side="left", padx=5)
+        
+        # EOD confirmation button
+        ttk.Button(
+            controls_frame,
+            text="✓ Conferma Chiusura Giornaliera",
+            command=self._confirm_eod_close,
+        ).pack(side="left", padx=20)
         
         # Right panel: Audit Timeline
         right_panel = ttk.LabelFrame(main_frame, text="📋 Storico Audit (Seleziona SKU)", padding=5)
@@ -2542,7 +2571,10 @@ class DesktopOrderApp:
             sku_obj = skus_by_id.get(sku_id)
             description = sku_obj.description if sku_obj else "N/A"
             
-            self.stock_treeview.insert(
+            # Get EOD stock value if edited
+            eod_value = self.eod_stock_edits.get(sku_id, "")
+            
+            item_id = self.stock_treeview.insert(
                 "",
                 "end",
                 values=(
@@ -2551,8 +2583,13 @@ class DesktopOrderApp:
                     stock.on_hand,
                     stock.on_order,
                     stock.available(),
+                    eod_value,
                 ),
             )
+            
+            # Apply tag if edited
+            if sku_id in self.eod_stock_edits:
+                self.stock_treeview.item(item_id, tags=("eod_edited",))
     
     def _on_stock_select(self, event):
         """Handle stock treeview selection to show audit timeline."""
@@ -2647,6 +2684,114 @@ class DesktopOrderApp:
         
         except Exception as e:
             self.audit_timeline_treeview.insert("", "end", values=(f"Error: {str(e)}", "", "", ""))
+    
+    def _on_stock_eod_double_click(self, event):
+        """Handle double-click on EOD Stock column for editing."""
+        # Identify which column was clicked
+        region = self.stock_treeview.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        
+        column = self.stock_treeview.identify_column(event.x)
+        # EOD Stock is column #6 (0-indexed: #0, #1=SKU, #2=Desc, #3=OnHand, #4=OnOrder, #5=Available, #6=EOD)
+        if column != "#6":
+            return
+        
+        # Get selected item
+        selection = self.stock_treeview.selection()
+        if not selection:
+            return
+        
+        item_id = selection[0]
+        item = self.stock_treeview.item(item_id)
+        sku = item["values"][0]
+        on_hand = item["values"][2]
+        
+        # Show dialog to edit EOD stock
+        new_eod_stock = simpledialog.askinteger(
+            "Inserisci Stock EOD",
+            f"SKU: {sku}\nDisponibile corrente: {on_hand}\n\nInserisci stock a fine giornata:",
+            minvalue=0,
+            initialvalue=on_hand if on_hand else 0,
+        )
+        
+        if new_eod_stock is None:
+            return  # User cancelled
+        
+        # Store edit
+        self.eod_stock_edits[sku] = new_eod_stock
+        
+        # Update display
+        self.stock_treeview.item(
+            item_id,
+            values=(
+                item["values"][0],  # SKU
+                item["values"][1],  # Description
+                item["values"][2],  # On Hand
+                item["values"][3],  # On Order
+                item["values"][4],  # Available
+                new_eod_stock,      # EOD Stock
+            ),
+            tags=("eod_edited",),
+        )
+    
+    def _filter_stock_table(self):
+        """Filter stock table based on search input."""
+        search_text = self.stock_search_var.get().lower()
+        
+        # If search empty, refresh full table
+        if not search_text:
+            self._refresh_stock_tab()
+            return
+        
+        # Filter items
+        for item_id in self.stock_treeview.get_children():
+            item = self.stock_treeview.item(item_id)
+            sku = str(item["values"][0]).lower()
+            description = str(item["values"][1]).lower()
+            
+            # Show if matches SKU or description
+            if search_text in sku or search_text in description:
+                self.stock_treeview.reattach(item_id, "", "end")
+            else:
+                self.stock_treeview.detach(item_id)
+    
+    def _confirm_eod_close(self):
+        """Confirm EOD stock entries and calculate sales."""
+        if not self.eod_stock_edits:
+            messagebox.showinfo("Info", "Nessun dato EOD inserito. Modifica almeno un valore Stock EOD nella tabella.")
+            return
+        
+        # Confirm with user
+        num_entries = len(self.eod_stock_edits)
+        confirm = messagebox.askyesno(
+            "Conferma Chiusura",
+            f"Confermare chiusura giornaliera per {num_entries} SKU?\n\n"
+            f"Data: {self.asof_date.isoformat()}\n\n"
+            "Questo calcolerà il venduto e aggiornerà stock e vendite.",
+        )
+        
+        if not confirm:
+            return
+        
+        # Process EOD entries
+        try:
+            results = self.daily_close_workflow.process_bulk_eod_stock(
+                eod_entries=self.eod_stock_edits,
+                eod_date=self.asof_date,
+            )
+            
+            # Show results
+            result_text = "\n".join(results)
+            messagebox.showinfo("Chiusura Completata", f"Risultati:\n\n{result_text}")
+            
+            # Clear edits and refresh
+            self.eod_stock_edits.clear()
+            self._refresh_stock_tab()
+            self._refresh_audit_timeline()
+            
+        except Exception as e:
+            messagebox.showerror("Errore", f"Errore durante chiusura giornaliera:\n{str(e)}")
     
     # === EXPORT FUNCTIONALITY ===
     

@@ -122,6 +122,65 @@ class StockCalculator:
         }
 
 
+def calculate_sold_from_eod_stock(
+    sku: str,
+    eod_date: date,
+    eod_stock_on_hand: int,
+    transactions: List[Transaction],
+    sales_records: Optional[List[SalesRecord]] = None,
+) -> Tuple[int, int]:
+    """
+    Calculate qty_sold for a day by comparing theoretical stock with declared EOD stock.
+    
+    Args:
+        sku: SKU identifier
+        eod_date: End-of-day date (stock declared at end of this day)
+        eod_stock_on_hand: Declared stock on hand at end of eod_date
+        transactions: All ledger transactions
+        sales_records: Daily sales records (optional)
+    
+    Returns:
+        (qty_sold, adjustment): 
+            - qty_sold: Quantity sold during eod_date (to write to sales.csv)
+            - adjustment: Stock adjustment needed (to write as ADJUST event if != 0)
+    
+    Logic:
+        1. Calculate stock at START of eod_date (AsOf = eod_date, excludes eod_date events)
+        2. Calculate theoretical stock at END of eod_date (includes all events except SALE for this day)
+        3. qty_sold = theoretical_end - eod_stock_on_hand
+        4. adjustment = eod_stock_on_hand - theoretical_end (if discrepancy after accounting for sales)
+    """
+    # Stock at start of day (before any events on eod_date)
+    stock_start = StockCalculator.calculate_asof(sku, eod_date, transactions, sales_records)
+    
+    # Theoretical stock at end of day (include all events on eod_date except SALE from sales_records)
+    # We calculate AsOf next day, but exclude sales from sales_records for eod_date
+    from datetime import timedelta
+    next_day = eod_date + timedelta(days=1)
+    
+    # Filter out sales for eod_date from sales_records to calculate theoretical stock
+    sales_without_today = []
+    if sales_records:
+        sales_without_today = [s for s in sales_records if s.date != eod_date]
+    
+    stock_theoretical_end = StockCalculator.calculate_asof(sku, next_day, transactions, sales_without_today)
+    
+    # qty_sold = stock at start + receipts during day - stock at end (declared)
+    # Simplified: theoretical_end - eod_stock_on_hand
+    # This accounts for: stock_start + receipts - waste - adjust - sales = eod_stock
+    # So: sales = stock_start + receipts - waste - adjust - eod_stock
+    # Which is: theoretical_end_without_sales - eod_stock
+    
+    qty_sold = max(0, stock_theoretical_end.on_hand - eod_stock_on_hand)
+    
+    # After accounting for sales, check if there's still a discrepancy (shrinkage, damage, etc.)
+    # theoretical after sales should equal eod_stock; if not, we need an adjustment
+    theoretical_after_sales = stock_theoretical_end.on_hand - qty_sold
+    adjustment = eod_stock_on_hand - theoretical_after_sales
+    
+    return qty_sold, adjustment
+
+
 def validate_ean(ean: Optional[str]) -> Tuple[bool, Optional[str]]:
     """
     Validate EAN-13 format (basic check).

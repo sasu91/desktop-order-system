@@ -389,6 +389,19 @@ class CSVLayer:
             "qty_sold": str(sale.qty_sold),
         })
     
+    def append_sales(self, sale: SalesRecord):
+        """Append a sales record to sales.csv (alias for write_sales_record)."""
+        self.write_sales_record(sale)
+    
+    def write_sales(self, sales: List[SalesRecord]):
+        """Overwrite entire sales.csv with given list (for bulk updates)."""
+        file_path = self.data_dir / "sales.csv"
+        with open(file_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(["date", "sku", "qty_sold"])
+            for sale in sales:
+                writer.writerow([sale.date.isoformat(), sale.sku, str(sale.qty_sold)])
+    
     # ============ Order Log Operations ============
     
     def read_order_logs(self) -> List[Dict]:
