@@ -11,6 +11,7 @@ import tempfile
 import os
 import csv
 from collections import defaultdict
+import logging
 
 try:
     import matplotlib
@@ -40,6 +41,11 @@ from ..workflows.order import OrderWorkflow, calculate_daily_sales_average
 from ..workflows.receiving import ReceivingWorkflow, ExceptionWorkflow
 from ..workflows.daily_close import DailyCloseWorkflow
 from .widgets import AutocompleteEntry
+from ..utils.logging_config import setup_logging, get_logger
+
+# Initialize logging
+setup_logging(log_dir="logs", app_name="desktop_order_system")
+logger = get_logger()
 
 
 class DesktopOrderApp:
@@ -57,14 +63,21 @@ class DesktopOrderApp:
         self.root.title("Desktop Order System")
         self.root.geometry("1000x600")
         
-        # Initialize CSV layer
-        self.csv_layer = CSVLayer(data_dir=data_dir)
-        
-        # Initialize workflows
-        self.order_workflow = OrderWorkflow(self.csv_layer, lead_time_days=7)
-        self.receiving_workflow = ReceivingWorkflow(self.csv_layer)
-        self.exception_workflow = ExceptionWorkflow(self.csv_layer)
-        self.daily_close_workflow = DailyCloseWorkflow(self.csv_layer)
+        try:
+            # Initialize CSV layer
+            self.csv_layer = CSVLayer(data_dir=data_dir)
+            
+            # Initialize workflows
+            self.order_workflow = OrderWorkflow(self.csv_layer, lead_time_days=7)
+            self.receiving_workflow = ReceivingWorkflow(self.csv_layer)
+            self.exception_workflow = ExceptionWorkflow(self.csv_layer)
+            self.daily_close_workflow = DailyCloseWorkflow(self.csv_layer)
+            
+            logger.info("Application initialized successfully")
+        except Exception as e:
+            logger.critical(f"Failed to initialize application: {str(e)}", exc_info=True)
+            messagebox.showerror("Errore Critico", f"Impossibile inizializzare l'applicazione:\n{str(e)}")
+            raise
         
         # Current AsOf date (for stock view)
         self.asof_date = date.today()
@@ -125,6 +138,7 @@ class DesktopOrderApp:
         self.receiving_tab = ttk.Frame(self.notebook)
         self.exception_tab = ttk.Frame(self.notebook)
         self.admin_tab = ttk.Frame(self.notebook)
+        self.settings_tab = ttk.Frame(self.notebook)
         
         self.notebook.add(self.dashboard_tab, text="📊 Dashboard")
         self.notebook.add(self.stock_tab, text="Stock (CalcolAto)")
@@ -132,6 +146,7 @@ class DesktopOrderApp:
         self.notebook.add(self.receiving_tab, text="Ricevimenti")
         self.notebook.add(self.exception_tab, text="Eccezioni")
         self.notebook.add(self.admin_tab, text="Admin")
+        self.notebook.add(self.settings_tab, text="⚙️ Impostazioni")
         
         # Build tab contents
         self._build_dashboard_tab()
@@ -140,6 +155,7 @@ class DesktopOrderApp:
         self._build_receiving_tab()
         self._build_exception_tab()
         self._build_admin_tab()
+        self._build_settings_tab()
     
     def _build_stock_tab(self):
         """Build Stock tab (read-only stock view with audit timeline)."""
@@ -525,6 +541,7 @@ class DesktopOrderApp:
             self.dashboard_sku_items = sku_ids
         
         except Exception as e:
+            logger.error(f"Dashboard refresh failed: {str(e)}", exc_info=True)
             messagebox.showerror("Errore Dashboard", f"Impossibile aggiornare dashboard: {str(e)}")
     
     def _refresh_general_charts(self, sales_records: list, today: date):
@@ -809,20 +826,24 @@ class DesktopOrderApp:
         param_frame = ttk.LabelFrame(main_frame, text="Genera Proposte Ordine", padding=10)
         param_frame.pack(side="top", fill="x", pady=(0, 10))
         
+        # Read default values from settings
+        settings = self.csv_layer.read_settings()
+        engine = settings.get("reorder_engine", {})
+        
         # Parameters row
         params_row = ttk.Frame(param_frame)
         params_row.pack(side="top", fill="x", pady=5)
         
         ttk.Label(params_row, text="Stock Minimo:", width=12).pack(side="left", padx=(0, 5))
-        self.min_stock_var = tk.StringVar(value="10")
+        self.min_stock_var = tk.StringVar(value=str(engine.get("min_stock", {}).get("value", 10)))
         ttk.Entry(params_row, textvariable=self.min_stock_var, width=10).pack(side="left", padx=(0, 20))
         
         ttk.Label(params_row, text="Giorni Copertura:", width=12).pack(side="left", padx=(0, 5))
-        self.days_cover_var = tk.StringVar(value="30")
+        self.days_cover_var = tk.StringVar(value=str(engine.get("days_cover", {}).get("value", 30)))
         ttk.Entry(params_row, textvariable=self.days_cover_var, width=10).pack(side="left", padx=(0, 20))
         
         ttk.Label(params_row, text="Lead Time (giorni):", width=15).pack(side="left", padx=(0, 5))
-        self.lead_time_var = tk.StringVar(value="7")
+        self.lead_time_var = tk.StringVar(value=str(engine.get("lead_time_days", {}).get("value", 7)))
         ttk.Entry(params_row, textvariable=self.lead_time_var, width=10).pack(side="left", padx=(0, 20))
         
         # Buttons row
@@ -885,11 +906,17 @@ class DesktopOrderApp:
         ttk.Button(buttons_row, text="✓ Conferma Tutti gli Ordini (Q.tà > 0)", command=self._confirm_orders).pack(side="left", padx=5)
     
     def _generate_all_proposals(self):
-        """Generate order proposals for all SKUs."""
+        """Generate order proposals for all SKUs using settings or user input."""
         try:
-            min_stock = int(self.min_stock_var.get())
-            days_cover = int(self.days_cover_var.get())
-            lead_time = int(self.lead_time_var.get())
+            # Read settings for defaults
+            settings = self.csv_layer.read_settings()
+            engine = settings.get("reorder_engine", {})
+            
+            # Use user input if provided, otherwise use settings defaults
+            min_stock = int(self.min_stock_var.get()) if self.min_stock_var.get() else engine.get("min_stock", {}).get("value", 10)
+            days_cover = int(self.days_cover_var.get()) if self.days_cover_var.get() else engine.get("days_cover", {}).get("value", 14)
+            lead_time = int(self.lead_time_var.get()) if self.lead_time_var.get() else engine.get("lead_time_days", {}).get("value", 7)
+            
         except ValueError:
             messagebox.showerror("Errore di Validazione", "I parametri devono essere numeri interi.")
             return
@@ -1089,7 +1116,10 @@ class DesktopOrderApp:
             # Clear proposals
             self._clear_proposals()
             
+            logger.info(f"Order confirmation successful: {len(confirmations)} orders created")
+            
         except Exception as e:
+            logger.error(f"Order confirmation failed: {str(e)}", exc_info=True)
             messagebox.showerror("Errore", f"Impossibile confermare ordini: {str(e)}")
     
     def _show_receipt_window(self, confirmations):
@@ -3263,6 +3293,270 @@ class DesktopOrderApp:
         self._refresh_receiving_history()
         self._refresh_admin_tab()
         self._refresh_exception_tab()
+        self._refresh_settings_tab()
+    
+    def _build_settings_tab(self):
+        """Build Settings tab for reorder engine configuration."""
+        main_frame = ttk.Frame(self.settings_tab, padding=10)
+        main_frame.pack(fill="both", expand=True)
+        
+        # Title
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(side="top", fill="x", pady=(0, 20))
+        ttk.Label(
+            title_frame,
+            text="⚙️ Impostazioni Motore di Riordino",
+            font=("Helvetica", 16, "bold")
+        ).pack(side="left")
+        
+        # Info label
+        info_frame = ttk.Frame(main_frame)
+        info_frame.pack(side="top", fill="x", pady=(0, 10))
+        ttk.Label(
+            info_frame,
+            text="Configura i parametri globali del motore di riordino automatico. I parametri con 'Auto-applica' vengono applicati automaticamente ai nuovi SKU.",
+            font=("Helvetica", 10),
+            foreground="gray",
+            wraplength=800
+        ).pack(side="left")
+        
+        # Settings form
+        settings_container = ttk.LabelFrame(main_frame, text="Parametri Globali", padding=20)
+        settings_container.pack(fill="both", expand=True, pady=10)
+        
+        # Storage for widgets
+        self.settings_widgets = {}
+        
+        # Parameters configuration
+        parameters = [
+            {
+                "key": "lead_time_days",
+                "label": "Lead Time (giorni)",
+                "description": "Tempo di attesa dall'ordine alla ricezione",
+                "type": "int",
+                "min": 1,
+                "max": 90
+            },
+            {
+                "key": "min_stock",
+                "label": "Stock Minimo (unità)",
+                "description": "Soglia minima di sicurezza per lo stock",
+                "type": "int",
+                "min": 0,
+                "max": 1000
+            },
+            {
+                "key": "days_cover",
+                "label": "Giorni di Copertura",
+                "description": "Numero di giorni di vendite da coprire con ordini",
+                "type": "int",
+                "min": 1,
+                "max": 90
+            },
+            {
+                "key": "moq",
+                "label": "MOQ (Quantità Minima Ordine)",
+                "description": "Multiplo minimo per gli ordini",
+                "type": "int",
+                "min": 1,
+                "max": 1000
+            },
+            {
+                "key": "max_stock",
+                "label": "Stock Massimo (unità)",
+                "description": "Limite massimo di stock desiderato",
+                "type": "int",
+                "min": 1,
+                "max": 10000
+            },
+            {
+                "key": "reorder_point",
+                "label": "Punto di Riordino (unità)",
+                "description": "Livello di stock che attiva il riordino",
+                "type": "int",
+                "min": 0,
+                "max": 1000
+            },
+            {
+                "key": "demand_variability",
+                "label": "Variabilità Domanda",
+                "description": "Livello di variabilità della domanda",
+                "type": "choice",
+                "choices": ["STABLE", "MODERATE", "HIGH"]
+            }
+        ]
+        
+        # Create form rows
+        for i, param in enumerate(parameters):
+            row_frame = ttk.Frame(settings_container)
+            row_frame.pack(fill="x", pady=8)
+            
+            # Left: Label and description
+            left_frame = ttk.Frame(row_frame)
+            left_frame.pack(side="left", fill="x", expand=True)
+            
+            ttk.Label(
+                left_frame,
+                text=param["label"],
+                font=("Helvetica", 10, "bold")
+            ).pack(anchor="w")
+            
+            ttk.Label(
+                left_frame,
+                text=param["description"],
+                font=("Helvetica", 9),
+                foreground="gray"
+            ).pack(anchor="w")
+            
+            # Right: Value input and checkbox
+            right_frame = ttk.Frame(row_frame)
+            right_frame.pack(side="right")
+            
+            # Value input
+            if param["type"] == "int":
+                value_var = tk.IntVar()
+                value_entry = ttk.Spinbox(
+                    right_frame,
+                    from_=param["min"],
+                    to=param["max"],
+                    textvariable=value_var,
+                    width=10
+                )
+                value_entry.pack(side="left", padx=5)
+            elif param["type"] == "choice":
+                value_var = tk.StringVar()
+                value_entry = ttk.Combobox(
+                    right_frame,
+                    textvariable=value_var,
+                    values=param["choices"],
+                    state="readonly",
+                    width=12
+                )
+                value_entry.pack(side="left", padx=5)
+            
+            # Auto-apply checkbox
+            auto_apply_var = tk.BooleanVar()
+            auto_apply_check = ttk.Checkbutton(
+                right_frame,
+                text="Auto-applica ai nuovi SKU",
+                variable=auto_apply_var
+            )
+            auto_apply_check.pack(side="left", padx=10)
+            
+            # Store widgets
+            self.settings_widgets[param["key"]] = {
+                "value_var": value_var,
+                "auto_apply_var": auto_apply_var
+            }
+        
+        # Buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(side="bottom", fill="x", pady=10)
+        
+        ttk.Button(
+            button_frame,
+            text="💾 Salva Impostazioni",
+            command=self._save_settings
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="↺ Ripristina Default",
+            command=self._reset_settings_to_default
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="🔄 Ricarica",
+            command=self._refresh_settings_tab
+        ).pack(side="left", padx=5)
+        
+        # Load current settings
+        self._refresh_settings_tab()
+    
+    def _refresh_settings_tab(self):
+        """Refresh settings tab with current values."""
+        try:
+            settings = self.csv_layer.read_settings()
+            engine = settings.get("reorder_engine", {})
+            
+            for param_key, widgets in self.settings_widgets.items():
+                param_config = engine.get(param_key, {})
+                widgets["value_var"].set(param_config.get("value", 0))
+                widgets["auto_apply_var"].set(param_config.get("auto_apply_to_new_sku", True))
+        
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile caricare impostazioni: {str(e)}")
+    
+    def _save_settings(self):
+        """Save settings to JSON file."""
+        try:
+            settings = self.csv_layer.read_settings()
+            
+            # Update reorder_engine section
+            for param_key, widgets in self.settings_widgets.items():
+                settings["reorder_engine"][param_key] = {
+                    "value": widgets["value_var"].get(),
+                    "auto_apply_to_new_sku": widgets["auto_apply_var"].get()
+                }
+            
+            # Write to file
+            self.csv_layer.write_settings(settings)
+            
+            # Update OrderWorkflow lead_time if changed
+            lead_time = settings["reorder_engine"]["lead_time_days"]["value"]
+            self.order_workflow = OrderWorkflow(self.csv_layer, lead_time_days=lead_time)
+            
+            messagebox.showinfo("Successo", "Impostazioni salvate correttamente!")
+            
+            # Log operation
+            self.csv_layer.log_audit(
+                operation="SETTINGS_UPDATE",
+                details="Reorder engine settings updated",
+                sku=None
+            )
+        
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile salvare impostazioni: {str(e)}")
+    
+    def _reset_settings_to_default(self):
+        """Reset all settings to default values."""
+        confirm = messagebox.askyesno(
+            "Conferma Ripristino",
+            "Ripristinare tutte le impostazioni ai valori predefiniti?\n\nQuesta operazione non può essere annullata."
+        )
+        
+        if not confirm:
+            return
+        
+        try:
+            # Default settings
+            default_settings = {
+                "reorder_engine": {
+                    "lead_time_days": {"value": 7, "auto_apply_to_new_sku": True},
+                    "min_stock": {"value": 10, "auto_apply_to_new_sku": True},
+                    "days_cover": {"value": 14, "auto_apply_to_new_sku": True},
+                    "moq": {"value": 1, "auto_apply_to_new_sku": True},
+                    "max_stock": {"value": 999, "auto_apply_to_new_sku": True},
+                    "reorder_point": {"value": 10, "auto_apply_to_new_sku": True},
+                    "demand_variability": {"value": "STABLE", "auto_apply_to_new_sku": True}
+                }
+            }
+            
+            self.csv_layer.write_settings(default_settings)
+            self._refresh_settings_tab()
+            
+            messagebox.showinfo("Successo", "Impostazioni ripristinate ai valori predefiniti.")
+            
+            # Log operation
+            self.csv_layer.log_audit(
+                operation="SETTINGS_RESET",
+                details="Settings reset to default values",
+                sku=None
+            )
+        
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile ripristinare impostazioni: {str(e)}")
 
 
 def main():

@@ -4,9 +4,12 @@ Receiving workflow: closure of received orders and idempotent updates.
 from datetime import date
 from typing import List, Dict, Tuple
 import hashlib
+import logging
 
 from ..domain.models import Transaction, EventType
 from ..persistence.csv_layer import CSVLayer
+
+logger = logging.getLogger(__name__)
 
 
 class ReceivingWorkflow:
@@ -77,6 +80,7 @@ class ReceivingWorkflow:
         
         if already_received:
             # Receipt already processed; idempotent return
+            logger.info(f"Receipt {receipt_id} already processed (idempotent skip)")
             return [], True
         
         today = date.today()
@@ -88,12 +92,12 @@ class ReceivingWorkflow:
         
         for log in order_logs:
             # Filter orders matching this receipt (same date range or explicit link)
-            # For simplicity: sum all "pending" orders for each SKU
+            # For simplicity: sum all "PENDING" orders for each SKU
             sku_log = log.get("sku", "")
             qty_log = int(log.get("qty_ordered", 0))
             status = log.get("status", "")
             
-            if status == "pending":  # Only consider pending orders
+            if status == "PENDING":  # Only consider PENDING orders (standardized uppercase)
                 qty_ordered_map[sku_log] = qty_ordered_map.get(sku_log, 0) + qty_log
         
         # Create RECEIPT events + UNFULFILLED events for each SKU
@@ -127,6 +131,9 @@ class ReceivingWorkflow:
                     note=f"Auto-generated for receipt {receipt_id}; qty_ordered={qty_ordered}, qty_received={qty_received}",
                 )
                 transactions.append(txn_unfulfilled)
+                logger.warning(f"UNFULFILLED created for {sku}: ordered={qty_ordered}, received={qty_received}, unfulfilled={qty_unfulfilled}")
+            elif qty_ordered == 0 and qty_received > 0:
+                logger.warning(f"Receipt {receipt_id} for {sku}: qty_received={qty_received} but no PENDING orders found")
         
         # Write transactions to ledger
         if transactions:

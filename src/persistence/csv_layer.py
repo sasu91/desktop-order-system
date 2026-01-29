@@ -6,6 +6,7 @@ Auto-creates files with correct headers on first run.
 """
 import csv
 import os
+import json
 from datetime import date
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -118,18 +119,38 @@ class CSVLayer:
         return skus
     
     def write_sku(self, sku: SKU):
-        """Add a new SKU to skus.csv."""
+        """
+        Add a new SKU to skus.csv.
+        
+        Auto-applies default parameters from settings if configured.
+        """
+        # Get defaults from settings
+        defaults = self.get_default_sku_params()
+        
+        # Apply defaults if SKU parameters are not explicitly set (using default values)
+        final_sku = SKU(
+            sku=sku.sku,
+            description=sku.description,
+            ean=sku.ean,
+            moq=defaults.get("moq", sku.moq) if sku.moq == 1 else sku.moq,
+            lead_time_days=defaults.get("lead_time_days", sku.lead_time_days) if sku.lead_time_days == 7 else sku.lead_time_days,
+            max_stock=defaults.get("max_stock", sku.max_stock) if sku.max_stock == 999 else sku.max_stock,
+            reorder_point=defaults.get("reorder_point", sku.reorder_point) if sku.reorder_point == 10 else sku.reorder_point,
+            supplier=sku.supplier,
+            demand_variability=DemandVariability[defaults.get("demand_variability", sku.demand_variability.value)] if sku.demand_variability == DemandVariability.STABLE else sku.demand_variability,
+        )
+        
         rows = self._read_csv("skus.csv")
         rows.append({
-            "sku": sku.sku,
-            "description": sku.description,
-            "ean": sku.ean or "",
-            "moq": str(sku.moq),
-            "lead_time_days": str(sku.lead_time_days),
-            "max_stock": str(sku.max_stock),
-            "reorder_point": str(sku.reorder_point),
-            "supplier": sku.supplier,
-            "demand_variability": sku.demand_variability.value,
+            "sku": final_sku.sku,
+            "description": final_sku.description,
+            "ean": final_sku.ean or "",
+            "moq": str(final_sku.moq),
+            "lead_time_days": str(final_sku.lead_time_days),
+            "max_stock": str(final_sku.max_stock),
+            "reorder_point": str(final_sku.reorder_point),
+            "supplier": final_sku.supplier,
+            "demand_variability": final_sku.demand_variability.value,
         })
         self._write_csv("skus.csv", rows)
     
@@ -510,3 +531,94 @@ class CSVLayer:
             ))
         
         return audit_logs
+    
+    # ============ Settings Operations ============
+    
+    def read_settings(self) -> Dict:
+        """
+        Read settings from settings.json.
+        
+        Returns default settings if file doesn't exist.
+        """
+        settings_file = self.data_dir / "settings.json"
+        
+        # Default settings
+        default_settings = {
+            "reorder_engine": {
+                "lead_time_days": {
+                    "value": 7,
+                    "auto_apply_to_new_sku": True
+                },
+                "min_stock": {
+                    "value": 10,
+                    "auto_apply_to_new_sku": True
+                },
+                "days_cover": {
+                    "value": 14,
+                    "auto_apply_to_new_sku": True
+                },
+                "moq": {
+                    "value": 1,
+                    "auto_apply_to_new_sku": True
+                },
+                "max_stock": {
+                    "value": 999,
+                    "auto_apply_to_new_sku": True
+                },
+                "reorder_point": {
+                    "value": 10,
+                    "auto_apply_to_new_sku": True
+                },
+                "demand_variability": {
+                    "value": "STABLE",
+                    "auto_apply_to_new_sku": True
+                }
+            }
+        }
+        
+        if not settings_file.exists():
+            # Create with defaults
+            self.write_settings(default_settings)
+            return default_settings
+        
+        try:
+            with open(settings_file, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+                # Merge with defaults for missing keys
+                for section, params in default_settings.items():
+                    if section not in settings:
+                        settings[section] = params
+                    else:
+                        for param, config in params.items():
+                            if param not in settings[section]:
+                                settings[section][param] = config
+                return settings
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Warning: Could not read settings.json: {e}. Using defaults.")
+            return default_settings
+    
+    def write_settings(self, settings: Dict):
+        """Write settings to settings.json."""
+        settings_file = self.data_dir / "settings.json"
+        
+        with open(settings_file, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2, ensure_ascii=False)
+    
+    def get_default_sku_params(self) -> Dict[str, any]:
+        """
+        Get default SKU parameters from settings (for auto-apply to new SKUs).
+        
+        Returns:
+            Dict with keys: moq, lead_time_days, max_stock, reorder_point, demand_variability
+        """
+        settings = self.read_settings()
+        engine = settings.get("reorder_engine", {})
+        
+        defaults = {}
+        
+        for param_name in ["moq", "lead_time_days", "max_stock", "reorder_point", "demand_variability"]:
+            param_config = engine.get(param_name, {})
+            if param_config.get("auto_apply_to_new_sku", False):
+                defaults[param_name] = param_config.get("value")
+        
+        return defaults

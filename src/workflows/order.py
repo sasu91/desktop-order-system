@@ -10,16 +10,22 @@ from ..persistence.csv_layer import CSVLayer
 class OrderWorkflow:
     """Order processing: proposal generation and confirmation."""
     
-    def __init__(self, csv_layer: CSVLayer, lead_time_days: int = 7):
+    def __init__(self, csv_layer: CSVLayer, lead_time_days: int = None):
         """
         Initialize order workflow.
         
         Args:
             csv_layer: CSV persistence layer
-            lead_time_days: Default lead time for orders (days) - used only if SKU doesn't specify
+            lead_time_days: Default lead time for orders (days). If None, reads from settings.
         """
         self.csv_layer = csv_layer
-        self.lead_time_days = lead_time_days
+        
+        # Read lead_time from settings if not provided
+        if lead_time_days is None:
+            settings = csv_layer.read_settings()
+            self.lead_time_days = settings.get("reorder_engine", {}).get("lead_time_days", {}).get("value", 7)
+        else:
+            self.lead_time_days = lead_time_days
     
     def generate_proposal(
         self,

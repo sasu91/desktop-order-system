@@ -1,0 +1,32 @@
+{
+  "reorder_engine": {
+    "lead_time_days": {
+      "value": 7,
+      "auto_apply_to_new_sku": true
+    },
+    "min_stock": {
+      "value": 10,
+      "auto_apply_to_new_sku": true
+    },
+    "days_cover": {
+      "value": 14,
+      "auto_apply_to_new_sku": true
+    },
+    "moq": {
+      "value": 1,
+      "auto_apply_to_new_sku": true
+    },
+    "max_stock": {
+      "value": 999,
+      "auto_apply_to_new_sku": true
+    },
+    "reorder_point": {
+      "value": 10,
+      "auto_apply_to_new_sku": true
+    },
+    "demand_variability": {
+      "value": "STABLE",
+      "auto_apply_to_new_sku": true
+    }
+  }
+}
