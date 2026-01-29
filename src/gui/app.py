@@ -82,6 +82,9 @@ class DesktopOrderApp:
         self.ma_period_daily = 7  # Default: 7-day moving average for daily sales
         self.ma_period_weekly = 3  # Default: 3-week moving average for weekly sales
         
+        # Selected SKU for dashboard detail charts
+        self.selected_dashboard_sku = None
+        
         # Create GUI
         self._create_widgets()
         self._refresh_all()
@@ -390,31 +393,33 @@ class DesktopOrderApp:
         
         self.movement_treeview.pack(fill="both", expand=True)
         
-        # Top 10 by Stock Value
-        value_frame = ttk.LabelFrame(right_panel, text="Top 10 SKU per Valore Stock", padding=5)
-        value_frame.pack(side="top", fill="both", expand=True)
+        # SKU Detail Charts
+        sku_detail_frame = ttk.LabelFrame(right_panel, text="Dettaglio SKU", padding=5)
+        sku_detail_frame.pack(side="top", fill="both", expand=True)
         
-        value_scroll = ttk.Scrollbar(value_frame)
-        value_scroll.pack(side="right", fill="y")
+        # SKU search bar
+        search_frame = ttk.Frame(sku_detail_frame)
+        search_frame.pack(fill="x", pady=5)
+        ttk.Label(search_frame, text="Cerca SKU:").pack(side="left", padx=5)
         
-        self.value_treeview = ttk.Treeview(
-            value_frame,
-            columns=("SKU", "Units", "Value"),
-            height=10,
-            yscrollcommand=value_scroll.set,
-            show="headings"
+        self.dashboard_sku_entry = AutocompleteEntry(
+            search_frame,
+            items=[],  # Will be populated in refresh
+            filter_callback=self._filter_dashboard_sku_items,
+            width=20
         )
-        value_scroll.config(command=self.value_treeview.yview)
+        self.dashboard_sku_entry.pack(side="left", fill="x", expand=True, padx=5)
+        self.dashboard_sku_entry.bind("<<AutocompleteSelected>>", self._on_dashboard_sku_select)
         
-        self.value_treeview.column("SKU", anchor=tk.W, width=80)
-        self.value_treeview.column("Units", anchor=tk.CENTER, width=60)
-        self.value_treeview.column("Value", anchor=tk.CENTER, width=80)
-        
-        self.value_treeview.heading("SKU", text="SKU", anchor=tk.W)
-        self.value_treeview.heading("Units", text="Unità", anchor=tk.CENTER)
-        self.value_treeview.heading("Value", text="Valore", anchor=tk.CENTER)
-        
-        self.value_treeview.pack(fill="both", expand=True)
+        # Charts container
+        if MATPLOTLIB_AVAILABLE:
+            self.sku_detail_figure = Figure(figsize=(6, 4), dpi=80)
+            self.sku_sales_ax = self.sku_detail_figure.add_subplot(211)
+            self.sku_stock_ax = self.sku_detail_figure.add_subplot(212)
+            self.sku_detail_figure.tight_layout(pad=2.0)
+            
+            self.sku_detail_canvas = FigureCanvasTkAgg(self.sku_detail_figure, sku_detail_frame)
+            self.sku_detail_canvas.get_tk_widget().pack(fill="both", expand=True)
         
         # Initial load
         self._refresh_dashboard()
@@ -610,19 +615,13 @@ class DesktopOrderApp:
             for sku, total_sales in top_movement:
                 self.movement_treeview.insert("", "end", values=(sku, total_sales))
             
-            # Top 10 by Stock Value
-            self.value_treeview.delete(*self.value_treeview.get_children())
+            # Update dashboard SKU search autocomplete items
+            if hasattr(self, 'dashboard_sku_entry'):
+                self.dashboard_sku_entry.items = sku_ids
             
-            stock_values = []
-            for sku_id in sku_ids:
-                stock = stocks[sku_id]
-                value = stock.on_hand * unit_price
-                stock_values.append((sku_id, stock.on_hand, value))
-            
-            top_values = sorted(stock_values, key=lambda x: x[2], reverse=True)[:10]
-            
-            for sku, units, value in top_values:
-                self.value_treeview.insert("", "end", values=(sku, units, f"€{value:,.0f}"))
+            # Refresh SKU detail charts if SKU selected
+            if self.selected_dashboard_sku:
+                self._refresh_sku_detail_charts()
         
         except Exception as e:
             messagebox.showerror("Errore Dashboard", f"Impossibile aggiornare dashboard: {str(e)}")
@@ -647,6 +646,146 @@ class DesktopOrderApp:
             ma_values.append(sum(window) / period)
         
         return ma_values
+    
+    def _filter_dashboard_sku_items(self, typed_text: str, items: list) -> list:
+        """
+        Filter SKU items for dashboard autocomplete.
+        
+        Args:
+            typed_text: User input
+            items: All available SKU IDs
+        
+        Returns:
+            Filtered list of SKU IDs
+        """
+        if not typed_text:
+            return items
+        
+        typed_lower = typed_text.lower()
+        return [item for item in items if typed_lower in item.lower()]
+    
+    def _on_dashboard_sku_select(self, event):
+        """Handle SKU selection in dashboard search."""
+        selected_sku = self.dashboard_sku_entry.get().strip()
+        
+        if not selected_sku:
+            self.selected_dashboard_sku = None
+            return
+        
+        # Validate SKU exists
+        all_skus = self.csv_layer.get_all_sku_ids()
+        if selected_sku not in all_skus:
+            messagebox.showwarning("SKU Non Trovato", f"SKU '{selected_sku}' non esiste.")
+            self.selected_dashboard_sku = None
+            return
+        
+        # Update selected SKU and refresh charts
+        self.selected_dashboard_sku = selected_sku
+        self._refresh_sku_detail_charts()
+    
+    def _refresh_sku_detail_charts(self):
+        """Refresh SKU-specific detail charts (sales 30d + stock evolution 30d)."""
+        if not MATPLOTLIB_AVAILABLE:
+            return
+        
+        if not self.selected_dashboard_sku:
+            # Clear charts
+            self.sku_sales_ax.clear()
+            self.sku_stock_ax.clear()
+            self.sku_sales_ax.text(0.5, 0.5, 'Seleziona uno SKU', ha='center', va='center', transform=self.sku_sales_ax.transAxes)
+            self.sku_stock_ax.text(0.5, 0.5, 'Seleziona uno SKU', ha='center', va='center', transform=self.sku_stock_ax.transAxes)
+            self.sku_detail_canvas.draw()
+            return
+        
+        try:
+            sku = self.selected_dashboard_sku
+            sales_records = self.csv_layer.read_sales()
+            transactions = self.csv_layer.read_transactions()
+            
+            today = date.today()
+            days_ago_30 = today - timedelta(days=30)
+            
+            # --- Chart 1: Daily Sales (Last 30 Days) ---
+            self.sku_sales_ax.clear()
+            
+            # Filter sales for this SKU in last 30 days
+            sku_sales = [sr for sr in sales_records if sr.sku == sku and sr.date >= days_ago_30]
+            
+            # Group by date
+            sales_by_date = defaultdict(int)
+            for sr in sku_sales:
+                sales_by_date[sr.date] += sr.qty_sold
+            
+            # Create date range (last 30 days)
+            date_range = [days_ago_30 + timedelta(days=i) for i in range(31)]
+            sales_values = [sales_by_date.get(d, 0) for d in date_range]
+            
+            # Plot
+            self.sku_sales_ax.bar(
+                range(len(date_range)),
+                sales_values,
+                color='steelblue',
+                alpha=0.7,
+                label='Vendite'
+            )
+            
+            # Moving average
+            ma_values = self._calculate_moving_average(sales_values, self.ma_period_daily)
+            if ma_values:
+                ma_x = range(self.ma_period_daily - 1, len(date_range))
+                self.sku_sales_ax.plot(
+                    ma_x,
+                    ma_values,
+                    color='red',
+                    linewidth=2,
+                    label=f'MA {self.ma_period_daily}d'
+                )
+            
+            self.sku_sales_ax.set_title(f"Vendite {sku} (Ultimi 30 Giorni)")
+            self.sku_sales_ax.set_xlabel("Data")
+            self.sku_sales_ax.set_ylabel("Quantità Venduta")
+            self.sku_sales_ax.legend(loc='upper left')
+            self.sku_sales_ax.grid(True, alpha=0.3)
+            
+            # X-axis labels (every 5 days)
+            xtick_positions = range(0, len(date_range), 5)
+            xtick_labels = [date_range[i].strftime('%d/%m') for i in xtick_positions]
+            self.sku_sales_ax.set_xticks(xtick_positions)
+            self.sku_sales_ax.set_xticklabels(xtick_labels, rotation=45)
+            
+            # --- Chart 2: Stock Evolution (Last 30 Days) ---
+            self.sku_stock_ax.clear()
+            
+            # Calculate stock AsOf for each day
+            on_hand_values = []
+            on_order_values = []
+            
+            for d in date_range:
+                stock = StockCalculator.calculate_asof([sku], transactions, asof_date=d)[sku]
+                on_hand_values.append(stock.on_hand)
+                on_order_values.append(stock.on_order)
+            
+            # Plot
+            x_range = range(len(date_range))
+            self.sku_stock_ax.plot(x_range, on_hand_values, color='green', linewidth=2, label='On Hand', marker='o', markersize=3)
+            self.sku_stock_ax.plot(x_range, on_order_values, color='orange', linewidth=2, label='On Order', marker='s', markersize=3)
+            
+            self.sku_stock_ax.set_title(f"Evoluzione Stock {sku} (Ultimi 30 Giorni)")
+            self.sku_stock_ax.set_xlabel("Data")
+            self.sku_stock_ax.set_ylabel("Quantità")
+            self.sku_stock_ax.legend(loc='upper left')
+            self.sku_stock_ax.grid(True, alpha=0.3)
+            
+            # X-axis labels (every 5 days)
+            self.sku_stock_ax.set_xticks(xtick_positions)
+            self.sku_stock_ax.set_xticklabels(xtick_labels, rotation=45)
+            
+            # Redraw canvas
+            self.sku_detail_figure.tight_layout()
+            self.sku_detail_canvas.draw()
+        
+        except Exception as e:
+            messagebox.showerror("Errore Grafici SKU", f"Impossibile aggiornare grafici: {str(e)}")
     
     def _on_ma_change(self):
         """Callback when moving average period changes."""
