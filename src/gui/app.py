@@ -408,20 +408,26 @@ class DesktopOrderApp:
             search_frame,
             textvariable=self.dashboard_sku_var,
             items_callback=self._filter_dashboard_sku_items,
-            width=20,
+            width=15,
             on_select=self._on_dashboard_sku_select
         )
         self.dashboard_sku_autocomplete.entry.pack(side="left", fill="x", expand=True, padx=5)
         
-        # Charts container
-        if MATPLOTLIB_AVAILABLE:
-            self.sku_detail_figure = Figure(figsize=(6, 4), dpi=80)
-            self.sku_sales_ax = self.sku_detail_figure.add_subplot(211)
-            self.sku_stock_ax = self.sku_detail_figure.add_subplot(212)
-            self.sku_detail_figure.tight_layout(pad=2.0)
-            
-            self.sku_detail_canvas = FigureCanvasTkAgg(self.sku_detail_figure, sku_detail_frame)
-            self.sku_detail_canvas.get_tk_widget().pack(fill="both", expand=True)
+        # Reset button to return to general view
+        ttk.Button(
+            search_frame,
+            text="Reset",
+            command=self._reset_dashboard_view,
+            width=8
+        ).pack(side="left", padx=5)
+        
+        # Info label
+        ttk.Label(
+            sku_detail_frame,
+            text="Seleziona uno SKU per visualizzare i grafici dettaglio nei pannelli principali",
+            font=("Helvetica", 9),
+            foreground="gray"
+        ).pack(fill="x", padx=5, pady=5)
         
         # Initial load
         self._refresh_dashboard()
@@ -495,113 +501,11 @@ class DesktopOrderApp:
             # === CHARTS ===
             
             if MATPLOTLIB_AVAILABLE:
-                # Chart 1: Daily Sales (Last 30 Days)
-                self.daily_sales_ax.clear()
-                self.daily_sales_ax.set_title("Vendite Giornaliere (Ultimi 30 Giorni)")
-                self.daily_sales_ax.set_xlabel("Data")
-                self.daily_sales_ax.set_ylabel("Unità Vendute")
-                self.daily_sales_ax.grid(True, alpha=0.3)
-                
-                # Calculate daily sales for last 30 days
-                dates = []
-                daily_totals = []
-                for i in range(29, -1, -1):  # Last 30 days
-                    calc_date = today - timedelta(days=i)
-                    day_sales = [sr for sr in sales_records if sr.date == calc_date]
-                    total_sold = sum(sr.qty_sold for sr in day_sales)
-                    dates.append(calc_date.strftime("%d/%m"))
-                    daily_totals.append(total_sold)
-                
-                # Plot with bar chart
-                self.daily_sales_ax.bar(range(len(dates)), daily_totals, color='#2E86AB', alpha=0.7, width=0.8, label='Vendite')
-                self.daily_sales_ax.set_xticks(range(0, len(dates), 5))
-                self.daily_sales_ax.set_xticklabels([dates[i] for i in range(0, len(dates), 5)], rotation=45, ha='right')
-                
-                # Add moving average
-                ma_period = self.ma_daily_var.get()
-                if daily_totals and len(daily_totals) >= ma_period:
-                    ma_values = self._calculate_moving_average(daily_totals, ma_period)
-                    x_ma = np.arange(ma_period - 1, len(daily_totals))
-                    self.daily_sales_ax.plot(
-                        x_ma, 
-                        ma_values, 
-                        "r-", 
-                        alpha=0.8, 
-                        linewidth=2.5, 
-                        label=f'Media Mobile {ma_period}d'
-                    )
-                    self.daily_sales_ax.legend(loc='upper left', fontsize=9)
-                
-                # Chart 2: Weekly Sales Comparison (Last 8 Weeks)
-                self.weekly_sales_ax.clear()
-                self.weekly_sales_ax.set_title("Confronto Vendite Settimanali (Ultime 8 Settimane)")
-                self.weekly_sales_ax.set_xlabel("Settimana")
-                self.weekly_sales_ax.set_ylabel("Unità Vendute")
-                self.weekly_sales_ax.grid(True, alpha=0.3)
-                
-                # Calculate weekly sales for last 8 weeks
-                weekly_labels = []
-                weekly_totals = []
-                
-                for week_offset in range(7, -1, -1):  # Last 8 weeks, oldest to newest
-                    # Calculate start and end of week
-                    week_end = today - timedelta(days=week_offset * 7)
-                    week_start = week_end - timedelta(days=6)
-                    
-                    # Calculate sales for this week
-                    week_sales = [
-                        sr for sr in sales_records 
-                        if week_start <= sr.date <= week_end
-                    ]
-                    total_sold = sum(sr.qty_sold for sr in week_sales)
-                    
-                    # Label: "W-7" (7 weeks ago) to "W-0" (current week)
-                    if week_offset == 0:
-                        label = "Corrente"
-                    else:
-                        label = f"-{week_offset}w"
-                    
-                    weekly_labels.append(label)
-                    weekly_totals.append(total_sold)
-                
-                # Create bar chart with color gradient
-                colors = plt.cm.viridis(np.linspace(0.3, 0.9, len(weekly_totals)))
-                bars = self.weekly_sales_ax.bar(range(len(weekly_labels)), weekly_totals, color=colors, width=0.7)
-                
-                # Add value labels on bars
-                for bar, value in zip(bars, weekly_totals):
-                    height = bar.get_height()
-                    self.weekly_sales_ax.text(
-                        bar.get_x() + bar.get_width() / 2.,
-                        height,
-                        f'{int(value)}',
-                        ha='center',
-                        va='bottom',
-                        fontsize=8,
-                        fontweight='bold'
-                    )
-                
-                # Set x-axis labels
-                self.weekly_sales_ax.set_xticks(range(len(weekly_labels)))
-                self.weekly_sales_ax.set_xticklabels(weekly_labels, rotation=0)
-                
-                # Add moving average for weekly data
-                ma_period_weekly = self.ma_weekly_var.get()
-                if weekly_totals and len(weekly_totals) >= ma_period_weekly:
-                    ma_weekly = self._calculate_moving_average(weekly_totals, ma_period_weekly)
-                    x_ma = np.arange(ma_period_weekly - 1, len(weekly_totals))
-                    self.weekly_sales_ax.plot(
-                        x_ma,
-                        ma_weekly,
-                        'r-',
-                        alpha=0.8,
-                        linewidth=2.5,
-                        label=f'Media Mobile {ma_period_weekly}w'
-                    )
-                    self.weekly_sales_ax.legend(loc='upper left', fontsize=9)
-                
-                self.dashboard_figure.tight_layout()
-                self.dashboard_canvas.draw()
+                # If SKU selected, show SKU-specific charts; otherwise show general charts
+                if self.selected_dashboard_sku:
+                    self._refresh_sku_detail_charts()
+                else:
+                    self._refresh_general_charts(sales_records, today)
             
             # === TOP 10 TABLES ===
             
@@ -619,13 +523,104 @@ class DesktopOrderApp:
             
             # Update dashboard SKU search autocomplete items
             self.dashboard_sku_items = sku_ids
-            
-            # Refresh SKU detail charts if SKU selected
-            if self.selected_dashboard_sku:
-                self._refresh_sku_detail_charts()
         
         except Exception as e:
             messagebox.showerror("Errore Dashboard", f"Impossibile aggiornare dashboard: {str(e)}")
+    
+    def _refresh_general_charts(self, sales_records: list, today: date):
+        """Refresh general dashboard charts (all SKUs)."""
+        # Chart 1: Daily Sales (Last 30 Days)
+        self.daily_sales_ax.clear()
+        self.daily_sales_ax.set_title("Vendite Giornaliere - Tutti gli SKU (Ultimi 30 Giorni)")
+        self.daily_sales_ax.set_xlabel("Data")
+        self.daily_sales_ax.set_ylabel("Unità Vendute")
+        self.daily_sales_ax.grid(True, alpha=0.3)
+        
+        # Calculate daily sales for last 30 days
+        dates = []
+        daily_totals = []
+        for i in range(29, -1, -1):  # Last 30 days
+            calc_date = today - timedelta(days=i)
+            day_sales = [sr for sr in sales_records if sr.date == calc_date]
+            total_sold = sum(sr.qty_sold for sr in day_sales)
+            dates.append(calc_date.strftime("%d/%m"))
+            daily_totals.append(total_sold)
+        
+        # Plot with bar chart
+        self.daily_sales_ax.bar(range(len(dates)), daily_totals, color='#2E86AB', alpha=0.7, width=0.8, label='Vendite')
+        self.daily_sales_ax.set_xticks(range(0, len(dates), 5))
+        self.daily_sales_ax.set_xticklabels([dates[i] for i in range(0, len(dates), 5)], rotation=45, ha='right')
+        
+        # Add moving average
+        ma_period = self.ma_daily_var.get()
+        if daily_totals and len(daily_totals) >= ma_period:
+            ma_values = self._calculate_moving_average(daily_totals, ma_period)
+            x_ma = np.arange(ma_period - 1, len(daily_totals))
+            self.daily_sales_ax.plot(
+                x_ma, 
+                ma_values, 
+                "r-", 
+                alpha=0.8, 
+                linewidth=2.5, 
+                label=f'Media Mobile {ma_period}d'
+            )
+            self.daily_sales_ax.legend(loc='upper left', fontsize=9)
+        
+        # Chart 2: Weekly Sales Comparison (Last 8 Weeks)
+        self.weekly_sales_ax.clear()
+        self.weekly_sales_ax.set_title("Confronto Vendite Settimanali - Tutti gli SKU (Ultime 8 Settimane)")
+        self.weekly_sales_ax.set_xlabel("Settimana")
+        self.weekly_sales_ax.set_ylabel("Unità Vendute")
+        self.weekly_sales_ax.grid(True, alpha=0.3)
+        
+        # Calculate weekly sales for last 8 weeks
+        weekly_labels = []
+        weekly_totals = []
+        
+        for week_offset in range(7, -1, -1):  # Last 8 weeks, oldest to newest
+            # Calculate start and end of week
+            week_end = today - timedelta(days=week_offset * 7)
+            week_start = week_end - timedelta(days=6)
+            
+            # Calculate sales for this week
+            week_sales = [
+                sr for sr in sales_records 
+                if week_start <= sr.date <= week_end
+            ]
+            total_sold = sum(sr.qty_sold for sr in week_sales)
+            
+            # Label: "W-7" (7 weeks ago) to "W-0" (current week)
+            if week_offset == 0:
+                label = "Corrente"
+            else:
+                label = f"-{week_offset}w"
+            
+            weekly_labels.append(label)
+            weekly_totals.append(total_sold)
+        
+        # Create bar chart with color gradient
+        colors = plt.cm.viridis(np.linspace(0.3, 0.9, len(weekly_totals)))
+        bars = self.weekly_sales_ax.bar(range(len(weekly_labels)), weekly_totals, color=colors, width=0.7)
+        self.weekly_sales_ax.set_xticks(range(len(weekly_labels)))
+        self.weekly_sales_ax.set_xticklabels(weekly_labels, rotation=0)
+        
+        # Add moving average for weekly data
+        ma_period_weekly = self.ma_weekly_var.get()
+        if len(weekly_totals) >= ma_period_weekly:
+            ma_values_weekly = self._calculate_moving_average(weekly_totals, ma_period_weekly)
+            x_ma_weekly = np.arange(ma_period_weekly - 1, len(weekly_totals))
+            self.weekly_sales_ax.plot(
+                x_ma_weekly,
+                ma_values_weekly,
+                "r-",
+                alpha=0.9,
+                linewidth=2.5,
+                label=f'Media Mobile {ma_period_weekly}w'
+            )
+            self.weekly_sales_ax.legend(loc='upper left', fontsize=9)
+        
+        self.dashboard_figure.tight_layout()
+        self.dashboard_canvas.draw()
     
     def _calculate_moving_average(self, data: list, period: int) -> list:
         """
@@ -681,18 +676,15 @@ class DesktopOrderApp:
         self.selected_dashboard_sku = selected_sku
         self._refresh_sku_detail_charts()
     
+    def _reset_dashboard_view(self):
+        """Reset dashboard to general view (all SKUs)."""
+        self.selected_dashboard_sku = None
+        self.dashboard_sku_var.set("")  # Clear entry field
+        self._refresh_dashboard()
+    
     def _refresh_sku_detail_charts(self):
-        """Refresh SKU-specific detail charts (sales 30d + stock evolution 30d)."""
-        if not MATPLOTLIB_AVAILABLE:
-            return
-        
-        if not self.selected_dashboard_sku:
-            # Clear charts
-            self.sku_sales_ax.clear()
-            self.sku_stock_ax.clear()
-            self.sku_sales_ax.text(0.5, 0.5, 'Seleziona uno SKU', ha='center', va='center', transform=self.sku_sales_ax.transAxes)
-            self.sku_stock_ax.text(0.5, 0.5, 'Seleziona uno SKU', ha='center', va='center', transform=self.sku_stock_ax.transAxes)
-            self.sku_detail_canvas.draw()
+        """Refresh SKU-specific detail charts (sales 30d + stock evolution 30d) using main dashboard charts."""
+        if not MATPLOTLIB_AVAILABLE or not self.selected_dashboard_sku:
             return
         
         try:
@@ -703,8 +695,8 @@ class DesktopOrderApp:
             today = date.today()
             days_ago_30 = today - timedelta(days=30)
             
-            # --- Chart 1: Daily Sales (Last 30 Days) ---
-            self.sku_sales_ax.clear()
+            # --- Chart 1: Daily Sales (Last 30 Days) for selected SKU ---
+            self.daily_sales_ax.clear()
             
             # Filter sales for this SKU in last 30 days
             sku_sales = [sr for sr in sales_records if sr.sku == sku and sr.date >= days_ago_30]
@@ -719,7 +711,7 @@ class DesktopOrderApp:
             sales_values = [sales_by_date.get(d, 0) for d in date_range]
             
             # Plot
-            self.sku_sales_ax.bar(
+            self.daily_sales_ax.bar(
                 range(len(date_range)),
                 sales_values,
                 color='steelblue',
@@ -728,59 +720,69 @@ class DesktopOrderApp:
             )
             
             # Moving average
-            ma_values = self._calculate_moving_average(sales_values, self.ma_period_daily)
+            ma_period = self.ma_daily_var.get()
+            ma_values = self._calculate_moving_average(sales_values, ma_period)
             if ma_values:
-                ma_x = range(self.ma_period_daily - 1, len(date_range))
-                self.sku_sales_ax.plot(
+                ma_x = range(ma_period - 1, len(date_range))
+                self.daily_sales_ax.plot(
                     ma_x,
                     ma_values,
                     color='red',
                     linewidth=2,
-                    label=f'MA {self.ma_period_daily}d'
+                    label=f'MA {ma_period}d'
                 )
             
-            self.sku_sales_ax.set_title(f"Vendite {sku} (Ultimi 30 Giorni)")
-            self.sku_sales_ax.set_xlabel("Data")
-            self.sku_sales_ax.set_ylabel("Quantità Venduta")
-            self.sku_sales_ax.legend(loc='upper left')
-            self.sku_sales_ax.grid(True, alpha=0.3)
+            self.daily_sales_ax.set_title(f"Vendite {sku} (Ultimi 30 Giorni)")
+            self.daily_sales_ax.set_xlabel("Data")
+            self.daily_sales_ax.set_ylabel("Quantità Venduta")
+            self.daily_sales_ax.legend(loc='upper left')
+            self.daily_sales_ax.grid(True, alpha=0.3)
             
             # X-axis labels (every 5 days)
             xtick_positions = range(0, len(date_range), 5)
             xtick_labels = [date_range[i].strftime('%d/%m') for i in xtick_positions]
-            self.sku_sales_ax.set_xticks(xtick_positions)
-            self.sku_sales_ax.set_xticklabels(xtick_labels, rotation=45)
+            self.daily_sales_ax.set_xticks(xtick_positions)
+            self.daily_sales_ax.set_xticklabels(xtick_labels, rotation=45, ha='right')
             
-            # --- Chart 2: Stock Evolution (Last 30 Days) ---
-            self.sku_stock_ax.clear()
+            # --- Chart 2: Waste Events (Last 30 Days) for selected SKU ---
+            self.weekly_sales_ax.clear()
             
-            # Calculate stock AsOf for each day
-            on_hand_values = []
-            on_order_values = []
+            # Filter WASTE transactions for this SKU in last 30 days
+            sku_waste = [
+                txn for txn in transactions 
+                if txn.sku == sku and txn.event == EventType.WASTE and txn.date >= days_ago_30
+            ]
             
-            for d in date_range:
-                stock = StockCalculator.calculate_asof([sku], transactions, asof_date=d)[sku]
-                on_hand_values.append(stock.on_hand)
-                on_order_values.append(stock.on_order)
+            # Group by date
+            waste_by_date = defaultdict(int)
+            for txn in sku_waste:
+                waste_by_date[txn.date] += txn.qty
             
-            # Plot
-            x_range = range(len(date_range))
-            self.sku_stock_ax.plot(x_range, on_hand_values, color='green', linewidth=2, label='On Hand', marker='o', markersize=3)
-            self.sku_stock_ax.plot(x_range, on_order_values, color='orange', linewidth=2, label='On Order', marker='s', markersize=3)
+            # Create values for date range (same as sales chart)
+            waste_values = [waste_by_date.get(d, 0) for d in date_range]
             
-            self.sku_stock_ax.set_title(f"Evoluzione Stock {sku} (Ultimi 30 Giorni)")
-            self.sku_stock_ax.set_xlabel("Data")
-            self.sku_stock_ax.set_ylabel("Quantità")
-            self.sku_stock_ax.legend(loc='upper left')
-            self.sku_stock_ax.grid(True, alpha=0.3)
+            # Plot with bar chart
+            self.weekly_sales_ax.bar(
+                range(len(date_range)),
+                waste_values,
+                color='#D32F2F',  # Red color for waste
+                alpha=0.7,
+                label='Scarti'
+            )
+            
+            self.weekly_sales_ax.set_title(f"Scarti {sku} (Ultimi 30 Giorni)")
+            self.weekly_sales_ax.set_xlabel("Data")
+            self.weekly_sales_ax.set_ylabel("Quantità Scartata")
+            self.weekly_sales_ax.legend(loc='upper left')
+            self.weekly_sales_ax.grid(True, alpha=0.3)
             
             # X-axis labels (every 5 days)
-            self.sku_stock_ax.set_xticks(xtick_positions)
-            self.sku_stock_ax.set_xticklabels(xtick_labels, rotation=45)
+            self.weekly_sales_ax.set_xticks(xtick_positions)
+            self.weekly_sales_ax.set_xticklabels(xtick_labels, rotation=45, ha='right')
             
             # Redraw canvas
-            self.sku_detail_figure.tight_layout()
-            self.sku_detail_canvas.draw()
+            self.dashboard_figure.tight_layout()
+            self.dashboard_canvas.draw()
         
         except Exception as e:
             messagebox.showerror("Errore Grafici SKU", f"Impossibile aggiornare grafici: {str(e)}")
