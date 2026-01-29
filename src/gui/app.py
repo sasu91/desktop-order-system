@@ -1880,7 +1880,7 @@ class DesktopOrderApp:
         all_txns = self.csv_layer.read_transactions()
         exception_txns = [
             t for t in all_txns
-            if t.event in [EventType.WASTE, EventType.ADJUST]
+            if t.event in [EventType.WASTE, EventType.ADJUST, EventType.UNFULFILLED]
             and t.date == view_date
         ]
         
@@ -1891,13 +1891,24 @@ class DesktopOrderApp:
             if ";" in notes:
                 notes = notes.split(";", 1)[1].strip()
             
+            # Display quantity with correct sign
+            if txn.event == EventType.ADJUST:
+                # ADJUST shows signed value (can be + or -)
+                display_qty = f"{txn.qty:+d}"
+            elif txn.event == EventType.UNFULFILLED:
+                # UNFULFILLED reduces on_order, show as negative
+                display_qty = f"-{abs(txn.qty)}"
+            else:
+                # WASTE shows positive (quantity wasted)
+                display_qty = str(txn.qty)
+            
             self.exception_treeview.insert(
                 "",
                 "end",
                 values=(
                     txn.event.value,
                     txn.sku,
-                    f"{txn.qty:+d}" if txn.event == EventType.ADJUST else str(txn.qty),
+                    display_qty,
                     notes,
                     txn.date.isoformat(),
                 ),
