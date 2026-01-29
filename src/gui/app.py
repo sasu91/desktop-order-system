@@ -78,6 +78,10 @@ class DesktopOrderApp:
         # EOD stock edits storage (for daily close)
         self.eod_stock_edits = {}  # {sku: eod_stock_on_hand}
         
+        # Dashboard settings
+        self.ma_period_daily = 7  # Default: 7-day moving average for daily sales
+        self.ma_period_weekly = 3  # Default: 3-week moving average for weekly sales
+        
         # Create GUI
         self._create_widgets()
         self._refresh_all()
@@ -262,6 +266,33 @@ class DesktopOrderApp:
         title_frame = ttk.Frame(main_frame)
         title_frame.pack(side="top", fill="x", pady=(0, 10))
         ttk.Label(title_frame, text="📊 Dashboard & Analisi KPI", font=("Helvetica", 16, "bold")).pack(side="left")
+        
+        # Moving Average Controls
+        ma_controls = ttk.Frame(title_frame)
+        ma_controls.pack(side="right", padx=5)
+        
+        ttk.Label(ma_controls, text="Media Mobile Giornaliera:").pack(side="left", padx=(0, 5))
+        self.ma_daily_var = tk.IntVar(value=self.ma_period_daily)
+        ttk.Spinbox(
+            ma_controls,
+            from_=3,
+            to=30,
+            textvariable=self.ma_daily_var,
+            width=5,
+            command=self._on_ma_change
+        ).pack(side="left", padx=(0, 10))
+        
+        ttk.Label(ma_controls, text="Media Mobile Settimanale:").pack(side="left", padx=(0, 5))
+        self.ma_weekly_var = tk.IntVar(value=self.ma_period_weekly)
+        ttk.Spinbox(
+            ma_controls,
+            from_=2,
+            to=8,
+            textvariable=self.ma_weekly_var,
+            width=5,
+            command=self._on_ma_change
+        ).pack(side="left", padx=(0, 10))
+        
         ttk.Button(title_frame, text="🔄 Aggiorna", command=self._refresh_dashboard).pack(side="right", padx=5)
         
         # === KPI CARDS ===
@@ -475,16 +506,23 @@ class DesktopOrderApp:
                     daily_totals.append(total_sold)
                 
                 # Plot with bar chart
-                self.daily_sales_ax.bar(range(len(dates)), daily_totals, color='#2E86AB', alpha=0.7, width=0.8)
+                self.daily_sales_ax.bar(range(len(dates)), daily_totals, color='#2E86AB', alpha=0.7, width=0.8, label='Vendite')
                 self.daily_sales_ax.set_xticks(range(0, len(dates), 5))
                 self.daily_sales_ax.set_xticklabels([dates[i] for i in range(0, len(dates), 5)], rotation=45, ha='right')
                 
-                # Add trend line
-                if daily_totals and any(daily_totals):
-                    x = np.arange(len(daily_totals))
-                    z = np.polyfit(x, daily_totals, 1)
-                    p = np.poly1d(z)
-                    self.daily_sales_ax.plot(x, p(x), "r--", alpha=0.6, linewidth=2, label=f'Trend: {z[0]:.1f}/giorno')
+                # Add moving average
+                ma_period = self.ma_daily_var.get()
+                if daily_totals and len(daily_totals) >= ma_period:
+                    ma_values = self._calculate_moving_average(daily_totals, ma_period)
+                    x_ma = np.arange(ma_period - 1, len(daily_totals))
+                    self.daily_sales_ax.plot(
+                        x_ma, 
+                        ma_values, 
+                        "r-", 
+                        alpha=0.8, 
+                        linewidth=2.5, 
+                        label=f'Media Mobile {ma_period}d'
+                    )
                     self.daily_sales_ax.legend(loc='upper left', fontsize=9)
                 
                 # Chart 2: Weekly Sales Comparison (Last 8 Weeks)
@@ -540,10 +578,20 @@ class DesktopOrderApp:
                 self.weekly_sales_ax.set_xticks(range(len(weekly_labels)))
                 self.weekly_sales_ax.set_xticklabels(weekly_labels, rotation=0)
                 
-                # Calculate and show average
-                avg_weekly = sum(weekly_totals) / len(weekly_totals) if weekly_totals else 0
-                self.weekly_sales_ax.axhline(y=avg_weekly, color='r', linestyle='--', alpha=0.6, linewidth=2, label=f'Media: {avg_weekly:.0f}')
-                self.weekly_sales_ax.legend(loc='upper left', fontsize=9)
+                # Add moving average for weekly data
+                ma_period_weekly = self.ma_weekly_var.get()
+                if weekly_totals and len(weekly_totals) >= ma_period_weekly:
+                    ma_weekly = self._calculate_moving_average(weekly_totals, ma_period_weekly)
+                    x_ma = np.arange(ma_period_weekly - 1, len(weekly_totals))
+                    self.weekly_sales_ax.plot(
+                        x_ma,
+                        ma_weekly,
+                        'r-',
+                        alpha=0.8,
+                        linewidth=2.5,
+                        label=f'Media Mobile {ma_period_weekly}w'
+                    )
+                    self.weekly_sales_ax.legend(loc='upper left', fontsize=9)
                 
                 self.dashboard_figure.tight_layout()
                 self.dashboard_canvas.draw()
@@ -578,6 +626,35 @@ class DesktopOrderApp:
         
         except Exception as e:
             messagebox.showerror("Errore Dashboard", f"Impossibile aggiornare dashboard: {str(e)}")
+    
+    def _calculate_moving_average(self, data: list, period: int) -> list:
+        """
+        Calculate moving average for given data.
+        
+        Args:
+            data: List of values
+            period: Window size for moving average
+        
+        Returns:
+            List of moving average values (length = len(data) - period + 1)
+        """
+        if len(data) < period:
+            return []
+        
+        ma_values = []
+        for i in range(period - 1, len(data)):
+            window = data[i - period + 1:i + 1]
+            ma_values.append(sum(window) / period)
+        
+        return ma_values
+    
+    def _on_ma_change(self):
+        """Callback when moving average period changes."""
+        # Update stored values
+        self.ma_period_daily = self.ma_daily_var.get()
+        self.ma_period_weekly = self.ma_weekly_var.get()
+        # Refresh dashboard with new MA
+        self._refresh_dashboard()
     
     def _build_order_tab(self):
         """Build Order tab (proposal + confirmation)."""
