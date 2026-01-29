@@ -1635,7 +1635,7 @@ class DesktopOrderApp:
         if event_type == "WASTE":
             self.exception_qty_hint.config(text="(scartato)", foreground="#d9534f")
         elif event_type == "ADJUST":
-            self.exception_qty_hint.config(text="(± aggiustamento)", foreground="#5bc0de")
+            self.exception_qty_hint.config(text="(quantità corretta)", foreground="#5bc0de")
         else:
             self.exception_qty_hint.config(text="")
         

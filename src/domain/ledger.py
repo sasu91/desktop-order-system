@@ -94,7 +94,8 @@ class StockCalculator:
             elif txn.event == EventType.WASTE:
                 on_hand -= txn.qty
             elif txn.event == EventType.ADJUST:
-                on_hand += txn.qty  # qty is signed
+                # ADJUST sostituisce on_hand con il valore specificato (come SNAPSHOT)
+                on_hand = txn.qty
             elif txn.event == EventType.UNFULFILLED:
                 # Tracking only; no impact on on_hand or on_order
                 pass
