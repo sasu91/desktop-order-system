@@ -1512,7 +1512,12 @@ class DesktopOrderApp:
         
         # Apri tendina automaticamente se ci sono risultati
         if filtered:
-            self.exception_sku_combo.after(50, lambda: self.exception_sku_combo.event_generate("<Down>"))
+            def open_dropdown_keep_focus():
+                self.exception_sku_combo.event_generate("<Down>")
+                # Mantieni il focus nel campo combobox per continuare a digitare
+                self.exception_sku_combo.focus_set()
+            
+            self.exception_sku_combo.after(50, open_dropdown_keep_focus)
     
     def _on_exception_type_change(self, event=None):
         """Aggiorna hint dinamico quando cambia tipo evento."""
