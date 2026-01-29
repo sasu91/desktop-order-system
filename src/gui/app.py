@@ -1352,12 +1352,18 @@ class DesktopOrderApp:
         # ROW 0: SKU (obbligatorio) - PRIMA POSIZIONE con ricerca filtrata
         ttk.Label(form_frame, text="SKU: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=0, column=0, sticky="e", padx=(0, 8), pady=8)
         self.exception_sku_var = tk.StringVar()
-        self.exception_sku_combo = ttk.Combobox(
+        
+        # Entry invece di Combobox per mantenere focus
+        self.exception_sku_entry = ttk.Entry(
             form_frame,
             textvariable=self.exception_sku_var,
             width=35,
         )
-        self.exception_sku_combo.grid(row=0, column=1, sticky="w", pady=8)
+        self.exception_sku_entry.grid(row=0, column=1, sticky="w", pady=8)
+        
+        # Listbox popup per autocomplete
+        self.exception_sku_listbox = None
+        self.exception_sku_popup = None
         
         # Dizionario per mapping display -> codice SKU
         self.exception_sku_map = {}
@@ -1365,6 +1371,13 @@ class DesktopOrderApp:
         # Trace per filtro real-time e validazione
         self.exception_sku_var.trace('w', lambda *args: self._filter_exception_sku())
         self.exception_sku_var.trace('w', lambda *args: self._validate_exception_form())
+        
+        # Bind eventi per gestire selezione da listbox
+        self.exception_sku_entry.bind('<Down>', self._on_sku_down)
+        self.exception_sku_entry.bind('<Up>', self._on_sku_up)
+        self.exception_sku_entry.bind('<Return>', self._on_sku_select)
+        self.exception_sku_entry.bind('<Escape>', self._on_sku_escape)
+        self.exception_sku_entry.bind('<FocusOut>', self._on_sku_focus_out)
         
         # Populate SKU dropdown
         self._populate_exception_sku_dropdown()
@@ -1476,52 +1489,144 @@ class DesktopOrderApp:
         
         # Crea mapping e lista formattata
         self.exception_sku_map = {}
-        sku_list = []
+        self.exception_sku_list = []
         
         for sku_obj in skus:
             display_text = f"{sku_obj.sku} - {sku_obj.description}"
-            sku_list.append(display_text)
+            self.exception_sku_list.append(display_text)
             self.exception_sku_map[display_text] = sku_obj.sku  # Mapping display -> codice
-        
-        # Popola combo con tutti gli SKU
-        self.exception_sku_combo["values"] = sku_list
     
     def _filter_exception_sku(self):
         """Filtra SKU in real-time mentre l'utente digita, mostrando codice e descrizione."""
         search_text = self.exception_sku_var.get().strip().lower()
-        
-        if not search_text:
-            # Se vuoto, mostra tutti gli SKU
-            skus = self.csv_layer.read_skus()
-            sku_list = [f"{s.sku} - {s.description}" for s in skus]
-            self.exception_sku_combo["values"] = sku_list
-            return
         
         # Filtra SKU per match su codice o descrizione (case-insensitive)
         skus = self.csv_layer.read_skus()
         filtered = []
         
         for sku_obj in skus:
-            if (search_text in sku_obj.sku.lower() or 
+            if not search_text or (search_text in sku_obj.sku.lower() or 
                 search_text in sku_obj.description.lower()):
                 display_text = f"{sku_obj.sku} - {sku_obj.description}"
                 filtered.append(display_text)
         
-        # Aggiorna la combo con risultati filtrati
-        self.exception_sku_combo["values"] = filtered
+        # Mostra popup se ci sono risultati e se l'utente sta digitando
+        if filtered and search_text:
+            self._show_sku_popup(filtered)
+        else:
+            self._hide_sku_popup()
+    
+    def _show_sku_popup(self, items):
+        """Mostra il popup con la lista filtrata."""
+        if not self.exception_sku_popup:
+            # Crea popup window
+            self.exception_sku_popup = tk.Toplevel(self.root)
+            self.exception_sku_popup.wm_overrideredirect(True)  # Rimuovi bordi finestra
+            
+            # Listbox con scrollbar
+            frame = ttk.Frame(self.exception_sku_popup, relief='solid', borderwidth=1)
+            frame.pack(fill='both', expand=True)
+            
+            scrollbar = ttk.Scrollbar(frame)
+            scrollbar.pack(side='right', fill='y')
+            
+            self.exception_sku_listbox = tk.Listbox(
+                frame,
+                height=8,
+                yscrollcommand=scrollbar.set,
+                font=("Helvetica", 9),
+                selectmode=tk.SINGLE
+            )
+            self.exception_sku_listbox.pack(fill='both', expand=True)
+            scrollbar.config(command=self.exception_sku_listbox.yview)
+            
+            # Bind click per selezione
+            self.exception_sku_listbox.bind('<Button-1>', self._on_sku_listbox_click)
+            self.exception_sku_listbox.bind('<Return>', self._on_sku_select)
         
-        # Apri tendina automaticamente se ci sono risultati
-        if filtered and len(search_text) > 0:
-            try:
-                # Salva la posizione del cursore
-                cursor_pos = self.exception_sku_combo.index(tk.INSERT)
-                # Apri il dropdown usando il metodo interno di Tkinter
-                self.exception_sku_combo.tk.call("ttk::combobox::Post", self.exception_sku_combo)
-                # Ripristina il focus e la posizione del cursore
-                self.exception_sku_combo.icursor(cursor_pos)
-            except Exception:
-                # Fallback: apri senza gestire il cursore
-                pass
+        # Aggiorna items
+        self.exception_sku_listbox.delete(0, tk.END)
+        for item in items:
+            self.exception_sku_listbox.insert(tk.END, item)
+        
+        # Seleziona primo item
+        if items:
+            self.exception_sku_listbox.selection_clear(0, tk.END)
+            self.exception_sku_listbox.selection_set(0)
+            self.exception_sku_listbox.activate(0)
+        
+        # Posiziona popup sotto l'entry
+        x = self.exception_sku_entry.winfo_rootx()
+        y = self.exception_sku_entry.winfo_rooty() + self.exception_sku_entry.winfo_height()
+        width = self.exception_sku_entry.winfo_width()
+        
+        self.exception_sku_popup.geometry(f"{width}x200+{x}+{y}")
+        self.exception_sku_popup.deiconify()
+    
+    def _hide_sku_popup(self):
+        """Nascondi il popup."""
+        if self.exception_sku_popup:
+            self.exception_sku_popup.withdraw()
+    
+    def _on_sku_down(self, event):
+        """Naviga giù nella listbox."""
+        if self.exception_sku_listbox and self.exception_sku_popup and self.exception_sku_popup.winfo_viewable():
+            current = self.exception_sku_listbox.curselection()
+            if current:
+                next_index = min(current[0] + 1, self.exception_sku_listbox.size() - 1)
+            else:
+                next_index = 0
+            
+            self.exception_sku_listbox.selection_clear(0, tk.END)
+            self.exception_sku_listbox.selection_set(next_index)
+            self.exception_sku_listbox.activate(next_index)
+            self.exception_sku_listbox.see(next_index)
+            return 'break'  # Previeni comportamento default
+    
+    def _on_sku_up(self, event):
+        """Naviga su nella listbox."""
+        if self.exception_sku_listbox and self.exception_sku_popup and self.exception_sku_popup.winfo_viewable():
+            current = self.exception_sku_listbox.curselection()
+            if current:
+                prev_index = max(current[0] - 1, 0)
+                self.exception_sku_listbox.selection_clear(0, tk.END)
+                self.exception_sku_listbox.selection_set(prev_index)
+                self.exception_sku_listbox.activate(prev_index)
+                self.exception_sku_listbox.see(prev_index)
+            return 'break'
+    
+    def _on_sku_select(self, event):
+        """Seleziona l'item dalla listbox."""
+        if self.exception_sku_listbox and self.exception_sku_popup and self.exception_sku_popup.winfo_viewable():
+            selection = self.exception_sku_listbox.curselection()
+            if selection:
+                selected_text = self.exception_sku_listbox.get(selection[0])
+                self.exception_sku_var.set(selected_text)
+                self._hide_sku_popup()
+                # Sposta focus al prossimo campo (quantità)
+                self.exception_sku_entry.event_generate('<Tab>')
+                return 'break'
+    
+    def _on_sku_escape(self, event):
+        """Chiudi popup con ESC."""
+        self._hide_sku_popup()
+        return 'break'
+    
+    def _on_sku_focus_out(self, event):
+        """Nascondi popup quando focus esce (con delay per permettere click)."""
+        # Delay per permettere click su listbox
+        self.exception_sku_entry.after(200, self._hide_sku_popup)
+    
+    def _on_sku_listbox_click(self, event):
+        """Gestisci click sulla listbox."""
+        # Trova item cliccato
+        index = self.exception_sku_listbox.nearest(event.y)
+        if index >= 0:
+            selected_text = self.exception_sku_listbox.get(index)
+            self.exception_sku_var.set(selected_text)
+            self._hide_sku_popup()
+            self.exception_sku_entry.focus_set()
+        return 'break'
     
     def _on_exception_type_change(self, event=None):
         """Aggiorna hint dinamico quando cambia tipo evento."""
