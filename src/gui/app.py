@@ -84,6 +84,8 @@ class DesktopOrderApp:
         
         # Selected SKU for dashboard detail charts
         self.selected_dashboard_sku = None
+        self.dashboard_sku_var = tk.StringVar()
+        self.dashboard_sku_items = []  # Available SKU list for autocomplete
         
         # Create GUI
         self._create_widgets()
@@ -402,14 +404,14 @@ class DesktopOrderApp:
         search_frame.pack(fill="x", pady=5)
         ttk.Label(search_frame, text="Cerca SKU:").pack(side="left", padx=5)
         
-        self.dashboard_sku_entry = AutocompleteEntry(
+        self.dashboard_sku_autocomplete = AutocompleteEntry(
             search_frame,
-            items=[],  # Will be populated in refresh
-            filter_callback=self._filter_dashboard_sku_items,
-            width=20
+            textvariable=self.dashboard_sku_var,
+            items_callback=self._filter_dashboard_sku_items,
+            width=20,
+            on_select=self._on_dashboard_sku_select
         )
-        self.dashboard_sku_entry.pack(side="left", fill="x", expand=True, padx=5)
-        self.dashboard_sku_entry.bind("<<AutocompleteSelected>>", self._on_dashboard_sku_select)
+        self.dashboard_sku_autocomplete.entry.pack(side="left", fill="x", expand=True, padx=5)
         
         # Charts container
         if MATPLOTLIB_AVAILABLE:
@@ -616,8 +618,7 @@ class DesktopOrderApp:
                 self.movement_treeview.insert("", "end", values=(sku, total_sales))
             
             # Update dashboard SKU search autocomplete items
-            if hasattr(self, 'dashboard_sku_entry'):
-                self.dashboard_sku_entry.items = sku_ids
+            self.dashboard_sku_items = sku_ids
             
             # Refresh SKU detail charts if SKU selected
             if self.selected_dashboard_sku:
@@ -647,27 +648,24 @@ class DesktopOrderApp:
         
         return ma_values
     
-    def _filter_dashboard_sku_items(self, typed_text: str, items: list) -> list:
+    def _filter_dashboard_sku_items(self, typed_text: str) -> list:
         """
         Filter SKU items for dashboard autocomplete.
         
         Args:
             typed_text: User input
-            items: All available SKU IDs
         
         Returns:
             Filtered list of SKU IDs
         """
         if not typed_text:
-            return items
+            return self.dashboard_sku_items
         
         typed_lower = typed_text.lower()
-        return [item for item in items if typed_lower in item.lower()]
+        return [item for item in self.dashboard_sku_items if typed_lower in item.lower()]
     
-    def _on_dashboard_sku_select(self, event):
+    def _on_dashboard_sku_select(self, selected_sku: str):
         """Handle SKU selection in dashboard search."""
-        selected_sku = self.dashboard_sku_entry.get().strip()
-        
         if not selected_sku:
             self.selected_dashboard_sku = None
             return
