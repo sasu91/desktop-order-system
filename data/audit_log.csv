@@ -1,0 +1,4 @@
+timestamp,action,sku_old,sku_new,description_old,description_new,ean_old,ean_new,user,note
+2026-01-15T10:30:00,UPDATE,SKU007,SKU007,Zucchero 1kg,Zucchero 1kg,8007890123456,8007890123456,admin,Updated reorder_point from 40 to 60
+2026-01-20T14:15:00,CREATE,,SKU010,,,,,admin,Created new SKU: Yogurt Bianco 125g
+2026-01-25T09:00:00,UPDATE,SKU002,SKU002,Latte Intero 1L,Latte Intero 1L,8002345678901,8002345678901,admin,Updated max_stock from 800 to 1000
