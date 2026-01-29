@@ -82,20 +82,20 @@ class DesktopOrderApp:
         
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="Refresh", command=self._refresh_all)
+        file_menu.add_command(label="Aggiorna", command=self._refresh_all)
         file_menu.add_separator()
         
         # Export submenu
         export_menu = tk.Menu(file_menu, tearoff=0)
-        file_menu.add_cascade(label="Export As CSV", menu=export_menu)
-        export_menu.add_command(label="Stock Snapshot (AsOf Date)", command=self._export_stock_snapshot)
-        export_menu.add_command(label="Ledger (Transactions)", command=self._export_ledger)
-        export_menu.add_command(label="SKU List", command=self._export_sku_list)
-        export_menu.add_command(label="Order Logs", command=self._export_order_logs)
-        export_menu.add_command(label="Receiving Logs", command=self._export_receiving_logs)
+        file_menu.add_cascade(label="Esporta in CSV", menu=export_menu)
+        export_menu.add_command(label="Snapshot Stock (Data AsOf)", command=self._export_stock_snapshot)
+        export_menu.add_command(label="Registro (Transazioni)", command=self._export_ledger)
+        export_menu.add_command(label="Elenco SKU", command=self._export_sku_list)
+        export_menu.add_command(label="Log Ordini", command=self._export_order_logs)
+        export_menu.add_command(label="Log Ricevimenti", command=self._export_receiving_logs)
         
         file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.root.quit)
+        file_menu.add_command(label="Esci", command=self.root.quit)
         
         # Tab notebook
         self.notebook = ttk.Notebook(self.root)
@@ -138,10 +138,10 @@ class DesktopOrderApp:
         date_frame = ttk.Frame(left_panel)
         date_frame.pack(side="top", fill="x", pady=5)
         
-        ttk.Label(date_frame, text="AsOf Date:").pack(side="left", padx=5)
+        ttk.Label(date_frame, text="Data AsOf:").pack(side="left", padx=5)
         self.asof_date_var = tk.StringVar(value=self.asof_date.isoformat())
         ttk.Entry(date_frame, textvariable=self.asof_date_var, width=15).pack(side="left", padx=5)
-        ttk.Button(date_frame, text="Update", command=self._refresh_stock_tab).pack(side="left", padx=5)
+        ttk.Button(date_frame, text="Aggiorna", command=self._refresh_stock_tab).pack(side="left", padx=5)
         
         # Stock table
         stock_frame = ttk.Frame(left_panel)
@@ -166,10 +166,10 @@ class DesktopOrderApp:
         self.stock_treeview.column("Available", anchor=tk.CENTER, width=100)
         
         self.stock_treeview.heading("SKU", text="SKU", anchor=tk.W)
-        self.stock_treeview.heading("Description", text="Description", anchor=tk.W)
-        self.stock_treeview.heading("On Hand", text="On Hand", anchor=tk.CENTER)
-        self.stock_treeview.heading("On Order", text="On Order", anchor=tk.CENTER)
-        self.stock_treeview.heading("Available", text="Available", anchor=tk.CENTER)
+        self.stock_treeview.heading("Description", text="Descrizione", anchor=tk.W)
+        self.stock_treeview.heading("On Hand", text="Disponibile", anchor=tk.CENTER)
+        self.stock_treeview.heading("On Order", text="In Ordine", anchor=tk.CENTER)
+        self.stock_treeview.heading("Available", text="Totale", anchor=tk.CENTER)
         
         self.stock_treeview.pack(fill="both", expand=True)
         
@@ -177,14 +177,14 @@ class DesktopOrderApp:
         self.stock_treeview.bind("<<TreeviewSelect>>", self._on_stock_select)
         
         # Right panel: Audit Timeline
-        right_panel = ttk.LabelFrame(main_frame, text="📋 Audit Timeline (Select SKU)", padding=5)
+        right_panel = ttk.LabelFrame(main_frame, text="📋 Storico Audit (Seleziona SKU)", padding=5)
         right_panel.pack(side="right", fill="both", expand=False, ipadx=10)
         
         # Timeline header
         timeline_header = ttk.Frame(right_panel)
         timeline_header.pack(side="top", fill="x", pady=(0, 5))
         
-        self.audit_sku_label = ttk.Label(timeline_header, text="No SKU selected", font=("Helvetica", 10, "bold"))
+        self.audit_sku_label = ttk.Label(timeline_header, text="Nessun SKU selezionato", font=("Helvetica", 10, "bold"))
         self.audit_sku_label.pack(side="left")
         
         ttk.Button(timeline_header, text="🔄", command=self._refresh_audit_timeline, width=3).pack(side="right")
@@ -211,9 +211,9 @@ class DesktopOrderApp:
         self.audit_timeline_treeview.column("Qty", anchor=tk.CENTER, width=50)
         self.audit_timeline_treeview.column("Note", anchor=tk.W, width=150)
         
-        self.audit_timeline_treeview.heading("Timestamp", text="Timestamp", anchor=tk.W)
-        self.audit_timeline_treeview.heading("Event", text="Event", anchor=tk.W)
-        self.audit_timeline_treeview.heading("Qty", text="Qty", anchor=tk.CENTER)
+        self.audit_timeline_treeview.heading("Timestamp", text="Data/Ora", anchor=tk.W)
+        self.audit_timeline_treeview.heading("Event", text="Evento", anchor=tk.W)
+        self.audit_timeline_treeview.heading("Qty", text="Q.tà", anchor=tk.CENTER)
         self.audit_timeline_treeview.heading("Note", text="Note", anchor=tk.W)
         
         self.audit_timeline_treeview.pack(fill="both", expand=True)
@@ -229,11 +229,11 @@ class DesktopOrderApp:
         # Title
         title_frame = ttk.Frame(main_frame)
         title_frame.pack(side="top", fill="x", pady=(0, 10))
-        ttk.Label(title_frame, text="📊 Dashboard & KPI Analytics", font=("Helvetica", 16, "bold")).pack(side="left")
-        ttk.Button(title_frame, text="🔄 Refresh", command=self._refresh_dashboard).pack(side="right", padx=5)
+        ttk.Label(title_frame, text="📊 Dashboard & Analisi KPI", font=("Helvetica", 16, "bold")).pack(side="left")
+        ttk.Button(title_frame, text="🔄 Aggiorna", command=self._refresh_dashboard).pack(side="right", padx=5)
         
         # === KPI CARDS ===
-        kpi_frame = ttk.LabelFrame(main_frame, text="Key Performance Indicators", padding=10)
+        kpi_frame = ttk.LabelFrame(main_frame, text="Indicatori Chiave di Prestazione", padding=10)
         kpi_frame.pack(side="top", fill="x", pady=(0, 10))
         
         # Row 1: Main KPIs
@@ -241,15 +241,15 @@ class DesktopOrderApp:
         kpi_row1.pack(side="top", fill="x", pady=5)
         
         # Total SKUs
-        self.kpi_total_skus_label = ttk.Label(kpi_row1, text="Total SKUs: -", font=("Helvetica", 11, "bold"))
+        self.kpi_total_skus_label = ttk.Label(kpi_row1, text="Totale SKU: -", font=("Helvetica", 11, "bold"))
         self.kpi_total_skus_label.pack(side="left", padx=20)
         
         # Total Stock Value
-        self.kpi_stock_value_label = ttk.Label(kpi_row1, text="Stock Value: -", font=("Helvetica", 11, "bold"))
+        self.kpi_stock_value_label = ttk.Label(kpi_row1, text="Valore Stock: -", font=("Helvetica", 11, "bold"))
         self.kpi_stock_value_label.pack(side="left", padx=20)
         
         # Avg Days Cover
-        self.kpi_days_cover_label = ttk.Label(kpi_row1, text="Avg Days Cover: -", font=("Helvetica", 11, "bold"))
+        self.kpi_days_cover_label = ttk.Label(kpi_row1, text="Giorni Copertura Medi: -", font=("Helvetica", 11, "bold"))
         self.kpi_days_cover_label.pack(side="left", padx=20)
         
         # Row 2: Alerts and Turnover
@@ -257,11 +257,11 @@ class DesktopOrderApp:
         kpi_row2.pack(side="top", fill="x", pady=5)
         
         # Low Stock Alerts
-        self.kpi_low_stock_label = ttk.Label(kpi_row2, text="⚠️ Low Stock Alerts: -", font=("Helvetica", 11, "bold"), foreground="red")
+        self.kpi_low_stock_label = ttk.Label(kpi_row2, text="⚠️ Avvisi Stock Basso: -", font=("Helvetica", 11, "bold"), foreground="red")
         self.kpi_low_stock_label.pack(side="left", padx=20)
         
         # Turnover Ratio
-        self.kpi_turnover_label = ttk.Label(kpi_row2, text="Turnover Ratio: -", font=("Helvetica", 11, "bold"))
+        self.kpi_turnover_label = ttk.Label(kpi_row2, text="Indice di Rotazione: -", font=("Helvetica", 11, "bold"))
         self.kpi_turnover_label.pack(side="left", padx=20)
         
         # === CONTENT AREA (CHARTS + TABLES) ===
@@ -269,7 +269,7 @@ class DesktopOrderApp:
         content_frame.pack(fill="both", expand=True)
         
         # Left panel: Charts
-        charts_frame = ttk.LabelFrame(content_frame, text="Charts & Trends", padding=5)
+        charts_frame = ttk.LabelFrame(content_frame, text="Grafici & Tendenze", padding=5)
         charts_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
         
         if MATPLOTLIB_AVAILABLE:
@@ -297,14 +297,14 @@ class DesktopOrderApp:
             self.dashboard_canvas.draw()
             self.dashboard_canvas.get_tk_widget().pack(fill="both", expand=True)
         else:
-            ttk.Label(charts_frame, text="Charts disabled (matplotlib not installed)", foreground="gray").pack(pady=50)
+            ttk.Label(charts_frame, text="Grafici disabilitati (matplotlib non installato)", foreground="gray").pack(pady=50)
         
         # Right panel: Top SKUs
         right_panel = ttk.Frame(content_frame)
         right_panel.pack(side="right", fill="both", expand=False, ipadx=10)
         
         # Top 10 by Movement
-        movement_frame = ttk.LabelFrame(right_panel, text="Top 10 SKUs by Movement", padding=5)
+        movement_frame = ttk.LabelFrame(right_panel, text="Top 10 SKU per Movimento", padding=5)
         movement_frame.pack(side="top", fill="both", expand=True, pady=(0, 5))
         
         movement_scroll = ttk.Scrollbar(movement_frame)
@@ -323,12 +323,12 @@ class DesktopOrderApp:
         self.movement_treeview.column("Sales", anchor=tk.CENTER, width=80)
         
         self.movement_treeview.heading("SKU", text="SKU", anchor=tk.W)
-        self.movement_treeview.heading("Sales", text="Total Sales", anchor=tk.CENTER)
+        self.movement_treeview.heading("Sales", text="Vendite Totali", anchor=tk.CENTER)
         
         self.movement_treeview.pack(fill="both", expand=True)
         
         # Top 10 by Stock Value
-        value_frame = ttk.LabelFrame(right_panel, text="Top 10 SKUs by Stock Value", padding=5)
+        value_frame = ttk.LabelFrame(right_panel, text="Top 10 SKU per Valore Stock", padding=5)
         value_frame.pack(side="top", fill="both", expand=True)
         
         value_scroll = ttk.Scrollbar(value_frame)
@@ -348,8 +348,8 @@ class DesktopOrderApp:
         self.value_treeview.column("Value", anchor=tk.CENTER, width=80)
         
         self.value_treeview.heading("SKU", text="SKU", anchor=tk.W)
-        self.value_treeview.heading("Units", text="Units", anchor=tk.CENTER)
-        self.value_treeview.heading("Value", text="Value", anchor=tk.CENTER)
+        self.value_treeview.heading("Units", text="Unità", anchor=tk.CENTER)
+        self.value_treeview.heading("Value", text="Valore", anchor=tk.CENTER)
         
         self.value_treeview.pack(fill="both", expand=True)
         
@@ -379,14 +379,14 @@ class DesktopOrderApp:
             
             # 1. Total SKUs
             total_skus = len(sku_ids)
-            self.kpi_total_skus_label.config(text=f"Total SKUs: {total_skus}")
+            self.kpi_total_skus_label.config(text=f"Totale SKU: {total_skus}")
             
             # 2. Total Stock Value (assuming unit price = 10 for demo; ideally from SKU data)
             # TODO: Add price field to SKU model
             unit_price = 10  # Default price
             total_stock_units = sum(stock.on_hand for stock in stocks.values())
             total_stock_value = total_stock_units * unit_price
-            self.kpi_stock_value_label.config(text=f"Stock Value: €{total_stock_value:,.0f}")
+            self.kpi_stock_value_label.config(text=f"Valore Stock: €{total_stock_value:,.0f}")
             
             # 3. Average Days Cover
             total_days_cover = 0
@@ -400,7 +400,7 @@ class DesktopOrderApp:
                     skus_with_sales += 1
             
             avg_days_cover = total_days_cover / skus_with_sales if skus_with_sales > 0 else 0
-            self.kpi_days_cover_label.config(text=f"Avg Days Cover: {avg_days_cover:.1f} days")
+            self.kpi_days_cover_label.config(text=f"Giorni Copertura Medi: {avg_days_cover:.1f} giorni")
             
             # 4. Low Stock Alerts (stock < 10 units or days_cover < 7)
             low_stock_count = 0
@@ -412,7 +412,7 @@ class DesktopOrderApp:
                 if stock.on_hand < 10 or days_cover < 7:
                     low_stock_count += 1
             
-            self.kpi_low_stock_label.config(text=f"⚠️ Low Stock Alerts: {low_stock_count}")
+            self.kpi_low_stock_label.config(text=f"⚠️ Avvisi Stock Basso: {low_stock_count}")
             
             # 5. Turnover Ratio (Total Sales Last 30 Days / Avg Stock)
             thirty_days_ago = today - timedelta(days=30)
@@ -420,7 +420,7 @@ class DesktopOrderApp:
             total_recent_sales = sum(sr.qty_sold for sr in recent_sales)
             avg_stock = total_stock_units  # Simplified; ideally average over period
             turnover_ratio = total_recent_sales / avg_stock if avg_stock > 0 else 0
-            self.kpi_turnover_label.config(text=f"Turnover Ratio: {turnover_ratio:.2f}")
+            self.kpi_turnover_label.config(text=f"Indice di Rotazione: {turnover_ratio:.2f}")
             
             # === CHARTS ===
             
@@ -519,7 +519,7 @@ class DesktopOrderApp:
                 self.value_treeview.insert("", "end", values=(sku, units, f"€{value:,.0f}"))
         
         except Exception as e:
-            messagebox.showerror("Dashboard Error", f"Failed to refresh dashboard: {str(e)}")
+            messagebox.showerror("Errore Dashboard", f"Impossibile aggiornare dashboard: {str(e)}")
     
     def _build_order_tab(self):
         """Build Order tab (proposal + confirmation)."""
@@ -529,25 +529,25 @@ class DesktopOrderApp:
         # Title
         title_frame = ttk.Frame(main_frame)
         title_frame.pack(side="top", fill="x", pady=(0, 10))
-        ttk.Label(title_frame, text="Order Management", font=("Helvetica", 14, "bold")).pack(side="left")
+        ttk.Label(title_frame, text="Gestione Ordini", font=("Helvetica", 14, "bold")).pack(side="left")
         
         # === PARAMETERS & PROPOSAL GENERATION ===
-        param_frame = ttk.LabelFrame(main_frame, text="Generate Order Proposals", padding=10)
+        param_frame = ttk.LabelFrame(main_frame, text="Genera Proposte Ordine", padding=10)
         param_frame.pack(side="top", fill="x", pady=(0, 10))
         
         # Parameters row
         params_row = ttk.Frame(param_frame)
         params_row.pack(side="top", fill="x", pady=5)
         
-        ttk.Label(params_row, text="Min Stock:", width=12).pack(side="left", padx=(0, 5))
+        ttk.Label(params_row, text="Stock Minimo:", width=12).pack(side="left", padx=(0, 5))
         self.min_stock_var = tk.StringVar(value="10")
         ttk.Entry(params_row, textvariable=self.min_stock_var, width=10).pack(side="left", padx=(0, 20))
         
-        ttk.Label(params_row, text="Days Cover:", width=12).pack(side="left", padx=(0, 5))
+        ttk.Label(params_row, text="Giorni Copertura:", width=12).pack(side="left", padx=(0, 5))
         self.days_cover_var = tk.StringVar(value="30")
         ttk.Entry(params_row, textvariable=self.days_cover_var, width=10).pack(side="left", padx=(0, 20))
         
-        ttk.Label(params_row, text="Lead Time (days):", width=15).pack(side="left", padx=(0, 5))
+        ttk.Label(params_row, text="Lead Time (giorni):", width=15).pack(side="left", padx=(0, 5))
         self.lead_time_var = tk.StringVar(value="7")
         ttk.Entry(params_row, textvariable=self.lead_time_var, width=10).pack(side="left", padx=(0, 20))
         
@@ -555,12 +555,12 @@ class DesktopOrderApp:
         buttons_row = ttk.Frame(param_frame)
         buttons_row.pack(side="top", fill="x", pady=5)
         
-        ttk.Button(buttons_row, text="✓ Generate All Proposals", command=self._generate_all_proposals).pack(side="left", padx=5)
-        ttk.Button(buttons_row, text="🔄 Refresh Stock Data", command=self._refresh_order_stock_data).pack(side="left", padx=5)
-        ttk.Button(buttons_row, text="✗ Clear Proposals", command=self._clear_proposals).pack(side="left", padx=5)
+        ttk.Button(buttons_row, text="✓ Genera Tutte le Proposte", command=self._generate_all_proposals).pack(side="left", padx=5)
+        ttk.Button(buttons_row, text="🔄 Aggiorna Dati Stock", command=self._refresh_order_stock_data).pack(side="left", padx=5)
+        ttk.Button(buttons_row, text="✗ Cancella Proposte", command=self._clear_proposals).pack(side="left", padx=5)
         
         # === PROPOSALS TABLE (EDITABLE) ===
-        proposal_frame = ttk.LabelFrame(main_frame, text="Order Proposals (Double-click Proposed Qty to edit)", padding=5)
+        proposal_frame = ttk.LabelFrame(main_frame, text="Proposte Ordine (Doppio click su Q.tà Proposta per modificare)", padding=5)
         proposal_frame.pack(fill="both", expand=True, pady=(0, 10))
         
         # Scrollbar
@@ -585,12 +585,12 @@ class DesktopOrderApp:
         self.proposal_treeview.column("Receipt Date", anchor=tk.CENTER, width=100)
         
         self.proposal_treeview.heading("SKU", text="SKU", anchor=tk.W)
-        self.proposal_treeview.heading("Description", text="Description", anchor=tk.W)
-        self.proposal_treeview.heading("On Hand", text="On Hand", anchor=tk.CENTER)
-        self.proposal_treeview.heading("On Order", text="On Order", anchor=tk.CENTER)
-        self.proposal_treeview.heading("Avg Sales", text="Avg Sales/Day", anchor=tk.CENTER)
-        self.proposal_treeview.heading("Proposed Qty", text="Proposed Qty", anchor=tk.CENTER)
-        self.proposal_treeview.heading("Receipt Date", text="Receipt Date", anchor=tk.CENTER)
+        self.proposal_treeview.heading("Description", text="Descrizione", anchor=tk.W)
+        self.proposal_treeview.heading("On Hand", text="Disponibile", anchor=tk.CENTER)
+        self.proposal_treeview.heading("On Order", text="In Ordine", anchor=tk.CENTER)
+        self.proposal_treeview.heading("Avg Sales", text="Vendite Medie/Giorno", anchor=tk.CENTER)
+        self.proposal_treeview.heading("Proposed Qty", text="Q.tà Proposta", anchor=tk.CENTER)
+        self.proposal_treeview.heading("Receipt Date", text="Data Ricevimento", anchor=tk.CENTER)
         
         self.proposal_treeview.pack(fill="both", expand=True)
         
@@ -598,17 +598,17 @@ class DesktopOrderApp:
         self.proposal_treeview.bind("<Double-1>", self._on_proposal_double_click)
         
         # === CONFIRMATION SECTION ===
-        confirm_frame = ttk.LabelFrame(main_frame, text="Confirm Orders", padding=10)
+        confirm_frame = ttk.LabelFrame(main_frame, text="Conferma Ordini", padding=10)
         confirm_frame.pack(side="bottom", fill="x", pady=(10, 0))
         
         info_row = ttk.Frame(confirm_frame)
         info_row.pack(side="top", fill="x", pady=(0, 10))
-        ttk.Label(info_row, text="Select proposals with Proposed Qty > 0 above, then click Confirm to create orders.").pack(side="left")
+        ttk.Label(info_row, text="Seleziona proposte con Q.tà Proposta > 0 sopra, poi clicca Conferma per creare ordini.").pack(side="left")
         
         buttons_row = ttk.Frame(confirm_frame)
         buttons_row.pack(side="top", fill="x")
         
-        ttk.Button(buttons_row, text="✓ Confirm All Orders (Qty > 0)", command=self._confirm_orders).pack(side="left", padx=5)
+        ttk.Button(buttons_row, text="✓ Conferma Tutti gli Ordini (Q.tà > 0)", command=self._confirm_orders).pack(side="left", padx=5)
     
     def _generate_all_proposals(self):
         """Generate order proposals for all SKUs."""
@@ -617,7 +617,7 @@ class DesktopOrderApp:
             days_cover = int(self.days_cover_var.get())
             lead_time = int(self.lead_time_var.get())
         except ValueError:
-            messagebox.showerror("Validation Error", "Parameters must be integers.")
+            messagebox.showerror("Errore di Validazione", "I parametri devono essere numeri interi.")
             return
         
         # Update workflow lead time
@@ -665,8 +665,8 @@ class DesktopOrderApp:
         self._refresh_proposal_table()
         
         messagebox.showinfo(
-            "Success",
-            f"Generated {len(self.current_proposals)} order proposals.\nProposals with Qty > 0: {sum(1 for p in self.current_proposals if p.proposed_qty > 0)}",
+            "Proposte Generate",
+            f"Generate {len(self.current_proposals)} proposte ordine.\nProposte con Q.tà > 0: {sum(1 for p in self.current_proposals if p.proposed_qty > 0)}",
         )
     
     def _refresh_proposal_table(self):
@@ -690,7 +690,7 @@ class DesktopOrderApp:
     
     def _refresh_order_stock_data(self):
         """Refresh stock data without regenerating proposals."""
-        messagebox.showinfo("Info", "Stock data refreshed. Click 'Generate All Proposals' to recalculate.")
+        messagebox.showinfo("Info", "Dati stock aggiornati. Clicca 'Genera Tutte le Proposte' per ricalcolare.")
     
     def _clear_proposals(self):
         """Clear all proposals."""
@@ -730,10 +730,10 @@ class DesktopOrderApp:
         form_frame.pack(fill="both", expand=True)
         
         ttk.Label(form_frame, text=f"SKU: {proposal.sku}", font=("Helvetica", 10, "bold")).pack(anchor="w", pady=5)
-        ttk.Label(form_frame, text=f"Description: {proposal.description}").pack(anchor="w", pady=5)
-        ttk.Label(form_frame, text=f"Current Proposed Qty: {proposal.proposed_qty}").pack(anchor="w", pady=5)
+        ttk.Label(form_frame, text=f"Descrizione: {proposal.description}").pack(anchor="w", pady=5)
+        ttk.Label(form_frame, text=f"Q.tà Proposta Attuale: {proposal.proposed_qty}").pack(anchor="w", pady=5)
         
-        ttk.Label(form_frame, text="New Proposed Qty:", font=("Helvetica", 10)).pack(anchor="w", pady=(15, 5))
+        ttk.Label(form_frame, text="Nuova Q.tà Proposta:", font=("Helvetica", 10)).pack(anchor="w", pady=(15, 5))
         new_qty_var = tk.StringVar(value=str(proposal.proposed_qty))
         qty_entry = ttk.Entry(form_frame, textvariable=new_qty_var, width=20)
         qty_entry.pack(anchor="w", pady=(0, 15))
@@ -743,7 +743,7 @@ class DesktopOrderApp:
             try:
                 new_qty = int(new_qty_var.get())
                 if new_qty < 0:
-                    messagebox.showerror("Validation Error", "Quantity must be >= 0.", parent=popup)
+                    messagebox.showerror("Errore di Validazione", "La quantità deve essere >= 0.", parent=popup)
                     return
                 
                 # Update proposal
@@ -765,13 +765,13 @@ class DesktopOrderApp:
                 
                 popup.destroy()
             except ValueError:
-                messagebox.showerror("Validation Error", "Quantity must be an integer.", parent=popup)
+                messagebox.showerror("Errore di Validazione", "La quantità deve essere un numero intero.", parent=popup)
         
         # Buttons
         button_frame = ttk.Frame(form_frame)
         button_frame.pack(fill="x")
-        ttk.Button(button_frame, text="Save", command=save_qty).pack(side="right", padx=5)
-        ttk.Button(button_frame, text="Cancel", command=popup.destroy).pack(side="right", padx=5)
+        ttk.Button(button_frame, text="Salva", command=save_qty).pack(side="right", padx=5)
+        ttk.Button(button_frame, text="Annulla", command=popup.destroy).pack(side="right", padx=5)
         
         # Bind Enter to save
         qty_entry.bind("<Return>", lambda e: save_qty())
@@ -779,20 +779,20 @@ class DesktopOrderApp:
     def _confirm_orders(self):
         """Confirm all orders with qty > 0."""
         if not self.current_proposals:
-            messagebox.showwarning("No Proposals", "Please generate proposals first.")
+            messagebox.showwarning("Nessuna Proposta", "Genera prima le proposte.")
             return
         
         # Filter proposals with qty > 0
         to_confirm = [p for p in self.current_proposals if p.proposed_qty > 0]
         
         if not to_confirm:
-            messagebox.showwarning("No Orders", "No proposals with quantity > 0 to confirm.")
+            messagebox.showwarning("Nessun Ordine", "Nessuna proposta con quantità > 0 da confermare.")
             return
         
         # Confirm with user
         confirm = messagebox.askyesno(
-            "Confirm Orders",
-            f"Confirm {len(to_confirm)} order(s)?\n\nThis will create ORDER events in the ledger.",
+            "Conferma Ordini",
+            f"Confermare {len(to_confirm)} ordine/i?\n\nQuesto creerà eventi ORDER nel ledger.",
         )
         if not confirm:
             return
@@ -805,8 +805,8 @@ class DesktopOrderApp:
             )
             
             messagebox.showinfo(
-                "Success",
-                f"Confirmed {len(confirmations)} order(s).\n\nOrder IDs: {', '.join(c.order_id for c in confirmations[:3])}{'...' if len(confirmations) > 3 else ''}",
+                "Ordini Confermati",
+                f"Confermati {len(confirmations)} ordine/i.\n\nID Ordine: {', '.join(c.order_id for c in confirmations[:3])}{'...' if len(confirmations) > 3 else ''}",
             )
             
             # Show receipt window
@@ -816,7 +816,7 @@ class DesktopOrderApp:
             self._clear_proposals()
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to confirm orders: {str(e)}")
+            messagebox.showerror("Errore", f"Impossibile confermare ordini: {str(e)}")
     
     def _show_receipt_window(self, confirmations):
         """Show receipt window with order confirmations (5 items per page, barcode rendering)."""
@@ -825,7 +825,7 @@ class DesktopOrderApp:
         
         # Create popup
         popup = tk.Toplevel(self.root)
-        popup.title("Order Confirmation - Receipt")
+        popup.title("Ricevuta Conferma Ordine")
         popup.geometry("700x600")
         popup.transient(self.root)
         popup.grab_set()
@@ -834,7 +834,7 @@ class DesktopOrderApp:
         header_frame = ttk.Frame(popup, padding=10)
         header_frame.pack(side="top", fill="x")
         
-        ttk.Label(header_frame, text="Order Confirmation Receipt", font=("Helvetica", 14, "bold")).pack()
+        ttk.Label(header_frame, text="Ricevuta Conferma Ordine", font=("Helvetica", 14, "bold")).pack()
         
         # Page state
         items_per_page = 5
@@ -859,7 +859,7 @@ class DesktopOrderApp:
             page_info_frame.pack(side="top", fill="x", pady=(0, 10))
             ttk.Label(
                 page_info_frame,
-                text=f"Page {page_num + 1} of {total_pages}",
+                text=f"Pagina {page_num + 1} di {total_pages}",
                 font=("Helvetica", 10, "bold"),
             ).pack()
             
@@ -891,10 +891,10 @@ class DesktopOrderApp:
                 description = sku_obj.description if sku_obj else "N/A"
                 ean = sku_obj.ean if sku_obj else None
                 
-                ttk.Label(item_frame, text=f"Description: {description}").pack(anchor="w")
-                ttk.Label(item_frame, text=f"Quantity Ordered: {confirmation.qty_ordered}").pack(anchor="w")
-                ttk.Label(item_frame, text=f"Receipt Date: {confirmation.receipt_date.isoformat()}").pack(anchor="w")
-                ttk.Label(item_frame, text=f"Order ID: {confirmation.order_id}", font=("Courier", 9)).pack(anchor="w")
+                ttk.Label(item_frame, text=f"Descrizione: {description}").pack(anchor="w")
+                ttk.Label(item_frame, text=f"Quantità Ordinata: {confirmation.qty_ordered}").pack(anchor="w")
+                ttk.Label(item_frame, text=f"Data Ricevimento: {confirmation.receipt_date.isoformat()}").pack(anchor="w")
+                ttk.Label(item_frame, text=f"ID Ordine: {confirmation.order_id}", font=("Courier", 9)).pack(anchor="w")
                 
                 # EAN and barcode
                 if ean:
@@ -911,13 +911,13 @@ class DesktopOrderApp:
                                     barcode_label.image = barcode_img  # Keep reference
                                     barcode_label.pack(anchor="w", pady=5)
                             except Exception as e:
-                                ttk.Label(item_frame, text=f"Barcode error: {str(e)}", foreground="red").pack(anchor="w")
+                                ttk.Label(item_frame, text=f"Errore barcode: {str(e)}", foreground="red").pack(anchor="w")
                         else:
-                            ttk.Label(item_frame, text="(Barcode rendering disabled)", foreground="gray").pack(anchor="w")
+                            ttk.Label(item_frame, text="(Rendering barcode disabilitato)", foreground="gray").pack(anchor="w")
                     else:
-                        ttk.Label(item_frame, text=f"EAN: {ean} (Invalid - {error})", foreground="red").pack(anchor="w")
+                        ttk.Label(item_frame, text=f"EAN: {ean} (Non valido - {error})", foreground="red").pack(anchor="w")
                 else:
-                    ttk.Label(item_frame, text="EAN: (empty - no barcode)", foreground="gray").pack(anchor="w")
+                    ttk.Label(item_frame, text="EAN: (vuoto - nessun barcode)", foreground="gray").pack(anchor="w")
             
             canvas.pack(side="left", fill="both", expand=True)
             scrollbar.pack(side="right", fill="y")
@@ -939,10 +939,10 @@ class DesktopOrderApp:
         nav_frame = ttk.Frame(popup, padding=10)
         nav_frame.pack(side="bottom", fill="x")
         
-        ttk.Button(nav_frame, text="◀ Previous", command=prev_page).pack(side="left", padx=5)
-        ttk.Button(nav_frame, text="Next ▶", command=next_page).pack(side="left", padx=5)
-        ttk.Label(nav_frame, text="(Press SPACE for next page)").pack(side="left", padx=20)
-        ttk.Button(nav_frame, text="Close", command=popup.destroy).pack(side="right", padx=5)
+        ttk.Button(nav_frame, text="◀ Precedente", command=prev_page).pack(side="left", padx=5)
+        ttk.Button(nav_frame, text="Successiva ▶", command=next_page).pack(side="left", padx=5)
+        ttk.Label(nav_frame, text="(Premi SPAZIO per pagina successiva)").pack(side="left", padx=20)
+        ttk.Button(nav_frame, text="Chiudi", command=popup.destroy).pack(side="right", padx=5)
         
         # Bind keys
         popup.bind("<space>", next_page)
@@ -994,17 +994,17 @@ class DesktopOrderApp:
         # Title
         title_frame = ttk.Frame(main_frame)
         title_frame.pack(side="top", fill="x", pady=(0, 10))
-        ttk.Label(title_frame, text="Receiving Management", font=("Helvetica", 14, "bold")).pack(side="left")
+        ttk.Label(title_frame, text="Gestione Ricevimenti", font=("Helvetica", 14, "bold")).pack(side="left")
         
         # === PENDING ORDERS SECTION ===
-        pending_frame = ttk.LabelFrame(main_frame, text="Pending Orders (Not Fully Received)", padding=5)
+        pending_frame = ttk.LabelFrame(main_frame, text="Ordini in Sospeso (Non Completamente Ricevuti)", padding=5)
         pending_frame.pack(side="top", fill="both", expand=True, pady=(0, 10))
         
         # Toolbar
         pending_toolbar = ttk.Frame(pending_frame)
         pending_toolbar.pack(side="top", fill="x", pady=(0, 5))
-        ttk.Button(pending_toolbar, text="🔄 Refresh Pending", command=self._refresh_pending_orders).pack(side="left", padx=5)
-        ttk.Label(pending_toolbar, text="(Double-click to pre-fill receipt form)").pack(side="left", padx=20)
+        ttk.Button(pending_toolbar, text="🔄 Aggiorna Sospesi", command=self._refresh_pending_orders).pack(side="left", padx=5)
+        ttk.Label(pending_toolbar, text="(Doppio click per precompilare modulo ricevimento)").pack(side="left", padx=20)
         
         # Pending orders table
         pending_scroll = ttk.Scrollbar(pending_frame)
@@ -1027,26 +1027,26 @@ class DesktopOrderApp:
         self.pending_treeview.column("Pending", anchor=tk.CENTER, width=80)
         self.pending_treeview.column("Receipt Date", anchor=tk.CENTER, width=100)
         
-        self.pending_treeview.heading("Order ID", text="Order ID", anchor=tk.W)
+        self.pending_treeview.heading("Order ID", text="ID Ordine", anchor=tk.W)
         self.pending_treeview.heading("SKU", text="SKU", anchor=tk.W)
-        self.pending_treeview.heading("Description", text="Description", anchor=tk.W)
-        self.pending_treeview.heading("Qty Ordered", text="Qty Ordered", anchor=tk.CENTER)
-        self.pending_treeview.heading("Qty Received", text="Qty Received", anchor=tk.CENTER)
-        self.pending_treeview.heading("Pending", text="Pending", anchor=tk.CENTER)
-        self.pending_treeview.heading("Receipt Date", text="Expected Date", anchor=tk.CENTER)
+        self.pending_treeview.heading("Description", text="Descrizione", anchor=tk.W)
+        self.pending_treeview.heading("Qty Ordered", text="Q.tà Ordinata", anchor=tk.CENTER)
+        self.pending_treeview.heading("Qty Received", text="Q.tà Ricevuta", anchor=tk.CENTER)
+        self.pending_treeview.heading("Pending", text="In Sospeso", anchor=tk.CENTER)
+        self.pending_treeview.heading("Receipt Date", text="Data Prevista", anchor=tk.CENTER)
         
         self.pending_treeview.pack(fill="both", expand=True)
         self.pending_treeview.bind("<Double-1>", self._on_pending_order_double_click)
         
         # === CLOSE RECEIPT FORM (INLINE) ===
-        form_frame = ttk.LabelFrame(main_frame, text="Close Receipt (Idempotent)", padding=10)
+        form_frame = ttk.LabelFrame(main_frame, text="Chiudi Ricevimento (Idempotente)", padding=10)
         form_frame.pack(side="top", fill="x", pady=(0, 10))
         
         # Row 1: Receipt ID (auto + manual override)
         row1 = ttk.Frame(form_frame)
         row1.pack(side="top", fill="x", pady=5)
         
-        ttk.Label(row1, text="Receipt ID:", width=15).pack(side="left", padx=(0, 5))
+        ttk.Label(row1, text="ID Ricevimento:", width=15).pack(side="left", padx=(0, 5))
         self.receipt_id_var = tk.StringVar()
         self.receipt_id_entry = ttk.Entry(row1, textvariable=self.receipt_id_var, width=30, state="disabled")
         self.receipt_id_entry.pack(side="left", padx=(0, 10))
@@ -1054,12 +1054,12 @@ class DesktopOrderApp:
         self.auto_receipt_id_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             row1,
-            text="Auto-generate",
+            text="Auto-genera",
             variable=self.auto_receipt_id_var,
             command=self._toggle_receipt_id_entry,
         ).pack(side="left", padx=5)
         
-        ttk.Label(row1, text="Receipt Date:", width=15).pack(side="left", padx=(20, 5))
+        ttk.Label(row1, text="Data Ricevimento:", width=15).pack(side="left", padx=(20, 5))
         self.receipt_date_var = tk.StringVar(value=date.today().isoformat())
         ttk.Entry(row1, textvariable=self.receipt_date_var, width=15).pack(side="left", padx=(0, 5))
         
@@ -1072,7 +1072,7 @@ class DesktopOrderApp:
         self.receipt_sku_combo = ttk.Combobox(row2, textvariable=self.receipt_sku_var, width=20, state="readonly")
         self.receipt_sku_combo.pack(side="left", padx=(0, 10))
         
-        ttk.Label(row2, text="Qty Received:", width=15).pack(side="left", padx=(20, 5))
+        ttk.Label(row2, text="Q.tà Ricevuta:", width=15).pack(side="left", padx=(20, 5))
         self.receipt_qty_var = tk.StringVar()
         ttk.Entry(row2, textvariable=self.receipt_qty_var, width=15).pack(side="left", padx=(0, 5))
         
@@ -1080,7 +1080,7 @@ class DesktopOrderApp:
         row3 = ttk.Frame(form_frame)
         row3.pack(side="top", fill="x", pady=5)
         
-        ttk.Label(row3, text="Notes:", width=15).pack(side="left", padx=(0, 5))
+        ttk.Label(row3, text="Note:", width=15).pack(side="left", padx=(0, 5))
         self.receipt_notes_var = tk.StringVar()
         ttk.Entry(row3, textvariable=self.receipt_notes_var, width=60).pack(side="left", padx=(0, 5))
         
@@ -1088,24 +1088,24 @@ class DesktopOrderApp:
         row4 = ttk.Frame(form_frame)
         row4.pack(side="top", fill="x", pady=(10, 0))
         
-        ttk.Button(row4, text="✓ Close Receipt", command=self._close_receipt).pack(side="left", padx=5)
-        ttk.Button(row4, text="✗ Clear Form", command=self._clear_receipt_form).pack(side="left", padx=5)
-        ttk.Button(row4, text="🔄 Refresh SKU List", command=self._refresh_receipt_sku_list).pack(side="left", padx=5)
+        ttk.Button(row4, text="✓ Chiudi Ricevimento", command=self._close_receipt).pack(side="left", padx=5)
+        ttk.Button(row4, text="✗ Cancella Modulo", command=self._clear_receipt_form).pack(side="left", padx=5)
+        ttk.Button(row4, text="🔄 Aggiorna Elenco SKU", command=self._refresh_receipt_sku_list).pack(side="left", padx=5)
         
         # === RECEIVING HISTORY ===
-        history_frame = ttk.LabelFrame(main_frame, text="Receiving History", padding=5)
+        history_frame = ttk.LabelFrame(main_frame, text="Storico Ricevimenti", padding=5)
         history_frame.pack(side="top", fill="both", expand=True)
         
         # Toolbar
         history_toolbar = ttk.Frame(history_frame)
         history_toolbar.pack(side="top", fill="x", pady=(0, 5))
-        ttk.Button(history_toolbar, text="🔄 Refresh History", command=self._refresh_receiving_history).pack(side="left", padx=5)
+        ttk.Button(history_toolbar, text="🔄 Aggiorna Storico", command=self._refresh_receiving_history).pack(side="left", padx=5)
         
-        ttk.Label(history_toolbar, text="Filter SKU:").pack(side="left", padx=(20, 5))
+        ttk.Label(history_toolbar, text="Filtra SKU:").pack(side="left", padx=(20, 5))
         self.history_filter_sku_var = tk.StringVar()
         ttk.Entry(history_toolbar, textvariable=self.history_filter_sku_var, width=15).pack(side="left", padx=(0, 5))
-        ttk.Button(history_toolbar, text="Apply Filter", command=self._refresh_receiving_history).pack(side="left", padx=5)
-        ttk.Button(history_toolbar, text="Clear Filter", command=self._clear_history_filter).pack(side="left", padx=5)
+        ttk.Button(history_toolbar, text="Applica Filtro", command=self._refresh_receiving_history).pack(side="left", padx=5)
+        ttk.Button(history_toolbar, text="Cancella Filtro", command=self._clear_history_filter).pack(side="left", padx=5)
         
         # History table
         history_scroll = ttk.Scrollbar(history_frame)
@@ -1127,12 +1127,12 @@ class DesktopOrderApp:
         self.receiving_history_treeview.column("Receipt Date", anchor=tk.CENTER, width=100)
         self.receiving_history_treeview.column("Notes", anchor=tk.W, width=250)
         
-        self.receiving_history_treeview.heading("Receipt ID", text="Receipt ID", anchor=tk.W)
-        self.receiving_history_treeview.heading("Date", text="Date Logged", anchor=tk.CENTER)
+        self.receiving_history_treeview.heading("Receipt ID", text="ID Ricevimento", anchor=tk.W)
+        self.receiving_history_treeview.heading("Date", text="Data Registrazione", anchor=tk.CENTER)
         self.receiving_history_treeview.heading("SKU", text="SKU", anchor=tk.W)
-        self.receiving_history_treeview.heading("Qty Received", text="Qty Received", anchor=tk.CENTER)
-        self.receiving_history_treeview.heading("Receipt Date", text="Receipt Date", anchor=tk.CENTER)
-        self.receiving_history_treeview.heading("Notes", text="Notes", anchor=tk.W)
+        self.receiving_history_treeview.heading("Qty Received", text="Q.tà Ricevuta", anchor=tk.CENTER)
+        self.receiving_history_treeview.heading("Receipt Date", text="Data Ricevimento", anchor=tk.CENTER)
+        self.receiving_history_treeview.heading("Notes", text="Note", anchor=tk.W)
         
         self.receiving_history_treeview.pack(fill="both", expand=True)
         
@@ -1237,22 +1237,21 @@ class DesktopOrderApp:
         try:
             receipt_date_obj = date.fromisoformat(self.receipt_date_var.get())
         except ValueError:
-            messagebox.showerror("Validation Error", "Invalid receipt date format (use YYYY-MM-DD).")
+            messagebox.showerror("Errore di Validazione", "Formato data ricevimento non valido (usa YYYY-MM-DD).")
             return
         
         sku = self.receipt_sku_var.get().strip()
         if not sku:
-            messagebox.showerror("Validation Error", "Please select a SKU.")
+            messagebox.showerror("Errore di Validazione", "Seleziona uno SKU.")
             return
         
         try:
             qty = int(self.receipt_qty_var.get())
             if qty <= 0:
-                messagebox.showerror("Validation Error", "Quantity must be > 0.")
+                messagebox.showerror("Errore di Validazione", "La quantità deve essere > 0.")
                 return
         except ValueError:
-            messagebox.showerror("Validation Error", "Quantity must be an integer.")
-            return
+                messagebox.showerror("Errore di Validazione", "La quantità deve essere un numero intero.")
         
         # Generate or use manual receipt_id
         if self.auto_receipt_id_var.get():
@@ -1265,7 +1264,7 @@ class DesktopOrderApp:
         else:
             receipt_id = self.receipt_id_var.get().strip()
             if not receipt_id:
-                messagebox.showerror("Validation Error", "Please enter a receipt ID or enable auto-generate.")
+                messagebox.showerror("Errore di Validazione", "Inserisci un ID ricevimento o abilita auto-genera.")
                 return
         
         notes = self.receipt_notes_var.get().strip()
@@ -1281,13 +1280,13 @@ class DesktopOrderApp:
             
             if already_processed:
                 messagebox.showwarning(
-                    "Already Processed",
-                    f"Receipt {receipt_id} already processed (idempotent).\n\nNo changes made.",
+                    "Già Elaborato",
+                    f"Ricevimento {receipt_id} già elaborato (idempotente).\n\nNessuna modifica effettuata.",
                 )
             else:
                 messagebox.showinfo(
-                    "Success",
-                    f"Receipt closed successfully!\n\nReceipt ID: {receipt_id}\nSKU: {sku}\nQty: {qty}\n\n{len(transactions)} RECEIPT event(s) created.",
+                    "Successo",
+                    f"Ricevimento chiuso con successo!\n\nID Ricevimento: {receipt_id}\nSKU: {sku}\nQ.tà: {qty}\n\n{len(transactions)} evento/i RECEIPT creato/i.",
                 )
                 
                 # Clear form
@@ -1298,7 +1297,7 @@ class DesktopOrderApp:
                 self._refresh_receiving_history()
         
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to close receipt: {str(e)}")
+            messagebox.showerror("Errore", f"Impossibile chiudere ricevimento: {str(e)}")
     
     def _clear_receipt_form(self):
         """Clear receipt form."""
@@ -1364,17 +1363,17 @@ class DesktopOrderApp:
         # Title
         title_frame = ttk.Frame(main_frame)
         title_frame.pack(side="top", fill="x", pady=(0, 10))
-        ttk.Label(title_frame, text="Exception Management", font=("Helvetica", 14, "bold")).pack(side="left")
+        ttk.Label(title_frame, text="Gestione Eccezioni", font=("Helvetica", 14, "bold")).pack(side="left")
         
         # === QUICK ENTRY FORM (INLINE) ===
-        form_frame = ttk.LabelFrame(main_frame, text="Quick Entry", padding=10)
+        form_frame = ttk.LabelFrame(main_frame, text="Inserimento Rapido", padding=10)
         form_frame.pack(side="top", fill="x", pady=(0, 10))
         
         # Row 1: Event Type and SKU
         row1_frame = ttk.Frame(form_frame)
         row1_frame.pack(side="top", fill="x", pady=5)
         
-        ttk.Label(row1_frame, text="Event Type:", width=12).pack(side="left", padx=(0, 5))
+        ttk.Label(row1_frame, text="Tipo Evento:", width=12).pack(side="left", padx=(0, 5))
         self.exception_type_var = tk.StringVar(value="WASTE")
         exception_type_combo = ttk.Combobox(
             row1_frame,
@@ -1397,7 +1396,7 @@ class DesktopOrderApp:
         # Populate SKU dropdown
         self._populate_exception_sku_dropdown()
         
-        ttk.Label(row1_frame, text="Quantity:", width=8).pack(side="left", padx=(0, 5))
+        ttk.Label(row1_frame, text="Quantità:", width=8).pack(side="left", padx=(0, 5))
         self.exception_qty_var = tk.StringVar()
         ttk.Entry(row1_frame, textvariable=self.exception_qty_var, width=10).pack(side="left", padx=(0, 20))
         
@@ -1405,7 +1404,7 @@ class DesktopOrderApp:
         row2_frame = ttk.Frame(form_frame)
         row2_frame.pack(side="top", fill="x", pady=5)
         
-        ttk.Label(row2_frame, text="Date:", width=12).pack(side="left", padx=(0, 5))
+        ttk.Label(row2_frame, text="Data:", width=12).pack(side="left", padx=(0, 5))
         self.exception_date_var = tk.StringVar(value=self.exception_date.isoformat())
         ttk.Entry(row2_frame, textvariable=self.exception_date_var, width=15).pack(side="left", padx=(0, 20))
         
@@ -1417,28 +1416,28 @@ class DesktopOrderApp:
         row3_frame = ttk.Frame(form_frame)
         row3_frame.pack(side="top", fill="x", pady=5)
         
-        ttk.Button(row3_frame, text="✓ Submit Exception", command=self._submit_exception).pack(side="left", padx=5)
-        ttk.Button(row3_frame, text="✗ Clear Form", command=self._clear_exception_form).pack(side="left", padx=5)
+        ttk.Button(row3_frame, text="✓ Invia Eccezione", command=self._submit_exception).pack(side="left", padx=5)
+        ttk.Button(row3_frame, text="✗ Cancella Modulo", command=self._clear_exception_form).pack(side="left", padx=5)
         
         # === HISTORY TABLE ===
-        history_frame = ttk.LabelFrame(main_frame, text="Exception History", padding=5)
+        history_frame = ttk.LabelFrame(main_frame, text="Storico Eccezioni", padding=5)
         history_frame.pack(fill="both", expand=True)
         
         # Toolbar
         toolbar_frame = ttk.Frame(history_frame)
         toolbar_frame.pack(side="top", fill="x", pady=(0, 5))
         
-        ttk.Label(toolbar_frame, text="View Date:", font=("Helvetica", 9)).pack(side="left", padx=(0, 5))
+        ttk.Label(toolbar_frame, text="Visualizza Data:", font=("Helvetica", 9)).pack(side="left", padx=(0, 5))
         self.exception_view_date_var = tk.StringVar(value=self.exception_date.isoformat())
         ttk.Entry(toolbar_frame, textvariable=self.exception_view_date_var, width=15).pack(side="left", padx=(0, 5))
-        ttk.Button(toolbar_frame, text="🔄 Refresh", command=self._refresh_exception_tab).pack(side="left", padx=5)
-        ttk.Button(toolbar_frame, text="📅 Today", command=self._set_exception_today).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="🔄 Aggiorna", command=self._refresh_exception_tab).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="📅 Oggi", command=self._set_exception_today).pack(side="left", padx=5)
         
         # Separator
         ttk.Separator(toolbar_frame, orient="vertical").pack(side="left", fill="y", padx=10)
         
-        ttk.Button(toolbar_frame, text="🗑️ Revert Selected", command=self._revert_selected_exception).pack(side="left", padx=5)
-        ttk.Button(toolbar_frame, text="🗑️ Revert All...", command=self._revert_bulk_exceptions).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="🗑️ Annulla Selezionata", command=self._revert_selected_exception).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="🗑️ Annulla Tutte...", command=self._revert_bulk_exceptions).pack(side="left", padx=5)
         
         # Table
         table_frame = ttk.Frame(history_frame)
@@ -1494,23 +1493,23 @@ class DesktopOrderApp:
         notes = self.exception_notes_var.get().strip()
         
         if not sku:
-            messagebox.showerror("Validation Error", "Please select a SKU.")
+            messagebox.showerror("Errore di Validazione", "Seleziona uno SKU.")
             return
         
         if not qty_str:
-            messagebox.showerror("Validation Error", "Please enter a quantity.")
+            messagebox.showerror("Errore di Validazione", "Inserisci una quantità.")
             return
         
         try:
             qty = int(qty_str)
         except ValueError:
-            messagebox.showerror("Validation Error", "Quantity must be an integer.")
+            messagebox.showerror("Errore di Validazione", "La quantità deve essere un numero intero.")
             return
         
         try:
             event_date = date.fromisoformat(date_str)
         except ValueError:
-            messagebox.showerror("Validation Error", "Invalid date format. Use YYYY-MM-DD.")
+            messagebox.showerror("Errore di Validazione", "Formato data non valido. Usa YYYY-MM-DD.")
             return
         
         # Map string to EventType
@@ -1522,7 +1521,7 @@ class DesktopOrderApp:
         event_type = event_type_map.get(event_type_str)
         
         if not event_type:
-            messagebox.showerror("Error", f"Invalid event type: {event_type_str}")
+            messagebox.showerror("Errore", f"Tipo evento non valido: {event_type_str}")
             return
         
         # Record exception
@@ -1542,13 +1541,13 @@ class DesktopOrderApp:
                 )
             else:
                 messagebox.showinfo(
-                    "Success",
-                    f"Exception recorded successfully:\n{event_type_str} - {sku} - Qty: {qty}",
+                    "Successo",
+                    f"Eccezione registrata con successo:\n{event_type_str} - {sku} - Q.tà: {qty}",
                 )
                 self._clear_exception_form()
                 self._refresh_exception_tab()
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to record exception: {str(e)}")
+            messagebox.showerror("Errore", f"Impossibile registrare eccezione: {str(e)}")
     
     def _refresh_exception_tab(self):
         """Refresh exception history table."""
@@ -1556,7 +1555,7 @@ class DesktopOrderApp:
             view_date_str = self.exception_view_date_var.get()
             view_date = date.fromisoformat(view_date_str)
         except ValueError:
-            messagebox.showerror("Error", "Invalid view date format. Use YYYY-MM-DD.")
+            messagebox.showerror("Errore", "Formato data visualizzazione non valido. Usa YYYY-MM-DD.")
             return
         
         self.exception_treeview.delete(*self.exception_treeview.get_children())
@@ -1598,7 +1597,7 @@ class DesktopOrderApp:
         """Revert selected exception from table."""
         selected = self.exception_treeview.selection()
         if not selected:
-            messagebox.showwarning("No Selection", "Please select an exception to revert.")
+            messagebox.showwarning("Nessuna Selezione", "Seleziona un'eccezione da annullare.")
             return
         
         # Get selected exception data
@@ -1619,8 +1618,8 @@ class DesktopOrderApp:
         
         # Confirm revert
         confirm = messagebox.askyesno(
-            "Confirm Revert",
-            f"Revert all {event_type_str} exceptions for SKU '{sku}' on {date_str}?\n\nThis action cannot be undone.",
+            "Conferma Annullamento",
+            f"Annullare tutte le eccezioni {event_type_str} per SKU '{sku}' del {date_str}?\n\nQuesta azione non può essere annullata.",
         )
         if not confirm:
             return
@@ -1635,14 +1634,14 @@ class DesktopOrderApp:
             
             if reverted_count > 0:
                 messagebox.showinfo(
-                    "Success",
-                    f"Reverted {reverted_count} exception(s) for {event_type_str} - {sku} on {date_str}.",
+                    "Successo",
+                    f"Annullate {reverted_count} eccezione/i per {event_type_str} - {sku} del {date_str}.",
                 )
                 self._refresh_exception_tab()
             else:
-                messagebox.showwarning("No Changes", "No exceptions found to revert.")
+                messagebox.showwarning("Nessuna Modifica", "Nessuna eccezione trovata da annullare.")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to revert exception: {str(e)}")
+            messagebox.showerror("Errore", f"Impossibile annullare eccezione: {str(e)}")
     
     def _revert_bulk_exceptions(self):
         """Revert bulk exceptions with filters (popup dialog)."""
@@ -1693,13 +1692,13 @@ class DesktopOrderApp:
             date_str = bulk_date_var.get().strip()
             
             if not sku:
-                messagebox.showerror("Validation Error", "Please select a SKU.", parent=popup)
+                messagebox.showerror("Errore di Validazione", "Seleziona uno SKU.", parent=popup)
                 return
             
             try:
                 event_date = date.fromisoformat(date_str)
             except ValueError:
-                messagebox.showerror("Validation Error", "Invalid date format. Use YYYY-MM-DD.", parent=popup)
+                messagebox.showerror("Errore di Validazione", "Formato data non valido. Usa YYYY-MM-DD.", parent=popup)
                 return
             
             event_type_map = {
@@ -1727,8 +1726,8 @@ class DesktopOrderApp:
                 )
                 
                 messagebox.showinfo(
-                    "Success",
-                    f"Reverted {reverted_count} exception(s).",
+                    "Successo",
+                    f"Annullate {reverted_count} eccezione/i.",
                     parent=popup,
                 )
                 popup.destroy()
@@ -1748,18 +1747,18 @@ class DesktopOrderApp:
         # Title
         title_frame = ttk.Frame(main_frame)
         title_frame.pack(side="top", fill="x", pady=(0, 10))
-        ttk.Label(title_frame, text="SKU Management", font=("Helvetica", 14, "bold")).pack(side="left")
+        ttk.Label(title_frame, text="Gestione SKU", font=("Helvetica", 14, "bold")).pack(side="left")
         
         # Search bar
         search_frame = ttk.Frame(main_frame)
         search_frame.pack(side="top", fill="x", pady=(0, 5))
         
-        ttk.Label(search_frame, text="Search:").pack(side="left", padx=5)
+        ttk.Label(search_frame, text="Cerca:").pack(side="left", padx=5)
         self.search_var = tk.StringVar()
         self.search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=30)
         self.search_entry.pack(side="left", padx=5)
-        ttk.Button(search_frame, text="Search", command=self._search_skus).pack(side="left", padx=5)
-        ttk.Button(search_frame, text="Clear", command=self._clear_search).pack(side="left", padx=2)
+        ttk.Button(search_frame, text="Cerca", command=self._search_skus).pack(side="left", padx=5)
+        ttk.Button(search_frame, text="Cancella", command=self._clear_search).pack(side="left", padx=2)
         
         # Bind Enter key to search
         self.search_entry.bind("<Return>", lambda e: self._search_skus())
@@ -1768,10 +1767,10 @@ class DesktopOrderApp:
         toolbar_frame = ttk.Frame(main_frame)
         toolbar_frame.pack(side="top", fill="x", pady=(0, 5))
         
-        ttk.Button(toolbar_frame, text="➕ New SKU", command=self._new_sku).pack(side="left", padx=5)
-        ttk.Button(toolbar_frame, text="✏️ Edit SKU", command=self._edit_sku).pack(side="left", padx=5)
-        ttk.Button(toolbar_frame, text="🗑️ Delete SKU", command=self._delete_sku).pack(side="left", padx=5)
-        ttk.Button(toolbar_frame, text="🔄 Refresh", command=self._refresh_admin_tab).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="➕ Nuovo SKU", command=self._new_sku).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="✏️ Modifica SKU", command=self._edit_sku).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="🗑️ Elimina SKU", command=self._delete_sku).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="🔄 Aggiorna", command=self._refresh_admin_tab).pack(side="left", padx=5)
         
         # SKU table
         table_frame = ttk.Frame(main_frame)
@@ -1794,8 +1793,8 @@ class DesktopOrderApp:
         self.admin_treeview.column("Description", anchor=tk.W, width=400)
         self.admin_treeview.column("EAN", anchor=tk.W, width=150)
         
-        self.admin_treeview.heading("SKU", text="SKU Code", anchor=tk.W)
-        self.admin_treeview.heading("Description", text="Description", anchor=tk.W)
+        self.admin_treeview.heading("SKU", text="Codice SKU", anchor=tk.W)
+        self.admin_treeview.heading("Description", text="Descrizione", anchor=tk.W)
         self.admin_treeview.heading("EAN", text="EAN", anchor=tk.W)
         
         self.admin_treeview.pack(fill="both", expand=True)
@@ -1841,7 +1840,7 @@ class DesktopOrderApp:
         """Open form to edit selected SKU."""
         selected = self.admin_treeview.selection()
         if not selected:
-            messagebox.showwarning("No Selection", "Please select a SKU to edit.")
+            messagebox.showwarning("Nessuna Selezione", "Seleziona uno SKU da modificare.")
             return
         
         # Get selected SKU data
@@ -1855,7 +1854,7 @@ class DesktopOrderApp:
         """Delete selected SKU after confirmation."""
         selected = self.admin_treeview.selection()
         if not selected:
-            messagebox.showwarning("No Selection", "Please select a SKU to delete.")
+            messagebox.showwarning("Nessuna Selezione", "Seleziona uno SKU da eliminare.")
             return
         
         # Get selected SKU data
@@ -1866,13 +1865,13 @@ class DesktopOrderApp:
         # Check if can delete
         can_delete, reason = self.csv_layer.can_delete_sku(sku_code)
         if not can_delete:
-            messagebox.showerror("Cannot Delete", f"Cannot delete SKU:\n{reason}")
+            messagebox.showerror("Impossibile Eliminare", f"Impossibile eliminare SKU:\n{reason}")
             return
         
         # Confirm deletion
         confirm = messagebox.askyesno(
-            "Confirm Delete",
-            f"Are you sure you want to delete SKU '{sku_code}'?\n\nThis action cannot be undone.",
+            "Conferma Eliminazione",
+            f"Sei sicuro di voler eliminare lo SKU '{sku_code}'?\n\nQuesta azione non può essere annullata.",
         )
         if not confirm:
             return
@@ -1887,10 +1886,10 @@ class DesktopOrderApp:
                 sku=sku_code,
             )
             
-            messagebox.showinfo("Success", f"SKU '{sku_code}' deleted successfully.")
+            messagebox.showinfo("Successo", f"SKU '{sku_code}' eliminato con successo.")
             self._refresh_admin_tab()
         else:
-            messagebox.showerror("Error", f"Failed to delete SKU '{sku_code}'.")
+            messagebox.showerror("Errore", f"Impossibile eliminare SKU '{sku_code}'.")
     
     def _show_sku_form(self, mode="new", sku_code=None):
         """
@@ -1902,7 +1901,7 @@ class DesktopOrderApp:
         """
         # Create popup window
         popup = tk.Toplevel(self.root)
-        popup.title("New SKU" if mode == "new" else "Edit SKU")
+        popup.title("Nuovo SKU" if mode == "new" else "Modifica SKU")
         popup.geometry("600x500")
         popup.resizable(False, False)
         
@@ -1925,7 +1924,7 @@ class DesktopOrderApp:
                 return
         
         # SKU Code field
-        ttk.Label(form_frame, text="SKU Code:", font=("Helvetica", 10, "bold")).grid(
+        ttk.Label(form_frame, text="Codice SKU:", font=("Helvetica", 10, "bold")).grid(
             row=0, column=0, sticky="w", pady=5
         )
         sku_var = tk.StringVar(value=current_sku.sku if current_sku else "")
@@ -1933,7 +1932,7 @@ class DesktopOrderApp:
         sku_entry.grid(row=0, column=1, sticky="ew", pady=5, padx=(10, 0))
         
         # Description field
-        ttk.Label(form_frame, text="Description:", font=("Helvetica", 10, "bold")).grid(
+        ttk.Label(form_frame, text="Descrizione:", font=("Helvetica", 10, "bold")).grid(
             row=1, column=0, sticky="w", pady=5
         )
         desc_var = tk.StringVar(value=current_sku.description if current_sku else "")
@@ -1941,7 +1940,7 @@ class DesktopOrderApp:
         desc_entry.grid(row=1, column=1, sticky="ew", pady=5, padx=(10, 0))
         
         # EAN field
-        ttk.Label(form_frame, text="EAN (optional):", font=("Helvetica", 10, "bold")).grid(
+        ttk.Label(form_frame, text="EAN (opzionale):", font=("Helvetica", 10, "bold")).grid(
             row=2, column=0, sticky="w", pady=5
         )
         ean_var = tk.StringVar(value=current_sku.ean if current_sku and current_sku.ean else "")
@@ -1949,42 +1948,42 @@ class DesktopOrderApp:
         ean_entry.grid(row=2, column=1, sticky="ew", pady=5, padx=(10, 0))
         
         # MOQ field
-        ttk.Label(form_frame, text="MOQ:", font=("Helvetica", 10, "bold")).grid(
+        ttk.Label(form_frame, text="Q.tà Minima Ordine (MOQ):", font=("Helvetica", 10, "bold")).grid(
             row=3, column=0, sticky="w", pady=5
         )
         moq_var = tk.StringVar(value=str(current_sku.moq) if current_sku else "1")
         ttk.Entry(form_frame, textvariable=moq_var, width=40).grid(row=3, column=1, sticky="ew", pady=5, padx=(10, 0))
         
         # Lead Time field
-        ttk.Label(form_frame, text="Lead Time (days):", font=("Helvetica", 10, "bold")).grid(
+        ttk.Label(form_frame, text="Lead Time (giorni):", font=("Helvetica", 10, "bold")).grid(
             row=4, column=0, sticky="w", pady=5
         )
         lead_time_var = tk.StringVar(value=str(current_sku.lead_time_days) if current_sku else "7")
         ttk.Entry(form_frame, textvariable=lead_time_var, width=40).grid(row=4, column=1, sticky="ew", pady=5, padx=(10, 0))
         
         # Max Stock field
-        ttk.Label(form_frame, text="Max Stock:", font=("Helvetica", 10, "bold")).grid(
+        ttk.Label(form_frame, text="Stock Massimo:", font=("Helvetica", 10, "bold")).grid(
             row=5, column=0, sticky="w", pady=5
         )
         max_stock_var = tk.StringVar(value=str(current_sku.max_stock) if current_sku else "999")
         ttk.Entry(form_frame, textvariable=max_stock_var, width=40).grid(row=5, column=1, sticky="ew", pady=5, padx=(10, 0))
         
         # Reorder Point field
-        ttk.Label(form_frame, text="Reorder Point:", font=("Helvetica", 10, "bold")).grid(
+        ttk.Label(form_frame, text="Punto di Riordino:", font=("Helvetica", 10, "bold")).grid(
             row=6, column=0, sticky="w", pady=5
         )
         reorder_point_var = tk.StringVar(value=str(current_sku.reorder_point) if current_sku else "10")
         ttk.Entry(form_frame, textvariable=reorder_point_var, width=40).grid(row=6, column=1, sticky="ew", pady=5, padx=(10, 0))
         
         # Supplier field
-        ttk.Label(form_frame, text="Supplier:", font=("Helvetica", 10, "bold")).grid(
+        ttk.Label(form_frame, text="Fornitore:", font=("Helvetica", 10, "bold")).grid(
             row=7, column=0, sticky="w", pady=5
         )
         supplier_var = tk.StringVar(value=current_sku.supplier if current_sku else "")
         ttk.Entry(form_frame, textvariable=supplier_var, width=40).grid(row=7, column=1, sticky="ew", pady=5, padx=(10, 0))
         
         # Demand Variability field
-        ttk.Label(form_frame, text="Demand Variability:", font=("Helvetica", 10, "bold")).grid(
+        ttk.Label(form_frame, text="Variabilità Domanda:", font=("Helvetica", 10, "bold")).grid(
             row=8, column=0, sticky="w", pady=5
         )
         demand_var = tk.StringVar(value=current_sku.demand_variability.value if current_sku else "STABLE")
@@ -1995,7 +1994,7 @@ class DesktopOrderApp:
         ean_status_var = tk.StringVar(value="")
         ttk.Button(
             form_frame, 
-            text="Validate EAN", 
+            text="Valida EAN", 
             command=lambda: self._validate_ean_field(ean_var.get(), ean_status_var)
         ).grid(row=9, column=1, sticky="w", pady=5, padx=(10, 0))
         
@@ -2011,7 +2010,7 @@ class DesktopOrderApp:
         
         ttk.Button(
             button_frame,
-            text="Save",
+            text="Salva",
             command=lambda: self._save_sku_form(
                 popup, mode, sku_var.get(), desc_var.get(), ean_var.get(),
                 moq_var.get(), lead_time_var.get(), max_stock_var.get(),
@@ -2020,7 +2019,7 @@ class DesktopOrderApp:
             ),
         ).pack(side="right", padx=5)
         
-        ttk.Button(button_frame, text="Cancel", command=popup.destroy).pack(side="right", padx=5)
+        ttk.Button(button_frame, text="Annulla", command=popup.destroy).pack(side="right", padx=5)
         
         # Focus on first field
         if mode == "new":
@@ -2031,12 +2030,12 @@ class DesktopOrderApp:
     def _validate_ean_field(self, ean: str, status_var: tk.StringVar):
         """Validate EAN and update status label."""
         if not ean or not ean.strip():
-            status_var.set("✓ Empty EAN is valid")
+            status_var.set("✓ EAN vuoto è valido")
             return
         
         is_valid, error = validate_ean(ean.strip())
         if is_valid:
-            status_var.set("✓ Valid EAN")
+            status_var.set("✓ EAN Valido")
         else:
             status_var.set(f"✗ {error}")
     
@@ -2046,11 +2045,11 @@ class DesktopOrderApp:
         """Save SKU from form."""
         # Validate inputs
         if not sku_code or not sku_code.strip():
-            messagebox.showerror("Validation Error", "SKU code cannot be empty.", parent=popup)
+            messagebox.showerror("Errore di Validazione", "Il codice SKU non può essere vuoto.", parent=popup)
             return
         
         if not description or not description.strip():
-            messagebox.showerror("Validation Error", "Description cannot be empty.", parent=popup)
+            messagebox.showerror("Errore di Validazione", "La descrizione non può essere vuota.", parent=popup)
             return
         
         sku_code = sku_code.strip()
@@ -2065,7 +2064,7 @@ class DesktopOrderApp:
             max_stock = int(max_stock_str)
             reorder_point = int(reorder_point_str)
         except ValueError:
-            messagebox.showerror("Validation Error", "MOQ, Lead Time, Max Stock, and Reorder Point must be integers.", parent=popup)
+            messagebox.showerror("Errore di Validazione", "MOQ, Lead Time, Stock Massimo e Punto di Riordino devono essere numeri interi.", parent=popup)
             return
         
         # Parse demand variability
@@ -2079,15 +2078,15 @@ class DesktopOrderApp:
         if ean:
             is_valid, error = validate_ean(ean)
             if not is_valid:
-                messagebox.showerror("Invalid EAN", error, parent=popup)
+                messagebox.showerror("EAN Non Valido", error, parent=popup)
                 return
         
         # Check for duplicate SKU code (only for new or if code changed)
         if mode == "new" or (current_sku and sku_code != current_sku.sku):
             if self.csv_layer.sku_exists(sku_code):
                 messagebox.showerror(
-                    "Duplicate SKU",
-                    f"SKU code '{sku_code}' already exists. Please use a different code.",
+                    "SKU Duplicato",
+                    f"Il codice SKU '{sku_code}' esiste già. Usa un codice diverso.",
                     parent=popup,
                 )
                 return
@@ -2115,7 +2114,7 @@ class DesktopOrderApp:
                     sku=sku_code,
                 )
                 
-                messagebox.showinfo("Success", f"SKU '{sku_code}' created successfully.", parent=popup)
+                messagebox.showinfo("Successo", f"SKU '{sku_code}' creato con successo.", parent=popup)
             else:
                 # Update existing SKU
                 old_sku_code = current_sku.sku
@@ -2145,14 +2144,14 @@ class DesktopOrderApp:
                     
                     if old_sku_code != sku_code:
                         messagebox.showinfo(
-                            "Success",
-                            f"SKU updated successfully.\nSKU code changed from '{old_sku_code}' to '{sku_code}'.\nAll ledger references have been updated.",
+                            "Successo",
+                            f"SKU aggiornato con successo.\nCodice SKU cambiato da '{old_sku_code}' a '{sku_code}'.\nTutti i riferimenti nel ledger sono stati aggiornati.",
                             parent=popup,
                         )
                     else:
-                        messagebox.showinfo("Success", f"SKU '{sku_code}' updated successfully.", parent=popup)
+                        messagebox.showinfo("Successo", f"SKU '{sku_code}' aggiornato con successo.", parent=popup)
                 else:
-                    messagebox.showerror("Error", "Failed to update SKU.", parent=popup)
+                    messagebox.showerror("Errore", "Impossibile aggiornare SKU.", parent=popup)
                     return
             
             # Refresh table and close popup
@@ -2160,7 +2159,7 @@ class DesktopOrderApp:
             self._refresh_admin_tab()
             
         except ValueError as e:
-            messagebox.showerror("Error", str(e), parent=popup)
+            messagebox.showerror("Errore", str(e), parent=popup)
 
     
     def _refresh_stock_tab(self):
@@ -2341,7 +2340,7 @@ class DesktopOrderApp:
                         self.asof_date.isoformat(),
                     ])
             
-            messagebox.showinfo("Success", f"Stock snapshot exported to:\n{file_path}\n\n{len(sku_ids)} SKUs exported.")
+            messagebox.showinfo("Successo", f"Snapshot stock esportato in:\n{file_path}\n\n{len(sku_ids)} SKU esportati.")
             
             # Log export operation
             self.csv_layer.log_audit(
@@ -2351,7 +2350,7 @@ class DesktopOrderApp:
             )
         
         except Exception as e:
-            messagebox.showerror("Export Error", f"Failed to export stock snapshot: {str(e)}")
+            messagebox.showerror("Errore Esportazione", f"Impossibile esportare snapshot stock: {str(e)}")
     
     def _export_ledger(self):
         """Export ledger (transactions) as CSV."""
@@ -2382,7 +2381,7 @@ class DesktopOrderApp:
                         txn.note,
                     ])
             
-            messagebox.showinfo("Success", f"Ledger exported to:\n{file_path}\n\n{len(transactions)} transactions exported.")
+            messagebox.showinfo("Successo", f"Ledger esportato in:\n{file_path}\n\n{len(transactions)} transazioni esportate.")
             
             # Log export operation
             self.csv_layer.log_audit(
@@ -2392,7 +2391,7 @@ class DesktopOrderApp:
             )
         
         except Exception as e:
-            messagebox.showerror("Export Error", f"Failed to export ledger: {str(e)}")
+            messagebox.showerror("Errore Esportazione", f"Impossibile esportare ledger: {str(e)}")
     
     def _export_sku_list(self):
         """Export SKU list as CSV."""
@@ -2416,7 +2415,7 @@ class DesktopOrderApp:
                 for sku in skus:
                     writer.writerow([sku.sku, sku.description, sku.ean])
             
-            messagebox.showinfo("Success", f"SKU list exported to:\n{file_path}\n\n{len(skus)} SKUs exported.")
+            messagebox.showinfo("Successo", f"Elenco SKU esportato in:\n{file_path}\n\n{len(skus)} SKU esportati.")
             
             # Log export operation
             self.csv_layer.log_audit(
@@ -2426,7 +2425,7 @@ class DesktopOrderApp:
             )
         
         except Exception as e:
-            messagebox.showerror("Export Error", f"Failed to export SKU list: {str(e)}")
+            messagebox.showerror("Errore Esportazione", f"Impossibile esportare elenco SKU: {str(e)}")
     
     def _export_order_logs(self):
         """Export order logs as CSV."""
@@ -2457,7 +2456,7 @@ class DesktopOrderApp:
                         log.get("status", ""),
                     ])
             
-            messagebox.showinfo("Success", f"Order logs exported to:\n{file_path}\n\n{len(logs)} orders exported.")
+            messagebox.showinfo("Successo", f"Log ordini esportati in:\n{file_path}\n\n{len(logs)} ordini esportati.")
             
             # Log export operation
             self.csv_layer.log_audit(
@@ -2467,7 +2466,7 @@ class DesktopOrderApp:
             )
         
         except Exception as e:
-            messagebox.showerror("Export Error", f"Failed to export order logs: {str(e)}")
+            messagebox.showerror("Errore Esportazione", f"Impossibile esportare log ordini: {str(e)}")
     
     def _export_receiving_logs(self):
         """Export receiving logs as CSV."""
@@ -2497,7 +2496,7 @@ class DesktopOrderApp:
                         log.get("receipt_date", ""),
                     ])
             
-            messagebox.showinfo("Success", f"Receiving logs exported to:\n{file_path}\n\n{len(logs)} receipts exported.")
+            messagebox.showinfo("Successo", f"Log ricevimenti esportati in:\n{file_path}\n\n{len(logs)} ricevimenti esportati.")
             
             # Log export operation
             self.csv_layer.log_audit(
@@ -2507,7 +2506,7 @@ class DesktopOrderApp:
             )
         
         except Exception as e:
-            messagebox.showerror("Export Error", f"Failed to export receiving logs: {str(e)}")
+            messagebox.showerror("Errore Esportazione", f"Impossibile esportare log ricevimenti: {str(e)}")
     
     def _refresh_all(self):
         """Refresh all tabs."""
