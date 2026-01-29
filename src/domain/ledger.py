@@ -87,19 +87,23 @@ class StockCalculator:
             elif txn.event == EventType.ORDER:
                 on_order += txn.qty
             elif txn.event == EventType.RECEIPT:
-                on_order -= txn.qty
+                on_order = max(0, on_order - txn.qty)
                 on_hand += txn.qty
             elif txn.event == EventType.SALE:
-                on_hand -= txn.qty
+                on_hand = max(0, on_hand - txn.qty)
             elif txn.event == EventType.WASTE:
-                on_hand -= txn.qty
+                on_hand = max(0, on_hand - txn.qty)
             elif txn.event == EventType.ADJUST:
                 # ADJUST sostituisce on_hand con il valore specificato (come SNAPSHOT)
-                on_hand = txn.qty
+                on_hand = max(0, txn.qty)
             elif txn.event == EventType.UNFULFILLED:
                 # Reduce on_order for unfulfilled quantities (unshipped/cancelled)
                 # Protection: never go below zero
                 on_order = max(0, on_order - txn.qty)
+        
+        # Final protection: ensure non-negative values
+        on_hand = max(0, on_hand)
+        on_order = max(0, on_order)
         
         return Stock(sku=sku, on_hand=on_hand, on_order=on_order, asof_date=asof_date)
     

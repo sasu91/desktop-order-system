@@ -1,14 +1,14 @@
 date,sku,event,qty,receipt_date,note
-2025-12-30,SKU001,SNAPSHOT,100,,Inventario iniziale
-2025-12-30,SKU002,SNAPSHOT,200,,Inventario iniziale
-2025-12-30,SKU003,SNAPSHOT,150,,Inventario iniziale
-2025-12-30,SKU004,SNAPSHOT,240,,Inventario iniziale
-2025-12-30,SKU005,SNAPSHOT,160,,Inventario iniziale
-2025-12-30,SKU006,SNAPSHOT,120,,Inventario iniziale
-2025-12-30,SKU007,SNAPSHOT,80,,Inventario iniziale
-2025-12-30,SKU008,SNAPSHOT,180,,Inventario iniziale
-2025-12-30,SKU009,SNAPSHOT,300,,Inventario iniziale
-2025-12-30,SKU010,SNAPSHOT,400,,Inventario iniziale
+2025-12-30,SKU001,SNAPSHOT,300,,Inventario iniziale
+2025-12-30,SKU002,SNAPSHOT,600,,Inventario iniziale
+2025-12-30,SKU003,SNAPSHOT,400,,Inventario iniziale
+2025-12-30,SKU004,SNAPSHOT,500,,Inventario iniziale
+2025-12-30,SKU005,SNAPSHOT,300,,Inventario iniziale
+2025-12-30,SKU006,SNAPSHOT,250,,Inventario iniziale
+2025-12-30,SKU007,SNAPSHOT,200,,Inventario iniziale
+2025-12-30,SKU008,SNAPSHOT,300,,Inventario iniziale
+2025-12-30,SKU009,SNAPSHOT,800,,Inventario iniziale
+2025-12-30,SKU010,SNAPSHOT,1000,,Inventario iniziale
 2026-01-05,SKU001,ORDER,30,2026-01-12,Ordine fornitore Caffè Srl
 2026-01-05,SKU003,ORDER,50,2026-01-10,Ordine fornitore Dolciaria
 2026-01-10,SKU006,ORDER,40,2026-01-24,Ordine fornitore Oleificio
