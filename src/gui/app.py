@@ -36,6 +36,7 @@ from ..domain.ledger import StockCalculator, validate_ean
 from ..domain.models import SKU, EventType, OrderProposal, Stock
 from ..workflows.order import OrderWorkflow, calculate_daily_sales_average
 from ..workflows.receiving import ReceivingWorkflow, ExceptionWorkflow
+from .widgets import AutocompleteEntry
 
 
 class DesktopOrderApp:
@@ -1006,8 +1007,18 @@ class DesktopOrderApp:
         ttk.Button(pending_toolbar, text="🔄 Aggiorna Sospesi", command=self._refresh_pending_orders).pack(side="left", padx=5)
         ttk.Label(pending_toolbar, text="Cerca:").pack(side="left", padx=(20, 5))
         self.pending_search_var = tk.StringVar()
+        
+        # Autocomplete per SKU/descrizione
+        pending_search_ac = AutocompleteEntry(
+            pending_toolbar,
+            textvariable=self.pending_search_var,
+            items_callback=self._filter_pending_sku_items,
+            width=30
+        )
+        pending_search_ac.pack(side="left", padx=(0, 5))
+        # Override trace per gestire filtro tabella
         self.pending_search_var.trace('w', lambda *args: self._filter_pending_orders())
-        ttk.Entry(pending_toolbar, textvariable=self.pending_search_var, width=25).pack(side="left", padx=(0, 5))
+        
         ttk.Label(pending_toolbar, text="(SKU o Descrizione)").pack(side="left", padx=5)
         
         # Dizionario per quantità modificate in memoria: {tree_item_id: qty_received}
@@ -1068,7 +1079,15 @@ class DesktopOrderApp:
         
         ttk.Label(history_toolbar, text="Filtra SKU:").pack(side="left", padx=(20, 5))
         self.history_filter_sku_var = tk.StringVar()
-        ttk.Entry(history_toolbar, textvariable=self.history_filter_sku_var, width=15).pack(side="left", padx=(0, 5))
+        
+        # Autocomplete per SKU
+        history_filter_ac = AutocompleteEntry(
+            history_toolbar,
+            textvariable=self.history_filter_sku_var,
+            items_callback=self._filter_sku_items_simple,
+            width=25
+        )
+        history_filter_ac.pack(side="left", padx=(0, 5))
         ttk.Button(history_toolbar, text="Applica Filtro", command=self._refresh_receiving_history).pack(side="left", padx=5)
         ttk.Button(history_toolbar, text="Cancella Filtro", command=self._clear_history_filter).pack(side="left", padx=5)
         
@@ -1330,6 +1349,86 @@ class DesktopOrderApp:
         """Clear history filter and refresh."""
         self.history_filter_sku_var.set("")
         self._refresh_receiving_history()
+    
+    # === AUTOCOMPLETE CALLBACK METHODS ===
+    
+    def _filter_pending_sku_items(self, search_text: str) -> list:
+        """
+        Filtra SKU per autocomplete (codice + descrizione).
+        
+        Args:
+            search_text: Testo cercato dall'utente
+        
+        Returns:
+            Lista di stringhe formattate "SKU001 - Descrizione"
+        """
+        search_text = search_text.strip().lower()
+        
+        if not search_text:
+            # Se vuoto, mostra tutti gli SKU
+            skus = self.csv_layer.read_skus()
+            return [f"{s.sku} - {s.description}" for s in skus]
+        
+        # Filtra per match su codice o descrizione
+        skus = self.csv_layer.read_skus()
+        filtered = []
+        
+        for sku_obj in skus:
+            if (search_text in sku_obj.sku.lower() or 
+                search_text in sku_obj.description.lower()):
+                filtered.append(f"{sku_obj.sku} - {sku_obj.description}")
+        
+        return filtered
+    
+    def _filter_sku_items_simple(self, search_text: str) -> list:
+        """
+        Filtra SKU per autocomplete (solo codice SKU semplice).
+        
+        Args:
+            search_text: Testo cercato dall'utente
+        
+        Returns:
+            Lista di codici SKU
+        """
+        search_text = search_text.strip().lower()
+        
+        if not search_text:
+            return self.csv_layer.get_all_sku_ids()
+        
+        # Filtra per match su codice
+        all_skus = self.csv_layer.get_all_sku_ids()
+        return [sku for sku in all_skus if search_text in sku.lower()]
+    
+    def _filter_supplier_items(self, search_text: str) -> list:
+        """
+        Filtra fornitori per autocomplete (lista aperta: mostra esistenti + permette nuovi).
+        
+        Args:
+            search_text: Testo cercato dall'utente
+        
+        Returns:
+            Lista di fornitori unici filtrati + suggerimento se è nuovo
+        """
+        search_text = search_text.strip().lower()
+        
+        # Estrai fornitori unici da SKU esistenti
+        skus = self.csv_layer.read_skus()
+        unique_suppliers = sorted(set(
+            sku.supplier for sku in skus 
+            if sku.supplier and sku.supplier.strip()
+        ))
+        
+        if not search_text:
+            return unique_suppliers
+        
+        # Filtra fornitori che contengono il testo cercato
+        filtered = [s for s in unique_suppliers if search_text in s.lower()]
+        
+        # Se il testo non matcha nessun fornitore esistente, suggerisci come nuovo
+        if not filtered and search_text:
+            filtered.append(f"{search_text} (nuovo fornitore)")
+        
+        return filtered
     
     def _build_exception_tab(self):
         """Build Exception tab (WASTE, ADJUST, UNFULFILLED)."""
@@ -1883,12 +1982,17 @@ class DesktopOrderApp:
             width=30,
         ).pack(fill="x", pady=(0, 10))
         
-        # SKU
+        # SKU con autocomplete
         ttk.Label(form_frame, text="SKU:", font=("Helvetica", 10)).pack(anchor="w", pady=(0, 5))
         bulk_sku_var = tk.StringVar()
-        bulk_sku_combo = ttk.Combobox(form_frame, textvariable=bulk_sku_var, width=30)
-        bulk_sku_combo["values"] = self.csv_layer.get_all_sku_ids()
-        bulk_sku_combo.pack(fill="x", pady=(0, 10))
+        
+        bulk_sku_ac = AutocompleteEntry(
+            form_frame,
+            textvariable=bulk_sku_var,
+            items_callback=self._filter_pending_sku_items,
+            width=40
+        )
+        bulk_sku_ac.entry.pack(fill="x", pady=(0, 10))
         
         # Date
         ttk.Label(form_frame, text="Date:", font=("Helvetica", 10)).pack(anchor="w", pady=(0, 5))
@@ -1967,7 +2071,15 @@ class DesktopOrderApp:
         
         ttk.Label(search_frame, text="Cerca:").pack(side="left", padx=5)
         self.search_var = tk.StringVar()
-        self.search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=30)
+        
+        # Autocomplete per SKU con ricerca real-time
+        self.search_entry = AutocompleteEntry(
+            search_frame,
+            textvariable=self.search_var,
+            items_callback=self._filter_pending_sku_items,
+            width=35,
+            on_select=lambda selected: self._search_skus()  # Auto-search on select
+        )
         self.search_entry.pack(side="left", padx=5)
         ttk.Button(search_frame, text="Cerca", command=self._search_skus).pack(side="left", padx=5)
         ttk.Button(search_frame, text="Cancella", command=self._clear_search).pack(side="left", padx=2)
@@ -2187,12 +2299,19 @@ class DesktopOrderApp:
         reorder_point_var = tk.StringVar(value=str(current_sku.reorder_point) if current_sku else "10")
         ttk.Entry(form_frame, textvariable=reorder_point_var, width=40).grid(row=6, column=1, sticky="ew", pady=5, padx=(10, 0))
         
-        # Supplier field
+        # Supplier field con autocomplete
         ttk.Label(form_frame, text="Fornitore:", font=("Helvetica", 10, "bold")).grid(
             row=7, column=0, sticky="w", pady=5
         )
         supplier_var = tk.StringVar(value=current_sku.supplier if current_sku else "")
-        ttk.Entry(form_frame, textvariable=supplier_var, width=40).grid(row=7, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        supplier_ac = AutocompleteEntry(
+            form_frame,
+            textvariable=supplier_var,
+            items_callback=self._filter_supplier_items,
+            width=40
+        )
+        supplier_ac.entry.grid(row=7, column=1, sticky="ew", pady=5, padx=(10, 0))
         
         # Demand Variability field
         ttk.Label(form_frame, text="Variabilità Domanda:", font=("Helvetica", 10, "bold")).grid(
