@@ -98,7 +98,8 @@ class StockCalculator:
                 on_hand = txn.qty
             elif txn.event == EventType.UNFULFILLED:
                 # Reduce on_order for unfulfilled quantities (unshipped/cancelled)
-                on_order -= txn.qty
+                # Protection: never go below zero
+                on_order = max(0, on_order - txn.qty)
         
         return Stock(sku=sku, on_hand=on_hand, on_order=on_order, asof_date=asof_date)
     

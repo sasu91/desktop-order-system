@@ -113,13 +113,17 @@ class ReceivingWorkflow:
             qty_ordered = qty_ordered_map.get(sku, 0)
             qty_unfulfilled = qty_ordered - qty_received
             
-            if qty_unfulfilled > 0:
+            # Only create UNFULFILLED if:
+            # 1. There was an actual order (qty_ordered > 0)
+            # 2. Received less than ordered (qty_unfulfilled > 0)
+            # 3. Protection: never create UNFULFILLED > qty_ordered
+            if qty_ordered > 0 and qty_unfulfilled > 0:
                 # Create UNFULFILLED event
                 txn_unfulfilled = Transaction(
                     date=today,
                     sku=sku,
                     event=EventType.UNFULFILLED,
-                    qty=qty_unfulfilled,
+                    qty=min(qty_unfulfilled, qty_ordered),  # Safety cap
                     note=f"Auto-generated for receipt {receipt_id}; qty_ordered={qty_ordered}, qty_received={qty_received}",
                 )
                 transactions.append(txn_unfulfilled)
