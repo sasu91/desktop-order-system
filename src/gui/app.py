@@ -1511,13 +1511,17 @@ class DesktopOrderApp:
         self.exception_sku_combo["values"] = filtered
         
         # Apri tendina automaticamente se ci sono risultati
-        if filtered:
-            def open_dropdown_keep_focus():
-                self.exception_sku_combo.event_generate("<Down>")
-                # Mantieni il focus nel campo combobox per continuare a digitare
-                self.exception_sku_combo.focus_set()
-            
-            self.exception_sku_combo.after(50, open_dropdown_keep_focus)
+        if filtered and len(search_text) > 0:
+            try:
+                # Salva la posizione del cursore
+                cursor_pos = self.exception_sku_combo.index(tk.INSERT)
+                # Apri il dropdown usando il metodo interno di Tkinter
+                self.exception_sku_combo.tk.call("ttk::combobox::Post", self.exception_sku_combo)
+                # Ripristina il focus e la posizione del cursore
+                self.exception_sku_combo.icursor(cursor_pos)
+            except Exception:
+                # Fallback: apri senza gestire il cursore
+                pass
     
     def _on_exception_type_change(self, event=None):
         """Aggiorna hint dinamico quando cambia tipo evento."""
