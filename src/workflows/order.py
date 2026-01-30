@@ -63,11 +63,19 @@ class OrderWorkflow:
         lead_time = sku_obj.lead_time_days if sku_obj else self.lead_time_days
         review_period = sku_obj.review_period if sku_obj else 7
         safety_stock = sku_obj.safety_stock if sku_obj else 0
+        shelf_life_days = sku_obj.shelf_life_days if sku_obj else 0
         max_stock = sku_obj.max_stock if sku_obj else 999
         
         # NEW FORMULA: S = forecast × (lead_time + review_period) + safety_stock
         forecast_period = lead_time + review_period
         S = int(daily_sales_avg * forecast_period) + safety_stock
+        
+        # Check shelf life warning (if shelf_life_days > 0)
+        shelf_life_warning = False
+        if shelf_life_days > 0 and daily_sales_avg > 0:
+            shelf_life_capacity = int(daily_sales_avg * shelf_life_days)
+            if S > shelf_life_capacity:
+                shelf_life_warning = True
         
         # proposed = max(0, S − (on_hand + on_order))
         available_inventory = current_stock.on_hand + current_stock.on_order
@@ -95,6 +103,8 @@ class OrderWorkflow:
         receipt_date = date.today() + timedelta(days=lead_time)
         
         notes = f"S={S} (forecast={int(daily_sales_avg * forecast_period)}+safety={safety_stock}), Available={available_inventory}, Pack={pack_size}, MOQ={moq}, Max={max_stock}"
+        if shelf_life_warning:
+            notes += f" ⚠️ SHELF LIFE: Target S={S} exceeds {shelf_life_days}d capacity"
         
         return OrderProposal(
             sku=sku,
@@ -105,6 +115,7 @@ class OrderWorkflow:
             proposed_qty=proposed_qty,
             receipt_date=receipt_date,
             notes=notes,
+            shelf_life_warning=shelf_life_warning,
         )
     
     def confirm_order(

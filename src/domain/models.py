@@ -44,6 +44,7 @@ class SKU:
     lead_time_days: int = 7         # Delivery lead time in days
     review_period: int = 7          # Review period in days (for forecast calculation)
     safety_stock: int = 0           # Safety stock quantity
+    shelf_life_days: int = 0        # Shelf life in days (0 = no expiry/non-perishable)
     max_stock: int = 999            # Maximum stock level
     reorder_point: int = 10         # Reorder trigger point
     supplier: str = ""              # Default supplier
@@ -64,6 +65,8 @@ class SKU:
             raise ValueError("Review period cannot be negative")
         if self.safety_stock < 0:
             raise ValueError("Safety stock cannot be negative")
+        if self.shelf_life_days < 0:
+            raise ValueError("Shelf life cannot be negative")
         if self.max_stock < 1:
             raise ValueError("Max stock must be >= 1")
         if self.reorder_point < 0:
@@ -139,6 +142,7 @@ class OrderProposal:
     proposed_qty: int
     receipt_date: Optional[date] = None
     notes: Optional[str] = None
+    shelf_life_warning: bool = False  # True if proposed qty exceeds shelf life capacity
 
 
 @dataclass

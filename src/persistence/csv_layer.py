@@ -22,7 +22,7 @@ class CSVLayer:
     
     # CSV file schemas (filename -> list of columns)
     SCHEMAS = {
-        "skus.csv": ["sku", "description", "ean", "moq", "pack_size", "lead_time_days", "review_period", "safety_stock", "max_stock", "reorder_point", "supplier", "demand_variability"],
+        "skus.csv": ["sku", "description", "ean", "moq", "pack_size", "lead_time_days", "review_period", "safety_stock", "shelf_life_days", "max_stock", "reorder_point", "supplier", "demand_variability"],
         "transactions.csv": ["date", "sku", "event", "qty", "receipt_date", "note"],
         "sales.csv": ["date", "sku", "qty_sold"],
         "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "status"],
@@ -110,6 +110,7 @@ class CSVLayer:
                     lead_time_days=int(row.get("lead_time_days", "7")),
                     review_period=int(row.get("review_period", "7")),
                     safety_stock=int(row.get("safety_stock", "0")),
+                    shelf_life_days=int(row.get("shelf_life_days", "0")),
                     max_stock=int(row.get("max_stock", "999")),
                     reorder_point=int(row.get("reorder_point", "10")),
                     supplier=row.get("supplier", "").strip(),
@@ -153,6 +154,7 @@ class CSVLayer:
             "lead_time_days": str(final_sku.lead_time_days),
             "review_period": str(final_sku.review_period),
             "safety_stock": str(final_sku.safety_stock),
+            "shelf_life_days": str(final_sku.shelf_life_days),
             "max_stock": str(final_sku.max_stock),
             "reorder_point": str(final_sku.reorder_point),
             "supplier": final_sku.supplier,
@@ -201,6 +203,7 @@ class CSVLayer:
         lead_time_days: int = 7,
         review_period: int = 7,
         safety_stock: int = 0,
+        shelf_life_days: int = 0,
         max_stock: int = 999,
         reorder_point: int = 10,
         supplier: str = "",
@@ -220,6 +223,7 @@ class CSVLayer:
             lead_time_days: Lead time in days
             review_period: Review period in days
             safety_stock: Safety stock quantity
+            shelf_life_days: Shelf life in days (0 = no expiry)
             max_stock: Maximum stock level
             reorder_point: Reorder trigger point
             supplier: Default supplier
@@ -241,6 +245,7 @@ class CSVLayer:
                 row["lead_time_days"] = str(lead_time_days)
                 row["review_period"] = str(review_period)
                 row["safety_stock"] = str(safety_stock)
+                row["shelf_life_days"] = str(shelf_life_days)
                 row["max_stock"] = str(max_stock)
                 row["reorder_point"] = str(reorder_point)
                 row["supplier"] = supplier

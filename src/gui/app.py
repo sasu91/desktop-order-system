@@ -855,7 +855,7 @@ class DesktopOrderApp:
         ttk.Button(buttons_row, text="✗ Cancella Proposte", command=self._clear_proposals).pack(side="left", padx=5)
         
         # === PROPOSALS TABLE (EDITABLE) ===
-        proposal_frame = ttk.LabelFrame(main_frame, text="Proposte Ordine (Doppio click su Q.tà Proposta per modificare)", padding=5)
+        proposal_frame = ttk.LabelFrame(main_frame, text="Proposte Ordine (Doppio click su Colli Proposti per modificare)", padding=5)
         proposal_frame.pack(fill="both", expand=True, pady=(0, 10))
         
         # Scrollbar
@@ -864,27 +864,25 @@ class DesktopOrderApp:
         
         self.proposal_treeview = ttk.Treeview(
             proposal_frame,
-            columns=("SKU", "Description", "On Hand", "On Order", "Avg Sales", "Proposed Qty", "Receipt Date"),
+            columns=("SKU", "Description", "Pack Size", "Colli Proposti", "Pezzi Proposti", "Receipt Date"),
             height=10,
             yscrollcommand=scrollbar.set,
         )
         scrollbar.config(command=self.proposal_treeview.yview)
         
         self.proposal_treeview.column("#0", width=0, stretch=tk.NO)
-        self.proposal_treeview.column("SKU", anchor=tk.W, width=80)
-        self.proposal_treeview.column("Description", anchor=tk.W, width=200)
-        self.proposal_treeview.column("On Hand", anchor=tk.CENTER, width=80)
-        self.proposal_treeview.column("On Order", anchor=tk.CENTER, width=80)
-        self.proposal_treeview.column("Avg Sales", anchor=tk.CENTER, width=90)
-        self.proposal_treeview.column("Proposed Qty", anchor=tk.CENTER, width=100)
-        self.proposal_treeview.column("Receipt Date", anchor=tk.CENTER, width=100)
+        self.proposal_treeview.column("SKU", anchor=tk.W, width=100)
+        self.proposal_treeview.column("Description", anchor=tk.W, width=250)
+        self.proposal_treeview.column("Pack Size", anchor=tk.CENTER, width=80)
+        self.proposal_treeview.column("Colli Proposti", anchor=tk.CENTER, width=120)
+        self.proposal_treeview.column("Pezzi Proposti", anchor=tk.CENTER, width=120)
+        self.proposal_treeview.column("Receipt Date", anchor=tk.CENTER, width=120)
         
         self.proposal_treeview.heading("SKU", text="SKU", anchor=tk.W)
         self.proposal_treeview.heading("Description", text="Descrizione", anchor=tk.W)
-        self.proposal_treeview.heading("On Hand", text="Disponibile", anchor=tk.CENTER)
-        self.proposal_treeview.heading("On Order", text="In Ordine", anchor=tk.CENTER)
-        self.proposal_treeview.heading("Avg Sales", text="Vendite Medie/Giorno", anchor=tk.CENTER)
-        self.proposal_treeview.heading("Proposed Qty", text="Q.tà Proposta", anchor=tk.CENTER)
+        self.proposal_treeview.heading("Pack Size", text="Pz/Collo", anchor=tk.CENTER)
+        self.proposal_treeview.heading("Colli Proposti", text="Colli Proposti", anchor=tk.CENTER)
+        self.proposal_treeview.heading("Pezzi Proposti", text="Pezzi Totali", anchor=tk.CENTER)
         self.proposal_treeview.heading("Receipt Date", text="Data Ricevimento", anchor=tk.CENTER)
         
         self.proposal_treeview.pack(fill="both", expand=True)
@@ -898,12 +896,12 @@ class DesktopOrderApp:
         
         info_row = ttk.Frame(confirm_frame)
         info_row.pack(side="top", fill="x", pady=(0, 10))
-        ttk.Label(info_row, text="Seleziona proposte con Q.tà Proposta > 0 sopra, poi clicca Conferma per creare ordini.").pack(side="left")
+        ttk.Label(info_row, text="Seleziona proposte con Colli Proposti > 0 sopra, poi clicca Conferma per creare ordini.").pack(side="left")
         
         buttons_row = ttk.Frame(confirm_frame)
         buttons_row.pack(side="top", fill="x")
         
-        ttk.Button(buttons_row, text="✓ Conferma Tutti gli Ordini (Q.tà > 0)", command=self._confirm_orders).pack(side="left", padx=5)
+        ttk.Button(buttons_row, text="✓ Conferma Tutti gli Ordini (Colli > 0)", command=self._confirm_orders).pack(side="left", padx=5)
     
     def _generate_all_proposals(self):
         """Generate order proposals for all SKUs using settings or user input."""
@@ -975,15 +973,21 @@ class DesktopOrderApp:
         self.proposal_treeview.delete(*self.proposal_treeview.get_children())
         
         for proposal in self.current_proposals:
+            # Get SKU object for pack_size
+            sku_obj = next((s for s in self.csv_layer.read_skus() if s.sku == proposal.sku), None)
+            pack_size = sku_obj.pack_size if sku_obj else 1
+            
+            # Calculate colli from pezzi
+            colli_proposti = proposal.proposed_qty // pack_size if pack_size > 0 else proposal.proposed_qty
+            
             self.proposal_treeview.insert(
                 "",
                 "end",
                 values=(
                     proposal.sku,
                     proposal.description,
-                    proposal.current_on_hand,
-                    proposal.current_on_order,
-                    f"{proposal.daily_sales_avg:.1f}",
+                    pack_size,
+                    colli_proposti,
                     proposal.proposed_qty,
                     proposal.receipt_date.isoformat() if proposal.receipt_date else "",
                 ),
@@ -999,7 +1003,7 @@ class DesktopOrderApp:
         self.proposal_treeview.delete(*self.proposal_treeview.get_children())
     
     def _on_proposal_double_click(self, event):
-        """Handle double-click on proposal row to edit Proposed Qty."""
+        """Handle double-click on proposal row to edit Proposed Qty (in colli)."""
         selected = self.proposal_treeview.selection()
         if not selected:
             return
@@ -1007,7 +1011,6 @@ class DesktopOrderApp:
         item = self.proposal_treeview.item(selected[0])
         values = item["values"]
         sku = values[0]
-        current_qty = values[5]
         
         # Find proposal
         proposal = next((p for p in self.current_proposals if p.sku == sku), None)
@@ -1018,10 +1021,14 @@ class DesktopOrderApp:
         self._edit_proposed_qty_dialog(proposal, selected[0])
     
     def _edit_proposed_qty_dialog(self, proposal, tree_item_id):
-        """Show dialog to edit proposed quantity."""
+        """Show dialog to edit proposed quantity in colli."""
+        # Get SKU object for pack_size
+        sku_obj = next((s for s in self.csv_layer.read_skus() if s.sku == proposal.sku), None)
+        pack_size = sku_obj.pack_size if sku_obj else 1
+        
         popup = tk.Toplevel(self.root)
-        popup.title(f"Edit Proposed Qty - {proposal.sku}")
-        popup.geometry("400x200")
+        popup.title(f"Modifica Colli Proposti - {proposal.sku}")
+        popup.geometry("450x250")
         popup.resizable(False, False)
         popup.transient(self.root)
         popup.grab_set()
@@ -1032,34 +1039,39 @@ class DesktopOrderApp:
         
         ttk.Label(form_frame, text=f"SKU: {proposal.sku}", font=("Helvetica", 10, "bold")).pack(anchor="w", pady=5)
         ttk.Label(form_frame, text=f"Descrizione: {proposal.description}").pack(anchor="w", pady=5)
-        ttk.Label(form_frame, text=f"Q.tà Proposta Attuale: {proposal.proposed_qty}").pack(anchor="w", pady=5)
+        ttk.Label(form_frame, text=f"Pezzi per Collo: {pack_size}").pack(anchor="w", pady=5)
         
-        ttk.Label(form_frame, text="Nuova Q.tà Proposta:", font=("Helvetica", 10)).pack(anchor="w", pady=(15, 5))
-        new_qty_var = tk.StringVar(value=str(proposal.proposed_qty))
-        qty_entry = ttk.Entry(form_frame, textvariable=new_qty_var, width=20)
-        qty_entry.pack(anchor="w", pady=(0, 15))
-        qty_entry.focus()
+        current_colli = proposal.proposed_qty // pack_size if pack_size > 0 else proposal.proposed_qty
+        ttk.Label(form_frame, text=f"Colli Proposti Attuali: {current_colli} ({proposal.proposed_qty} pezzi)").pack(anchor="w", pady=5)
+        
+        ttk.Label(form_frame, text="Nuovi Colli da Ordinare:", font=("Helvetica", 10)).pack(anchor="w", pady=(15, 5))
+        new_colli_var = tk.StringVar(value=str(current_colli))
+        colli_entry = ttk.Entry(form_frame, textvariable=new_colli_var, width=20)
+        colli_entry.pack(anchor="w", pady=(0, 15))
+        colli_entry.focus()
         
         def save_qty():
             try:
-                new_qty = int(new_qty_var.get())
-                if new_qty < 0:
-                    messagebox.showerror("Errore di Validazione", "La quantità deve essere >= 0.", parent=popup)
+                new_colli = int(new_colli_var.get())
+                if new_colli < 0:
+                    messagebox.showerror("Errore di Validazione", "I colli devono essere >= 0.", parent=popup)
                     return
                 
-                # Update proposal
-                proposal.proposed_qty = new_qty
+                # Convert colli to pezzi
+                new_pezzi = new_colli * pack_size
                 
-                # Update tree item
+                # Update proposal (store in pezzi)
+                proposal.proposed_qty = new_pezzi
+                
+                # Update tree item (show colli)
                 self.proposal_treeview.item(
                     tree_item_id,
                     values=(
                         proposal.sku,
                         proposal.description,
-                        proposal.current_on_hand,
-                        proposal.current_on_order,
-                        f"{proposal.daily_sales_avg:.1f}",
-                        proposal.proposed_qty,
+                        pack_size,
+                        new_colli,
+                        new_pezzi,
                         proposal.receipt_date.isoformat() if proposal.receipt_date else "",
                     ),
                 )
@@ -1333,7 +1345,7 @@ class DesktopOrderApp:
         
         self.pending_treeview = ttk.Treeview(
             pending_frame,
-            columns=("Order ID", "SKU", "Description", "Qty Ordered", "Qty Received", "Pending", "Receipt Date"),
+            columns=("Order ID", "SKU", "Description", "Pack Size", "Colli Ordinati", "Colli Ricevuti", "Colli Sospesi", "Receipt Date"),
             height=6,
             yscrollcommand=pending_scroll.set,
         )
@@ -1343,17 +1355,19 @@ class DesktopOrderApp:
         self.pending_treeview.column("Order ID", anchor=tk.W, width=120)
         self.pending_treeview.column("SKU", anchor=tk.W, width=80)
         self.pending_treeview.column("Description", anchor=tk.W, width=180)
-        self.pending_treeview.column("Qty Ordered", anchor=tk.CENTER, width=100)
-        self.pending_treeview.column("Qty Received", anchor=tk.CENTER, width=110)
-        self.pending_treeview.column("Pending", anchor=tk.CENTER, width=80)
+        self.pending_treeview.column("Pack Size", anchor=tk.CENTER, width=80)
+        self.pending_treeview.column("Colli Ordinati", anchor=tk.CENTER, width=110)
+        self.pending_treeview.column("Colli Ricevuti", anchor=tk.CENTER, width=110)
+        self.pending_treeview.column("Colli Sospesi", anchor=tk.CENTER, width=110)
         self.pending_treeview.column("Receipt Date", anchor=tk.CENTER, width=100)
         
         self.pending_treeview.heading("Order ID", text="ID Ordine", anchor=tk.W)
         self.pending_treeview.heading("SKU", text="SKU", anchor=tk.W)
         self.pending_treeview.heading("Description", text="Descrizione", anchor=tk.W)
-        self.pending_treeview.heading("Qty Ordered", text="Q.tà Ordinata", anchor=tk.CENTER)
-        self.pending_treeview.heading("Qty Received", text="Q.tà Ricevuta", anchor=tk.CENTER)
-        self.pending_treeview.heading("Pending", text="In Sospeso", anchor=tk.CENTER)
+        self.pending_treeview.heading("Pack Size", text="Pz/Collo", anchor=tk.CENTER)
+        self.pending_treeview.heading("Colli Ordinati", text="Colli Ordinati", anchor=tk.CENTER)
+        self.pending_treeview.heading("Colli Ricevuti", text="Colli Ricevuti", anchor=tk.CENTER)
+        self.pending_treeview.heading("Colli Sospesi", text="Colli Sospesi", anchor=tk.CENTER)
         self.pending_treeview.heading("Receipt Date", text="Data Prevista", anchor=tk.CENTER)
         
         self.pending_treeview.pack(fill="both", expand=True)
@@ -2625,23 +2639,30 @@ class DesktopOrderApp:
         safety_stock_var = tk.StringVar(value=str(current_sku.safety_stock) if current_sku else "0")
         ttk.Entry(form_frame, textvariable=safety_stock_var, width=40).grid(row=7, column=1, sticky="ew", pady=5, padx=(10, 0))
         
-        # Max Stock field
-        ttk.Label(form_frame, text="Stock Massimo:", font=("Helvetica", 10, "bold")).grid(
+        # Shelf Life field
+        ttk.Label(form_frame, text="Shelf Life (giorni, 0=no scadenza):", font=("Helvetica", 10, "bold")).grid(
             row=8, column=0, sticky="w", pady=5
         )
+        shelf_life_var = tk.StringVar(value=str(current_sku.shelf_life_days) if current_sku else "0")
+        ttk.Entry(form_frame, textvariable=shelf_life_var, width=40).grid(row=8, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # Max Stock field
+        ttk.Label(form_frame, text="Stock Massimo:", font=("Helvetica", 10, "bold")).grid(
+            row=9, column=0, sticky="w", pady=5
+        )
         max_stock_var = tk.StringVar(value=str(current_sku.max_stock) if current_sku else "999")
-        ttk.Entry(form_frame, textvariable=max_stock_var, width=40).grid(row=8, column=1, sticky="ew", pady=5, padx=(10, 0))
+        ttk.Entry(form_frame, textvariable=max_stock_var, width=40).grid(row=9, column=1, sticky="ew", pady=5, padx=(10, 0))
         
         # Reorder Point field
         ttk.Label(form_frame, text="Punto di Riordino:", font=("Helvetica", 10, "bold")).grid(
-            row=9, column=0, sticky="w", pady=5
+            row=10, column=0, sticky="w", pady=5
         )
         reorder_point_var = tk.StringVar(value=str(current_sku.reorder_point) if current_sku else "10")
-        ttk.Entry(form_frame, textvariable=reorder_point_var, width=40).grid(row=9, column=1, sticky="ew", pady=5, padx=(10, 0))
+        ttk.Entry(form_frame, textvariable=reorder_point_var, width=40).grid(row=10, column=1, sticky="ew", pady=5, padx=(10, 0))
         
         # Supplier field con autocomplete
         ttk.Label(form_frame, text="Fornitore:", font=("Helvetica", 10, "bold")).grid(
-            row=10, column=0, sticky="w", pady=5
+            row=11, column=0, sticky="w", pady=5
         )
         supplier_var = tk.StringVar(value=current_sku.supplier if current_sku else "")
         
@@ -2651,15 +2672,15 @@ class DesktopOrderApp:
             items_callback=self._filter_supplier_items,
             width=40
         )
-        supplier_ac.entry.grid(row=10, column=1, sticky="ew", pady=5, padx=(10, 0))
+        supplier_ac.entry.grid(row=11, column=1, sticky="ew", pady=5, padx=(10, 0))
         
         # Demand Variability field
         ttk.Label(form_frame, text="Variabilità Domanda:", font=("Helvetica", 10, "bold")).grid(
-            row=11, column=0, sticky="w", pady=5
+            row=12, column=0, sticky="w", pady=5
         )
         demand_var = tk.StringVar(value=current_sku.demand_variability.value if current_sku else "STABLE")
         demand_combo = ttk.Combobox(form_frame, textvariable=demand_var, values=["STABLE", "LOW", "HIGH", "SEASONAL"], state="readonly", width=37)
-        demand_combo.grid(row=11, column=1, sticky="ew", pady=5, padx=(10, 0))
+        demand_combo.grid(row=12, column=1, sticky="ew", pady=5, padx=(10, 0))
         
         # Validate EAN button and status label
         ean_status_var = tk.StringVar(value="")
@@ -2667,10 +2688,10 @@ class DesktopOrderApp:
             form_frame, 
             text="Valida EAN", 
             command=lambda: self._validate_ean_field(ean_var.get(), ean_status_var)
-        ).grid(row=12, column=1, sticky="w", pady=5, padx=(10, 0))
+        ).grid(row=13, column=1, sticky="w", pady=5, padx=(10, 0))
         
         ean_status_label = ttk.Label(form_frame, textvariable=ean_status_var, foreground="green")
-        ean_status_label.grid(row=13, column=1, sticky="w", padx=(10, 0))
+        ean_status_label.grid(row=14, column=1, sticky="w", padx=(10, 0))
         
         # Configure grid
         form_frame.columnconfigure(1, weight=1)
@@ -2685,9 +2706,9 @@ class DesktopOrderApp:
             command=lambda: self._save_sku_form(
                 popup, mode, sku_var.get(), desc_var.get(), ean_var.get(),
                 moq_var.get(), pack_size_var.get(), lead_time_var.get(), 
-                review_period_var.get(), safety_stock_var.get(), max_stock_var.get(),
-                reorder_point_var.get(), supplier_var.get(), demand_var.get(),
-                current_sku
+                review_period_var.get(), safety_stock_var.get(), shelf_life_var.get(),
+                max_stock_var.get(), reorder_point_var.get(), supplier_var.get(), 
+                demand_var.get(), current_sku
             ),
         ).pack(side="right", padx=5)
         
@@ -2713,7 +2734,7 @@ class DesktopOrderApp:
     
     def _save_sku_form(self, popup, mode, sku_code, description, ean,
                         moq_str, pack_size_str, lead_time_str, review_period_str, 
-                        safety_stock_str, max_stock_str, reorder_point_str,
+                        safety_stock_str, shelf_life_str, max_stock_str, reorder_point_str,
                         supplier, demand_variability_str, current_sku):
         """Save SKU from form."""
         # Validate inputs
@@ -2737,6 +2758,7 @@ class DesktopOrderApp:
             lead_time_days = int(lead_time_str)
             review_period = int(review_period_str)
             safety_stock = int(safety_stock_str)
+            shelf_life_days = int(shelf_life_str)
             max_stock = int(max_stock_str)
             reorder_point = int(reorder_point_str)
         except ValueError:
@@ -2744,7 +2766,7 @@ class DesktopOrderApp:
             return
         
         # Validate positive values
-        if any(v < 0 for v in [moq, pack_size, lead_time_days, review_period, safety_stock, max_stock, reorder_point]):
+        if any(v < 0 for v in [moq, pack_size, lead_time_days, review_period, safety_stock, shelf_life_days, max_stock, reorder_point]):
             messagebox.showerror("Errore di Validazione", "I valori numerici non possono essere negativi.", parent=popup)
             return
         
@@ -2788,6 +2810,7 @@ class DesktopOrderApp:
                     lead_time_days=lead_time_days,
                     review_period=review_period,
                     safety_stock=safety_stock,
+                    shelf_life_days=shelf_life_days,
                     max_stock=max_stock,
                     reorder_point=reorder_point,
                     supplier=supplier,
@@ -2796,9 +2819,10 @@ class DesktopOrderApp:
                 self.csv_layer.write_sku(new_sku)
                 
                 # Log audit trail
+                shelf_msg = f", Shelf Life: {shelf_life_days}d" if shelf_life_days > 0 else ""
                 self.csv_layer.log_audit(
                     operation="SKU_CREATE",
-                    details=f"Created SKU: {description} (Pack: {pack_size}, MOQ: {moq}, Lead Time: {lead_time_days}d, Review: {review_period}d, Safety: {safety_stock})",
+                    details=f"Created SKU: {description} (Pack: {pack_size}, MOQ: {moq}, Lead: {lead_time_days}d, Review: {review_period}d, Safety: {safety_stock}{shelf_msg})",
                     sku=sku_code,
                 )
                 
@@ -2809,7 +2833,7 @@ class DesktopOrderApp:
                 success = self.csv_layer.update_sku(
                     old_sku_code, sku_code, description, ean,
                     moq, pack_size, lead_time_days, review_period, 
-                    safety_stock, max_stock, reorder_point,
+                    safety_stock, shelf_life_days, max_stock, reorder_point,
                     supplier, demand_variability
                 )
                 if success:
@@ -2827,6 +2851,8 @@ class DesktopOrderApp:
                         changes.append(f"Review: {current_sku.review_period}d → {review_period}d")
                     if current_sku.safety_stock != safety_stock:
                         changes.append(f"Safety: {current_sku.safety_stock} → {safety_stock}")
+                    if current_sku.shelf_life_days != shelf_life_days:
+                        changes.append(f"Shelf Life: {current_sku.shelf_life_days}d → {shelf_life_days}d")
                     
                     change_details = ", ".join(changes) if changes else "No changes"
                     
