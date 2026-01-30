@@ -40,42 +40,61 @@ class OrderWorkflow:
         """
         Generate order proposal based on stock and sales history.
         
+        NEW FORMULA (2026-01-29):
+        S = forecast × (lead_time + review_period) + safety_stock
+        proposed = max(0, S − (on_hand + on_order))
+        Then: apply pack_size rounding → MOQ rounding → cap at max_stock
+        
         Args:
             sku: SKU identifier
             description: SKU description
             current_stock: Current stock state (on_hand, on_order)
             daily_sales_avg: Average daily sales (from historical data)
-            min_stock: Minimum stock threshold (global default or SKU-specific reorder_point)
-            days_cover: Days of sales to cover with on_order
-            sku_obj: SKU object (for MOQ, lead_time_days, reorder_point)
+            min_stock: Minimum stock threshold (global default, overridden by SKU reorder_point)
+            days_cover: Days of sales to cover (DEPRECATED, now uses lead_time + review_period)
+            sku_obj: SKU object (for pack_size, MOQ, lead_time, review_period, safety_stock, max_stock)
         
         Returns:
-            OrderProposal with suggested quantity (adjusted for MOQ)
-        
-        Logic:
-            target = reorder_point + (daily_sales_avg * days_cover)
-            available = current_stock.on_hand + current_stock.on_order
-            proposed_qty_raw = max(0, target - available)
-            proposed_qty = round up to nearest MOQ multiple
+            OrderProposal with suggested quantity (adjusted for pack_size, MOQ, and max_stock cap)
         """
         # Use SKU-specific parameters if available
+        pack_size = sku_obj.pack_size if sku_obj else 1
         moq = sku_obj.moq if sku_obj else 1
         lead_time = sku_obj.lead_time_days if sku_obj else self.lead_time_days
-        reorder_point = sku_obj.reorder_point if sku_obj else min_stock
+        review_period = sku_obj.review_period if sku_obj else 7
+        safety_stock = sku_obj.safety_stock if sku_obj else 0
+        max_stock = sku_obj.max_stock if sku_obj else 999
         
-        target_inventory = reorder_point + int(daily_sales_avg * days_cover)
+        # NEW FORMULA: S = forecast × (lead_time + review_period) + safety_stock
+        forecast_period = lead_time + review_period
+        S = int(daily_sales_avg * forecast_period) + safety_stock
+        
+        # proposed = max(0, S − (on_hand + on_order))
         available_inventory = current_stock.on_hand + current_stock.on_order
-        proposed_qty_raw = max(0, target_inventory - available_inventory)
+        proposed_qty_raw = max(0, S - available_inventory)
         
-        # Apply MOQ: round up to nearest multiple
-        if proposed_qty_raw > 0 and moq > 1:
-            proposed_qty = ((proposed_qty_raw + moq - 1) // moq) * moq
+        # Apply pack_size rounding (round up to nearest pack_size multiple)
+        if proposed_qty_raw > 0 and pack_size > 1:
+            proposed_qty = ((proposed_qty_raw + pack_size - 1) // pack_size) * pack_size
         else:
             proposed_qty = proposed_qty_raw
         
+        # Apply MOQ rounding (round up to nearest MOQ multiple)
+        if proposed_qty > 0 and moq > 1:
+            proposed_qty = ((proposed_qty + moq - 1) // moq) * moq
+        
+        # Cap at max_stock
+        if available_inventory + proposed_qty > max_stock:
+            proposed_qty = max(0, max_stock - available_inventory)
+            # Re-apply pack_size and MOQ constraints after capping
+            if proposed_qty > 0 and pack_size > 1:
+                proposed_qty = (proposed_qty // pack_size) * pack_size  # Round down
+            if proposed_qty > 0 and moq > 1 and proposed_qty < moq:
+                proposed_qty = 0  # Can't meet MOQ without exceeding max_stock
+        
         receipt_date = date.today() + timedelta(days=lead_time)
         
-        notes = f"Target: {target_inventory} units, Available: {available_inventory}, MOQ: {moq}, Lead time: {lead_time}d"
+        notes = f"S={S} (forecast={int(daily_sales_avg * forecast_period)}+safety={safety_stock}), Available={available_inventory}, Pack={pack_size}, MOQ={moq}, Max={max_stock}"
         
         return OrderProposal(
             sku=sku,
@@ -161,24 +180,65 @@ def calculate_daily_sales_average(
     sales_records,
     sku: str,
     days_lookback: int = 30,
+    transactions=None,
+    asof_date: date = None,
 ) -> float:
     """
-    Calculate average daily sales for a SKU from sales records.
+    Calculate average daily sales for a SKU using calendar-based approach.
+    
+    NEW BEHAVIOR (2026-01-29):
+    - Uses real calendar days (30 days = 30 data points, including zeros)
+    - Excludes days when SKU was out-of-stock (on_hand + on_order == 0)
+    - More accurate forecast for irregular sales patterns
     
     Args:
         sales_records: List of SalesRecord objects
         sku: SKU identifier
-        days_lookback: Number of days to look back
+        days_lookback: Number of calendar days to look back (default: 30)
+        transactions: List of Transaction objects (for OOS detection)
+        asof_date: As-of date for calculation (defaults to today)
     
     Returns:
-        Average daily sales qty
+        Average daily sales qty (excluding OOS days)
+    
+    Example:
+        If last 30 days have 10 days with sales, 15 days zero, 5 days OOS:
+        avg = sum(sales_10_days) / 25  (excludes 5 OOS days)
     """
-    sku_sales = [s for s in sales_records if s.sku == sku]
+    from ..domain.ledger import StockCalculator
     
-    if not sku_sales:
-        return 0.0
+    if asof_date is None:
+        asof_date = date.today()
     
-    total_qty = sum(s.qty_sold for s in sku_sales[-days_lookback:])
-    days = min(len(sku_sales), days_lookback)
+    # Build sales map: {date: qty_sold}
+    sku_sales_map = {}
+    for s in sales_records:
+        if s.sku == sku:
+            sku_sales_map[s.date] = sku_sales_map.get(s.date, 0) + s.qty_sold
     
-    return total_qty / days if days > 0 else 0.0
+    # Generate calendar days range
+    start_date = asof_date - timedelta(days=days_lookback - 1)
+    calendar_days = [start_date + timedelta(days=i) for i in range(days_lookback)]
+    
+    # Detect OOS days (if transactions provided)
+    oos_days = set()
+    if transactions:
+        for day in calendar_days:
+            stock = StockCalculator.calculate_asof(sku, day, transactions, sales_records)
+            if stock.on_hand + stock.on_order == 0:
+                oos_days.add(day)
+    
+    # Calculate average excluding OOS days
+    total_sales = 0
+    valid_days = 0
+    
+    for day in calendar_days:
+        if day in oos_days:
+            continue  # Skip OOS days
+        
+        # Include day with sales qty (or zero if no sales)
+        total_sales += sku_sales_map.get(day, 0)
+        valid_days += 1
+    
+    return total_sales / valid_days if valid_days > 0 else 0.0
+

@@ -22,7 +22,7 @@ class CSVLayer:
     
     # CSV file schemas (filename -> list of columns)
     SCHEMAS = {
-        "skus.csv": ["sku", "description", "ean", "moq", "lead_time_days", "max_stock", "reorder_point", "supplier", "demand_variability"],
+        "skus.csv": ["sku", "description", "ean", "moq", "pack_size", "lead_time_days", "review_period", "safety_stock", "max_stock", "reorder_point", "supplier", "demand_variability"],
         "transactions.csv": ["date", "sku", "event", "qty", "receipt_date", "note"],
         "sales.csv": ["date", "sku", "qty_sold"],
         "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "status"],
@@ -106,7 +106,10 @@ class CSVLayer:
                     ean=row.get("ean", "").strip() or None,
                     # New parameters with defaults for backward-compatibility
                     moq=int(row.get("moq", "1")),
+                    pack_size=int(row.get("pack_size", "1")),
                     lead_time_days=int(row.get("lead_time_days", "7")),
+                    review_period=int(row.get("review_period", "7")),
+                    safety_stock=int(row.get("safety_stock", "0")),
                     max_stock=int(row.get("max_stock", "999")),
                     reorder_point=int(row.get("reorder_point", "10")),
                     supplier=row.get("supplier", "").strip(),
@@ -146,7 +149,10 @@ class CSVLayer:
             "description": final_sku.description,
             "ean": final_sku.ean or "",
             "moq": str(final_sku.moq),
+            "pack_size": str(final_sku.pack_size),
             "lead_time_days": str(final_sku.lead_time_days),
+            "review_period": str(final_sku.review_period),
+            "safety_stock": str(final_sku.safety_stock),
             "max_stock": str(final_sku.max_stock),
             "reorder_point": str(final_sku.reorder_point),
             "supplier": final_sku.supplier,
@@ -191,7 +197,10 @@ class CSVLayer:
         new_description: str, 
         new_ean: Optional[str],
         moq: int = 1,
+        pack_size: int = 1,
         lead_time_days: int = 7,
+        review_period: int = 7,
+        safety_stock: int = 0,
         max_stock: int = 999,
         reorder_point: int = 10,
         supplier: str = "",
@@ -207,7 +216,10 @@ class CSVLayer:
             new_description: New description
             new_ean: New EAN (or None)
             moq: Minimum Order Quantity
+            pack_size: Pack size for order rounding
             lead_time_days: Lead time in days
+            review_period: Review period in days
+            safety_stock: Safety stock quantity
             max_stock: Maximum stock level
             reorder_point: Reorder trigger point
             supplier: Default supplier
@@ -225,7 +237,10 @@ class CSVLayer:
                 row["description"] = new_description
                 row["ean"] = new_ean or ""
                 row["moq"] = str(moq)
+                row["pack_size"] = str(pack_size)
                 row["lead_time_days"] = str(lead_time_days)
+                row["review_period"] = str(review_period)
+                row["safety_stock"] = str(safety_stock)
                 row["max_stock"] = str(max_stock)
                 row["reorder_point"] = str(reorder_point)
                 row["supplier"] = supplier

@@ -40,7 +40,10 @@ class SKU:
     
     # Order parameters
     moq: int = 1                    # Minimum Order Quantity
+    pack_size: int = 1              # Pack size for order rounding (applied before MOQ)
     lead_time_days: int = 7         # Delivery lead time in days
+    review_period: int = 7          # Review period in days (for forecast calculation)
+    safety_stock: int = 0           # Safety stock quantity
     max_stock: int = 999            # Maximum stock level
     reorder_point: int = 10         # Reorder trigger point
     supplier: str = ""              # Default supplier
@@ -53,8 +56,14 @@ class SKU:
             raise ValueError("Description cannot be empty")
         if self.moq < 1:
             raise ValueError("MOQ must be >= 1")
+        if self.pack_size < 1:
+            raise ValueError("Pack size must be >= 1")
         if self.lead_time_days < 1 or self.lead_time_days > 365:
             raise ValueError("Lead time must be between 1 and 365 days")
+        if self.review_period < 0:
+            raise ValueError("Review period cannot be negative")
+        if self.safety_stock < 0:
+            raise ValueError("Safety stock cannot be negative")
         if self.max_stock < 1:
             raise ValueError("Max stock must be >= 1")
         if self.reorder_point < 0:
