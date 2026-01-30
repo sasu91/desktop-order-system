@@ -1231,7 +1231,7 @@ class DesktopOrderApp:
         ttk.Button(button_frame, text="Annulla", command=popup.destroy).pack(side="right", padx=5)
         
         # Bind Enter to save
-        qty_entry.bind("<Return>", lambda e: save_qty())
+        colli_entry.bind("<Return>", lambda e: save_qty())
     
     def _confirm_orders(self):
         """Confirm all orders with qty > 0."""
