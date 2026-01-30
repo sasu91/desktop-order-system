@@ -143,6 +143,21 @@ class OrderProposal:
     receipt_date: Optional[date] = None
     notes: Optional[str] = None
     shelf_life_warning: bool = False  # True if proposed qty exceeds shelf life capacity
+    
+    # Calculation details (for transparency in UI)
+    forecast_period_days: int = 0  # lead_time + review_period
+    forecast_qty: int = 0  # daily_sales_avg × forecast_period
+    lead_time_demand: int = 0  # daily_sales_avg × lead_time
+    safety_stock: int = 0
+    target_S: int = 0  # forecast + safety_stock
+    inventory_position: int = 0  # on_hand + on_order
+    proposed_qty_before_rounding: int = 0  # max(0, S - inventory_position)
+    pack_size: int = 1
+    moq: int = 1
+    max_stock: int = 999
+    shelf_life_days: int = 0
+    capped_by_max_stock: bool = False
+    capped_by_shelf_life: bool = False
 
 
 @dataclass

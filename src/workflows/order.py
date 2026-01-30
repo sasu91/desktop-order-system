@@ -68,10 +68,13 @@ class OrderWorkflow:
         
         # NEW FORMULA: S = forecast × (lead_time + review_period) + safety_stock
         forecast_period = lead_time + review_period
-        S = int(daily_sales_avg * forecast_period) + safety_stock
+        forecast_qty = int(daily_sales_avg * forecast_period)
+        lead_time_demand = int(daily_sales_avg * lead_time)
+        S = forecast_qty + safety_stock
         
         # Check shelf life warning (if shelf_life_days > 0)
         shelf_life_warning = False
+        capped_by_shelf_life = False
         if shelf_life_days > 0 and daily_sales_avg > 0:
             shelf_life_capacity = int(daily_sales_avg * shelf_life_days)
             if S > shelf_life_capacity:
@@ -80,6 +83,7 @@ class OrderWorkflow:
         # proposed = max(0, S − (on_hand + on_order))
         available_inventory = current_stock.on_hand + current_stock.on_order
         proposed_qty_raw = max(0, S - available_inventory)
+        proposed_qty_before_rounding = proposed_qty_raw
         
         # Apply pack_size rounding (round up to nearest pack_size multiple)
         if proposed_qty_raw > 0 and pack_size > 1:
@@ -92,7 +96,9 @@ class OrderWorkflow:
             proposed_qty = ((proposed_qty + moq - 1) // moq) * moq
         
         # Cap at max_stock
+        capped_by_max_stock = False
         if available_inventory + proposed_qty > max_stock:
+            capped_by_max_stock = True
             proposed_qty = max(0, max_stock - available_inventory)
             # Re-apply pack_size and MOQ constraints after capping
             if proposed_qty > 0 and pack_size > 1:
@@ -102,7 +108,7 @@ class OrderWorkflow:
         
         receipt_date = date.today() + timedelta(days=lead_time)
         
-        notes = f"S={S} (forecast={int(daily_sales_avg * forecast_period)}+safety={safety_stock}), Available={available_inventory}, Pack={pack_size}, MOQ={moq}, Max={max_stock}"
+        notes = f"S={S} (forecast={forecast_qty}+safety={safety_stock}), Available={available_inventory}, Pack={pack_size}, MOQ={moq}, Max={max_stock}"
         if shelf_life_warning:
             notes += f" ⚠️ SHELF LIFE: Target S={S} exceeds {shelf_life_days}d capacity"
         
@@ -116,6 +122,20 @@ class OrderWorkflow:
             receipt_date=receipt_date,
             notes=notes,
             shelf_life_warning=shelf_life_warning,
+            # Calculation details
+            forecast_period_days=forecast_period,
+            forecast_qty=forecast_qty,
+            lead_time_demand=lead_time_demand,
+            safety_stock=safety_stock,
+            target_S=S,
+            inventory_position=available_inventory,
+            proposed_qty_before_rounding=proposed_qty_before_rounding,
+            pack_size=pack_size,
+            moq=moq,
+            max_stock=max_stock,
+            shelf_life_days=shelf_life_days,
+            capped_by_max_stock=capped_by_max_stock,
+            capped_by_shelf_life=capped_by_shelf_life,
         )
     
     def confirm_order(

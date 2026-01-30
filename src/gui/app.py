@@ -855,8 +855,13 @@ class DesktopOrderApp:
         ttk.Button(buttons_row, text="✗ Cancella Proposte", command=self._clear_proposals).pack(side="left", padx=5)
         
         # === PROPOSALS TABLE (EDITABLE) ===
-        proposal_frame = ttk.LabelFrame(main_frame, text="Proposte Ordine (Doppio click su Colli Proposti per modificare)", padding=5)
-        proposal_frame.pack(fill="both", expand=True, pady=(0, 10))
+        # Create horizontal split: table on left, details sidebar on right
+        split_frame = ttk.Frame(main_frame)
+        split_frame.pack(fill="both", expand=True, pady=(0, 10))
+        
+        # Left side: proposals table
+        proposal_frame = ttk.LabelFrame(split_frame, text="Proposte Ordine (Doppio click su Colli Proposti per modificare)", padding=5)
+        proposal_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
         
         # Scrollbar
         scrollbar = ttk.Scrollbar(proposal_frame)
@@ -887,8 +892,18 @@ class DesktopOrderApp:
         
         self.proposal_treeview.pack(fill="both", expand=True)
         
-        # Bind double-click to edit
+        # Bind double-click to edit and single-click to show details
         self.proposal_treeview.bind("<Double-1>", self._on_proposal_double_click)
+        self.proposal_treeview.bind("<<TreeviewSelect>>", self._on_proposal_select)
+        
+        # Right side: details sidebar
+        details_frame = ttk.LabelFrame(split_frame, text="Dettagli Calcolo", padding=10)
+        details_frame.pack(side="right", fill="both", padx=(5, 0))
+        details_frame.config(width=350)
+        
+        # Details text widget (read-only)
+        self.proposal_details_text = tk.Text(details_frame, wrap="word", width=40, height=20, state="disabled", font=("Courier", 9))
+        self.proposal_details_text.pack(fill="both", expand=True)
         
         # === CONFIRMATION SECTION ===
         confirm_frame = ttk.LabelFrame(main_frame, text="Conferma Ordini", padding=10)
@@ -902,6 +917,135 @@ class DesktopOrderApp:
         buttons_row.pack(side="top", fill="x")
         
         ttk.Button(buttons_row, text="✓ Conferma Tutti gli Ordini (Colli > 0)", command=self._confirm_orders).pack(side="left", padx=5)
+    
+    def _on_proposal_select(self, event):
+        """Handle selection of proposal to show calculation details."""
+        selected = self.proposal_treeview.selection()
+        if not selected:
+            # Clear details if no selection
+            self.proposal_details_text.config(state="normal")
+            self.proposal_details_text.delete("1.0", tk.END)
+            self.proposal_details_text.config(state="disabled")
+            return
+        
+        item = self.proposal_treeview.item(selected[0])
+        values = item["values"]
+        sku = values[0]
+        
+        # Find proposal
+        proposal = next((p for p in self.current_proposals if p.sku == sku), None)
+        if not proposal:
+            return
+        
+        # Get SKU object for pack_size
+        sku_obj = next((s for s in self.csv_layer.read_skus() if s.sku == proposal.sku), None)
+        pack_size = sku_obj.pack_size if sku_obj else 1
+        
+        # Format details in colli where applicable
+        def to_colli(pezzi, pack):
+            """Convert pezzi to colli (rounded down) with remainder."""
+            if pack <= 1:
+                return f"{pezzi} pz"
+            colli = pezzi // pack
+            remainder = pezzi % pack
+            if remainder > 0:
+                return f"{colli} colli + {remainder} pz"
+            return f"{colli} colli"
+        
+        # Build details text
+        details = []
+        details.append(f"SKU: {proposal.sku}")
+        details.append(f"Descrizione: {proposal.description}")
+        details.append("")
+        
+        # Forecast
+        details.append("═══ FORECAST ═══")
+        details.append(f"Periodo: {proposal.forecast_period_days} giorni")
+        details.append(f"  (Lead Time: {sku_obj.lead_time_days if sku_obj else 0}d + Review: {sku_obj.review_period if sku_obj else 0}d)")
+        details.append(f"Media vendite giornaliere: {proposal.daily_sales_avg:.2f} pz/gg")
+        details.append(f"Forecast qty: {to_colli(proposal.forecast_qty, pack_size)}")
+        details.append("")
+        
+        # Lead Time Demand
+        details.append("═══ LEAD TIME DEMAND ═══")
+        details.append(f"Lead Time: {sku_obj.lead_time_days if sku_obj else 0} giorni")
+        details.append(f"Domanda in Lead Time: {to_colli(proposal.lead_time_demand, pack_size)}")
+        details.append("")
+        
+        # Safety Stock
+        details.append("═══ SAFETY STOCK ═══")
+        details.append(f"Safety Stock: {to_colli(proposal.safety_stock, pack_size)}")
+        details.append("")
+        
+        # Target S
+        details.append("═══ TARGET S ═══")
+        details.append(f"S = Forecast + Safety")
+        details.append(f"S = {to_colli(proposal.target_S, pack_size)}")
+        details.append("")
+        
+        # Inventory Position
+        details.append("═══ INVENTORY POSITION ═══")
+        details.append(f"On Hand: {to_colli(proposal.current_on_hand, pack_size)}")
+        details.append(f"On Order: {to_colli(proposal.current_on_order, pack_size)}")
+        details.append(f"Totale Disponibile: {to_colli(proposal.inventory_position, pack_size)}")
+        details.append("")
+        
+        # Proposed Qty
+        details.append("═══ QTY PROPOSTA ═══")
+        details.append(f"Qty grezza (S - Disponibile):")
+        details.append(f"  {to_colli(proposal.proposed_qty_before_rounding, pack_size)}")
+        details.append("")
+        
+        # Rounding
+        details.append("═══ ARROTONDAMENTI ═══")
+        details.append(f"Pack Size: {pack_size} pz/collo")
+        details.append(f"MOQ: {proposal.moq} pz")
+        if proposal.proposed_qty != proposal.proposed_qty_before_rounding:
+            details.append(f"Dopo arrotondamento:")
+            details.append(f"  {to_colli(proposal.proposed_qty, pack_size)}")
+        else:
+            details.append("Nessun arrotondamento necessario")
+        details.append("")
+        
+        # Caps
+        details.append("═══ CAP (MAX/SHELF-LIFE) ═══")
+        details.append(f"Max Stock: {to_colli(proposal.max_stock, pack_size)}")
+        if proposal.shelf_life_days > 0:
+            shelf_capacity = int(proposal.daily_sales_avg * proposal.shelf_life_days)
+            details.append(f"Shelf Life: {proposal.shelf_life_days} giorni")
+            details.append(f"Capacità Shelf Life: {to_colli(shelf_capacity, pack_size)}")
+            if proposal.shelf_life_warning:
+                details.append("⚠️ WARNING: S > Capacità Shelf Life")
+        else:
+            details.append("Shelf Life: Non impostata")
+        
+        if proposal.capped_by_max_stock:
+            details.append("✓ Cap applicato: Max Stock raggiunto")
+        else:
+            details.append("Cap non applicato")
+        details.append("")
+        
+        # Final motivation
+        details.append("═══ MOTIVAZIONE FINALE ═══")
+        if proposal.proposed_qty == 0:
+            if proposal.inventory_position >= proposal.target_S:
+                details.append("Stock sufficiente (Disponibile ≥ S)")
+            else:
+                details.append("Qty = 0 (cap o constraints)")
+        else:
+            details.append(f"Ordinare {to_colli(proposal.proposed_qty, pack_size)}")
+            details.append(f"per raggiungere target S")
+        
+        if proposal.notes:
+            details.append("")
+            details.append("Note:")
+            details.append(proposal.notes)
+        
+        # Update text widget
+        self.proposal_details_text.config(state="normal")
+        self.proposal_details_text.delete("1.0", tk.END)
+        self.proposal_details_text.insert("1.0", "\n".join(details))
+        self.proposal_details_text.config(state="disabled")
     
     def _generate_all_proposals(self):
         """Generate order proposals for all SKUs using settings or user input."""
