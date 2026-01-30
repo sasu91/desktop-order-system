@@ -22,3 +22,5 @@ date,sku,event,qty,receipt_date,note
 2026-01-24,SKU006,RECEIPT,40,2026-01-24,Ricevuto ordine Oleificio
 2026-01-25,SKU007,ADJUST,45,,Rettifica inventario dopo conteggio fisico
 2026-01-27,SKU010,ORDER,120,2026-01-29,Ordine fornitore Latteria Alpina
+2026-01-30,SKU010,RECEIPT,100,2026-01-30,Receipt 2026-01-30_a60a6a47_SKU010; Test receiving
+2026-01-30,SKU010,UNFULFILLED,20,,"Auto-generated for receipt 2026-01-30_a60a6a47_SKU010; qty_ordered=120, qty_received=100"
