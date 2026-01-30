@@ -96,6 +96,7 @@ class Stock:
     sku: str
     on_hand: int
     on_order: int
+    unfulfilled_qty: int = 0  # Backorder/cancellazioni (reduce availability)
     asof_date: Optional[date] = None
     
     def __post_init__(self):
@@ -103,10 +104,16 @@ class Stock:
             raise ValueError("on_hand cannot be negative")
         if self.on_order < 0:
             raise ValueError("on_order cannot be negative")
+        if self.unfulfilled_qty < 0:
+            raise ValueError("unfulfilled_qty cannot be negative")
     
     def available(self) -> int:
         """Total available inventory (on_hand + on_order)."""
         return self.on_hand + self.on_order
+    
+    def inventory_position(self) -> int:
+        """Inventory Position = on_hand + on_order - unfulfilled_qty."""
+        return max(0, self.on_hand + self.on_order - self.unfulfilled_qty)
 
 
 @dataclass(frozen=True)
@@ -150,7 +157,8 @@ class OrderProposal:
     lead_time_demand: int = 0  # daily_sales_avg × lead_time
     safety_stock: int = 0
     target_S: int = 0  # forecast + safety_stock
-    inventory_position: int = 0  # on_hand + on_order
+    inventory_position: int = 0  # on_hand + on_order - unfulfilled_qty
+    unfulfilled_qty: int = 0  # Backorder/cancellazioni
     proposed_qty_before_rounding: int = 0  # max(0, S - inventory_position)
     pack_size: int = 1
     moq: int = 1
@@ -158,6 +166,10 @@ class OrderProposal:
     shelf_life_days: int = 0
     capped_by_max_stock: bool = False
     capped_by_shelf_life: bool = False
+    projected_stock_at_receipt: int = 0  # Stock previsto alla data di ricevimento
+    oos_days_count: int = 0  # Giorni OOS nel periodo lookback
+    oos_boost_applied: bool = False  # True se è stato applicato uplift OOS
+    oos_boost_percent: float = 0.0  # Percentuale uplift applicata (es. 0.20 = 20%)
 
 
 @dataclass

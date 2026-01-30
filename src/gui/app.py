@@ -485,7 +485,7 @@ class DesktopOrderApp:
             skus_with_sales = 0
             for sku_id in sku_ids:
                 stock = stocks[sku_id]
-                daily_sales = calculate_daily_sales_average(sales_records, sku_id, days_lookback=30, transactions=transactions, asof_date=today)
+                daily_sales, _ = calculate_daily_sales_average(sales_records, sku_id, days_lookback=30, transactions=transactions, asof_date=today)
                 if daily_sales > 0:
                     days_cover = stock.on_hand / daily_sales
                     total_days_cover += days_cover
@@ -498,7 +498,7 @@ class DesktopOrderApp:
             low_stock_count = 0
             for sku_id in sku_ids:
                 stock = stocks[sku_id]
-                daily_sales = calculate_daily_sales_average(sales_records, sku_id, days_lookback=30, transactions=transactions, asof_date=today)
+                daily_sales, _ = calculate_daily_sales_average(sales_records, sku_id, days_lookback=30, transactions=transactions, asof_date=today)
                 days_cover = stock.on_hand / daily_sales if daily_sales > 0 else 999
                 
                 if stock.on_hand < 10 or days_cover < 7:
@@ -984,15 +984,18 @@ class DesktopOrderApp:
         details.append("")
         
         # Inventory Position
-        details.append("═══ INVENTORY POSITION ═══")
+        details.append("═══ INVENTORY POSITION (IP) ═══")
         details.append(f"On Hand: {to_colli(proposal.current_on_hand, pack_size)}")
         details.append(f"On Order: {to_colli(proposal.current_on_order, pack_size)}")
-        details.append(f"Totale Disponibile: {to_colli(proposal.inventory_position, pack_size)}")
+        if proposal.unfulfilled_qty > 0:
+            details.append(f"Unfulfilled (backorder): {to_colli(proposal.unfulfilled_qty, pack_size)}")
+        details.append(f"IP = on_hand + on_order - unfulfilled")
+        details.append(f"IP = {to_colli(proposal.inventory_position, pack_size)}")
         details.append("")
         
         # Proposed Qty
         details.append("═══ QTY PROPOSTA ═══")
-        details.append(f"Qty grezza (S - Disponibile):")
+        details.append(f"Qty grezza (S - IP):")
         details.append(f"  {to_colli(proposal.proposed_qty_before_rounding, pack_size)}")
         details.append("")
         
@@ -1025,11 +1028,33 @@ class DesktopOrderApp:
             details.append("Cap non applicato")
         details.append("")
         
+        # Projected Stock at Receipt
+        details.append("═══ PROIEZIONE A RICEVIMENTO ═══")
+        if proposal.receipt_date:
+            details.append(f"Data prevista ricevimento: {proposal.receipt_date.isoformat()}")
+            details.append(f"Stock previsto al ricevimento:")
+            details.append(f"  {to_colli(proposal.projected_stock_at_receipt, pack_size)}")
+            details.append(f"  (on_hand + qty ordinata, solo eventi ledger)")
+        else:
+            details.append("Nessuna data ricevimento disponibile")
+        details.append("")
+        
+        # OOS Boost
+        if proposal.oos_days_count > 0:
+            details.append("═══ OOS BOOST ═══")
+            details.append(f"Giorni OOS rilevati: {proposal.oos_days_count}")
+            if proposal.oos_boost_applied:
+                boost_pct = int(proposal.oos_boost_percent * 100)
+                details.append(f"✓ Boost applicato: +{boost_pct}%")
+            else:
+                details.append("Boost rifiutato dall'utente")
+            details.append("")
+        
         # Final motivation
         details.append("═══ MOTIVAZIONE FINALE ═══")
         if proposal.proposed_qty == 0:
             if proposal.inventory_position >= proposal.target_S:
-                details.append("Stock sufficiente (Disponibile ≥ S)")
+                details.append("Stock sufficiente (IP ≥ S)")
             else:
                 details.append("Qty = 0 (cap o constraints)")
         else:
@@ -1084,13 +1109,41 @@ class DesktopOrderApp:
         
         # Generate proposals
         self.current_proposals = []
+        
+        # Read OOS boost default from settings
+        oos_boost_default = settings.get("reorder_engine", {}).get("oos_boost_percent", {}).get("value", 20) / 100.0
+        
+        # Track SKU-specific OOS boost preferences (in memory for this session)
+        if not hasattr(self, 'oos_boost_preferences'):
+            self.oos_boost_preferences = {}  # {sku: boost_percent or None}
+        
         for sku_id in sku_ids:
             stock = stocks[sku_id]
             sku_obj = skus_by_id.get(sku_id)
             description = sku_obj.description if sku_obj else "N/A"
             
-            # Calculate daily sales average (with OOS exclusion)
-            daily_sales = calculate_daily_sales_average(sales_records, sku_id, days_lookback=30, transactions=transactions, asof_date=date.today())
+            # Calculate daily sales average (with OOS exclusion) - NOW RETURNS TUPLE
+            daily_sales, oos_days_count = calculate_daily_sales_average(sales_records, sku_id, days_lookback=30, transactions=transactions, asof_date=date.today())
+            
+            # Determine OOS boost for this SKU
+            oos_boost_percent = 0.0
+            if oos_days_count > 0:
+                # Check if user has already decided for this SKU in this session
+                if sku_id in self.oos_boost_preferences:
+                    # User already decided (could be None for "no", or a percent for "yes"/"yes, always")
+                    oos_boost_percent = self.oos_boost_preferences[sku_id] or 0.0
+                else:
+                    # Ask user via dialog
+                    boost_choice = self._ask_oos_boost(sku_id, description, oos_days_count, oos_boost_default)
+                    if boost_choice == "yes":
+                        oos_boost_percent = oos_boost_default
+                        self.oos_boost_preferences[sku_id] = oos_boost_default
+                    elif boost_choice == "yes_always":
+                        oos_boost_percent = oos_boost_default
+                        self.oos_boost_preferences[sku_id] = oos_boost_default  # Store for session
+                    else:  # "no"
+                        oos_boost_percent = 0.0
+                        self.oos_boost_preferences[sku_id] = None
             
             # Generate proposal (pass sku_obj for pack_size, MOQ, lead_time, review_period, safety_stock, max_stock)
             proposal = self.order_workflow.generate_proposal(
@@ -1101,6 +1154,8 @@ class DesktopOrderApp:
                 min_stock=min_stock,
                 days_cover=days_cover,
                 sku_obj=sku_obj,
+                oos_days_count=oos_days_count,
+                oos_boost_percent=oos_boost_percent,
             )
             self.current_proposals.append(proposal)
         
@@ -1111,6 +1166,84 @@ class DesktopOrderApp:
             "Proposte Generate",
             f"Generate {len(self.current_proposals)} proposte ordine.\nProposte con Q.tà > 0: {sum(1 for p in self.current_proposals if p.proposed_qty > 0)}",
         )
+    
+    def _ask_oos_boost(self, sku: str, description: str, oos_days_count: int, default_percent: float) -> str:
+        """
+        Ask user if they want to apply OOS boost for a specific SKU.
+        
+        Returns:
+            "yes", "yes_always", or "no"
+        """
+        popup = tk.Toplevel(self.root)
+        popup.title("OOS Boost")
+        popup.geometry("500x250")
+        popup.resizable(False, False)
+        popup.transient(self.root)
+        popup.grab_set()
+        
+        result = tk.StringVar(value="no")
+        
+        # Content frame
+        content_frame = ttk.Frame(popup, padding=20)
+        content_frame.pack(fill="both", expand=True)
+        
+        # Warning message
+        ttk.Label(
+            content_frame,
+            text=f"⚠️ SKU: {sku}",
+            font=("Helvetica", 11, "bold"),
+            foreground="#d97706",
+        ).pack(anchor="w", pady=(0, 5))
+        
+        ttk.Label(
+            content_frame,
+            text=f"Descrizione: {description}",
+            font=("Helvetica", 10),
+        ).pack(anchor="w", pady=(0, 10))
+        
+        ttk.Label(
+            content_frame,
+            text=f"Rilevati {oos_days_count} giorni di OOS (Out-of-Stock) negli ultimi 30 giorni.",
+            wraplength=450,
+        ).pack(anchor="w", pady=(0, 10))
+        
+        ttk.Label(
+            content_frame,
+            text=f"Vuoi aumentare la quantità ordinata del {int(default_percent * 100)}% per compensare?",
+            font=("Helvetica", 10, "bold"),
+            wraplength=450,
+        ).pack(anchor="w", pady=(0, 20))
+        
+        # Buttons
+        button_frame = ttk.Frame(content_frame)
+        button_frame.pack(fill="x")
+        
+        def choose(choice):
+            result.set(choice)
+            popup.destroy()
+        
+        ttk.Button(
+            button_frame,
+            text="Sì",
+            command=lambda: choose("yes"),
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="Sì, sempre (per questo SKU)",
+            command=lambda: choose("yes_always"),
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="No",
+            command=lambda: choose("no"),
+        ).pack(side="left", padx=5)
+        
+        # Wait for user choice
+        popup.wait_window()
+        
+        return result.get()
     
     def _refresh_proposal_table(self):
         """Refresh proposals table."""
@@ -2703,7 +2836,7 @@ class DesktopOrderApp:
         # Create popup window
         popup = tk.Toplevel(self.root)
         popup.title("Nuovo SKU" if mode == "new" else "Modifica SKU")
-        popup.geometry("600x500")
+        popup.geometry("600x700")
         popup.resizable(False, False)
         
         # Center popup

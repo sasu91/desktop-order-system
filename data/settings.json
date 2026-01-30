@@ -27,6 +27,10 @@
     "demand_variability": {
       "value": "STABLE",
       "auto_apply_to_new_sku": true
+    },
+    "oos_boost_percent": {
+      "value": 20,
+      "description": "Percentuale di aumento ordine per OOS (%)"
     }
   }
 }

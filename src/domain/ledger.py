@@ -55,13 +55,14 @@ class StockCalculator:
             sales_records: Daily sales records (optional; if provided, SALE events are auto-created)
         
         Returns:
-            Stock object with on_hand, on_order, asof_date
+            Stock object with on_hand, on_order, unfulfilled_qty, asof_date
         
         Raises:
             ValueError: If data is inconsistent (e.g., multiple SNAPSHOTs on same day)
         """
         on_hand = 0
         on_order = 0
+        unfulfilled_qty = 0  # Track UNFULFILLED events (backorder/cancellazioni)
         
         # Filter transactions for this SKU, date < asof_date
         sku_txns = [t for t in transactions if t.sku == sku and t.date < asof_date]
@@ -97,15 +98,16 @@ class StockCalculator:
                 # ADJUST sostituisce on_hand con il valore specificato (come SNAPSHOT)
                 on_hand = max(0, txn.qty)
             elif txn.event == EventType.UNFULFILLED:
-                # Reduce on_order for unfulfilled quantities (unshipped/cancelled)
-                # Protection: never go below zero
-                on_order = max(0, on_order - txn.qty)
+                # Track unfulfilled quantities (backorder/cancellazioni)
+                # These reduce inventory position but don't touch on_hand/on_order directly
+                unfulfilled_qty += txn.qty
         
         # Final protection: ensure non-negative values
         on_hand = max(0, on_hand)
         on_order = max(0, on_order)
+        unfulfilled_qty = max(0, unfulfilled_qty)
         
-        return Stock(sku=sku, on_hand=on_hand, on_order=on_order, asof_date=asof_date)
+        return Stock(sku=sku, on_hand=on_hand, on_order=on_order, unfulfilled_qty=unfulfilled_qty, asof_date=asof_date)
     
     @staticmethod
     def calculate_all_skus(
