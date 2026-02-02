@@ -217,19 +217,27 @@ def compute_order(
     pipeline: List[Dict[str, Any]],
     constraints: OrderConstraints,
     history: List[Dict[str, Any]],
-    window_weeks: int = 8
+    window_weeks: int = 8,
+    censored_flags: Optional[List[bool]] = None,
+    alpha_boost_for_censored: float = 0.05,
 ) -> Dict[str, Any]:
     """
     Compute CSL-based order quantity with full breakdown.
     
     Implements the policy:
         1. Calculate protection period P (from calendar)
-        2. Forecast demand μ_P over P days
-        3. Estimate uncertainty σ_P over P days
+        2. Forecast demand μ_P over P days (exclude censored)
+        3. Estimate uncertainty σ_P over P days (exclude censored)
         4. Compute reorder point S = μ_P + z(α) × σ_P
         5. Calculate inventory position IP
         6. Raw order Q_raw = max(0, S - IP)
         7. Apply constraints: pack size, MOQ, cap
+    
+    CENSORED DAYS HANDLING:
+    - Days with OOS/inevasi are marked censored and excluded from:
+      - Forecast model training (prevents underestimation)
+      - Uncertainty/sigma calculation (prevents sigma collapse)
+    - If censored days exist, alpha_eff = min(0.99, alpha + alpha_boost_for_censored)
     
     Args:
         sku: SKU identifier
@@ -241,13 +249,19 @@ def compute_order(
         constraints: OrderConstraints (pack_size, moq, max_stock)
         history: Sales history with keys "date" and "qty_sold"
         window_weeks: Rolling window for uncertainty estimation
+        censored_flags: Optional list of bool (same length as history).
+                       True = day censored (OOS/inevasi), exclude from model.
+        alpha_boost_for_censored: Boost alpha if censored days present (default 0.05).
     
     Returns:
         Dict with comprehensive breakdown:
             - "sku": str
             - "order_date": date
             - "lane": str
-            - "alpha": float (target CSL)
+            - "alpha": float (original target CSL)
+            - "alpha_eff": float (effective alpha used, possibly boosted)
+            - "n_censored": int (number of censored days in history)
+            - "censored_reasons": List[str] (reasons for censored days)
             - "protection_period": int (P days)
             - "forecast_demand": float (μ_P)
             - "sigma_daily": float (σ_day)
@@ -285,31 +299,55 @@ def compute_order(
     if on_hand < 0:
         raise ValueError(f"on_hand must be >= 0, got {on_hand}")
     
+    # Track censored days metadata
+    n_censored = 0
+    censored_reasons = []
+    if censored_flags:
+        if len(censored_flags) != len(history):
+            raise ValueError(f"censored_flags length must match history length")
+        n_censored = sum(censored_flags)
+        # Collect sample reasons (up to 3 for brevity)
+        for i, (h, is_censored) in enumerate(zip(history[:10], censored_flags[:10])):
+            if is_censored:
+                censored_reasons.append(f"{h['date']} (OOS/inevaso)")
+                if len(censored_reasons) >= 3:
+                    if n_censored > 3:
+                        censored_reasons.append(f"... +{n_censored - 3} more")
+                    break
+    
+    # Calculate effective alpha (boost if censored days present)
+    has_censored = n_censored > 0
+    alpha_eff = min(0.99, alpha + (alpha_boost_for_censored if has_censored else 0.0))
+    
     # Step 1: Calculate protection period from calendar and receipt date
     from src.domain.calendar import next_receipt_date
     protection_period = calculate_protection_period_days(order_date, lane)
     receipt_date = next_receipt_date(order_date, lane)
     
-    # Step 2: Fit forecast model and predict demand
-    model = fit_forecast_model(history)
+    # Step 2: Fit forecast model and predict demand (with censored filtering)
+    model = fit_forecast_model(
+        history,
+        censored_flags=censored_flags,
+        alpha_boost_for_censored=alpha_boost_for_censored
+    )
     forecast_values = predict(model, horizon=protection_period)
     forecast_demand = sum(forecast_values)  # μ_P
     
-    # Step 3: Estimate uncertainty
+    # Step 3: Estimate uncertainty (with censored filtering)
     from src.uncertainty import estimate_demand_uncertainty
     
     def forecast_func(hist, horizon):
-        m = fit_forecast_model(hist)
+        m = fit_forecast_model(hist, censored_flags=censored_flags, alpha_boost_for_censored=alpha_boost_for_censored)
         return predict(m, horizon)
     
-    sigma_daily, residuals = estimate_demand_uncertainty(
-        history, forecast_func, window_weeks=window_weeks, method="mad"
+    sigma_daily, uncertainty_meta = estimate_demand_uncertainty(
+        history, forecast_func, window_weeks=window_weeks, method="mad", censored_flags=censored_flags
     )
     
     sigma_horizon = sigma_over_horizon(protection_period, sigma_daily)
     
-    # Step 4: Get z-score for target CSL
-    z_score = _z_score_for_csl(alpha)
+    # Step 4: Get z-score for effective CSL (use alpha_eff)
+    z_score = _z_score_for_csl(alpha_eff)
     
     # Step 5: Calculate reorder point S = μ_P + z(α) × σ_P
     reorder_point = forecast_demand + z_score * sigma_horizon
@@ -353,17 +391,25 @@ def compute_order(
             f"(capped by max_stock={constraints.max_stock}, available={cap})"
         )
     
-    # Build comprehensive breakdown
+    # Build comprehensive breakdown with censored metadata
     return {
         "sku": sku,
         "order_date": order_date,
         "receipt_date": receipt_date,
         "lane": lane.name,
         "alpha": alpha,
+        "alpha_eff": alpha_eff,
+        "n_censored": n_censored,
+        "censored_reasons": censored_reasons,
+        "n_censored_excluded_from_sigma": uncertainty_meta["n_censored_excluded"],
         "protection_period": protection_period,
         "forecast_demand": forecast_demand,
+        "forecast_n_samples": model["n_samples"],
+        "forecast_n_censored": model["n_censored"],
+        "forecast_alpha_eff": model["alpha_eff"],
         "sigma_daily": sigma_daily,
         "sigma_horizon": sigma_horizon,
+        "sigma_n_residuals": uncertainty_meta["n_residuals"],
         "z_score": z_score,
         "reorder_point": reorder_point,
         "on_hand": on_hand,
@@ -375,7 +421,6 @@ def compute_order(
         "order_final": order_final,
         "constraints_applied": constraints_applied,
         "service_level_target": alpha,
-        "n_residuals": len(residuals),
     }
 
 

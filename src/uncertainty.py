@@ -192,8 +192,9 @@ def sigma_over_horizon(protection_period_days: int, sigma_daily: float) -> float
 def calculate_forecast_residuals(
     history: List[Dict[str, Any]],
     forecast_func,
-    window_weeks: int = DEFAULT_WINDOW_WEEKS
-) -> List[float]:
+    window_weeks: int = DEFAULT_WINDOW_WEEKS,
+    censored_flags: Optional[List[bool]] = None,
+) -> Tuple[List[float], int]:
     """
     Calculate forecast residuals (actual - predicted) using rolling window.
     
@@ -201,35 +202,44 @@ def calculate_forecast_residuals(
     comparing each forecast to actual observed demand. This provides
     realistic error estimates for uncertainty quantification.
     
+    CENSORED DAYS: Days marked as censored (OOS/inevasi) are excluded from
+    residual calculation to prevent artificially low sigma estimates.
+    
     Process:
         For each day t in evaluation period:
             1. Fit model on [t - window, t - 1]
             2. Forecast for day t
-            3. Residual = Actual(t) - Forecast(t)
+            3. If day t is NOT censored: residual = Actual(t) - Forecast(t)
+            4. If day t IS censored: skip (don't add to residuals)
     
     Args:
         history: Sales history with keys "date" and "qty_sold"
         forecast_func: Function(history, horizon=1) -> List[float]
         window_weeks: Rolling window size in weeks (default 8 weeks)
+        censored_flags: Optional list of bool (same length as history).
+                       If provided, days with censored_flags[i]=True are excluded.
     
     Returns:
-        List[float]: Residuals (actual - predicted) for each forecasted day
+        Tuple[List[float], int]: (residuals, n_censored_excluded)
+            - residuals: List of forecast errors for non-censored days
+            - n_censored_excluded: Count of censored days excluded from residuals
         
     Examples:
         >>> from src.forecast import fit_forecast_model, predict
         >>> def forecast_one_day(hist):
         ...     model = fit_forecast_model(hist)
         ...     return predict(model, horizon=1)
-        >>> residuals = calculate_forecast_residuals(history, forecast_one_day)
+        >>> residuals, n_censored = calculate_forecast_residuals(history, forecast_one_day)
         >>> sigma = robust_sigma(residuals)
         
     Notes:
         - Requires at least window_weeks + 1 week of data
         - Uses one-step-ahead forecasts (most conservative error estimate)
-        - Returns empty list if insufficient data
+        - Returns ([], 0) if insufficient data
+        - Censored days excluded ONLY from residuals, not from training window
     """
     if not history:
-        return []
+        return [], 0
     
     # Sort history by date
     sorted_history = sorted(history, key=lambda x: x["date"])
@@ -238,12 +248,30 @@ def calculate_forecast_residuals(
     min_required_days = window_days + 7  # Window + at least 1 week to evaluate
     
     if len(sorted_history) < min_required_days:
-        return []
+        return [], 0
+    
+    # Align censored_flags with sorted_history if provided
+    if censored_flags:
+        if len(censored_flags) != len(history):
+            raise ValueError(f"censored_flags length ({len(censored_flags)}) != history length ({len(history)})")
+        # Re-sort censored_flags to match sorted_history
+        sorted_pairs = sorted(zip(history, censored_flags), key=lambda x: x[0]["date"])
+        sorted_censored = [c for _, c in sorted_pairs]
+    else:
+        sorted_censored = [False] * len(sorted_history)
     
     residuals = []
+    n_censored_excluded = 0
     
     # Rolling window: start after initial window
     for i in range(window_days, len(sorted_history)):
+        # Check if day i is censored
+        is_censored = sorted_censored[i]
+        
+        if is_censored:
+            n_censored_excluded += 1
+            continue  # Skip censored days in residual calculation
+        
         # Training window: [i - window_days, i - 1]
         train_window = sorted_history[i - window_days:i]
         
@@ -261,55 +289,73 @@ def calculate_forecast_residuals(
             # Skip if forecast fails (e.g., insufficient data in window)
             continue
     
-    return residuals
+    return residuals, n_censored_excluded
 
 
 def estimate_demand_uncertainty(
     history: List[Dict[str, Any]],
     forecast_func,
     window_weeks: int = DEFAULT_WINDOW_WEEKS,
-    method: str = "mad"
-) -> Tuple[float, List[float]]:
+    method: str = "mad",
+    censored_flags: Optional[List[bool]] = None,
+) -> Tuple[float, Dict[str, Any]]:
     """
     Estimate daily demand uncertainty from historical forecast errors.
     
     Combines forecast residual calculation with robust sigma estimation
     to provide a single-step uncertainty estimate suitable for safety stock.
     
+    CENSORED DAYS: Days with OOS/inevasi are excluded from sigma calculation
+    to prevent underestimation of true demand variability.
+    
     Workflow:
         1. Calculate one-step-ahead forecast residuals using rolling window
-        2. Apply robust estimator (MAD or Winsorized) to residuals
-        3. Return σ_day and residuals for diagnostics
+        2. Exclude censored days from residuals
+        3. Apply robust estimator (MAD or Winsorized) to non-censored residuals
+        4. Return σ_day and diagnostic metadata
     
     Args:
         history: Sales history with keys "date" and "qty_sold"
         forecast_func: Function(history, horizon) -> List[float]
         window_weeks: Rolling window size in weeks
         method: Estimation method - "mad" (default) or "winsorized"
+        censored_flags: Optional list of bool (same length as history).
+                       Censored days excluded from sigma calculation.
     
     Returns:
-        Tuple[float, List[float]]:
+        Tuple[float, Dict[str, Any]]:
             - σ_day: Robust daily demand standard deviation
-            - residuals: List of forecast errors for diagnostics
+            - metadata: Dict with keys:
+                - "residuals": List[float] (non-censored residuals)
+                - "n_residuals": int (count of residuals used)
+                - "n_censored_excluded": int (count of censored days excluded)
+                - "method": str ("mad" or "winsorized")
             
     Examples:
         >>> from src.forecast import fit_forecast_model, predict
         >>> def my_forecast(hist, horizon):
         ...     model = fit_forecast_model(hist)
         ...     return predict(model, horizon)
-        >>> sigma_day, residuals = estimate_demand_uncertainty(history, my_forecast)
-        >>> print(f"Daily σ: {sigma_day:.2f}, based on {len(residuals)} residuals")
+        >>> sigma_day, meta = estimate_demand_uncertainty(history, my_forecast)
+        >>> print(f"Daily σ: {sigma_day:.2f}, {meta['n_residuals']} residuals, {meta['n_censored_excluded']} censored")
         
     Notes:
-        - Returns (0.0, []) if insufficient data
+        - Returns (0.0, {...}) if insufficient data
         - MAD method recommended for production (most robust)
-        - Residuals useful for diagnostic plots and outlier analysis
+        - Metadata useful for audit trail and diagnostics
     """
-    # Calculate forecast residuals using rolling window
-    residuals = calculate_forecast_residuals(history, forecast_func, window_weeks)
+    # Calculate forecast residuals using rolling window (excludes censored days)
+    residuals, n_censored_excluded = calculate_forecast_residuals(
+        history, forecast_func, window_weeks, censored_flags
+    )
     
     if not residuals:
-        return 0.0, []
+        return 0.0, {
+            "residuals": [],
+            "n_residuals": 0,
+            "n_censored_excluded": n_censored_excluded,
+            "method": method,
+        }
     
     # Apply robust estimator
     if method == "mad":
@@ -319,7 +365,14 @@ def estimate_demand_uncertainty(
     else:
         raise ValueError(f"Unknown method: {method}. Use 'mad' or 'winsorized'.")
     
-    return sigma_day, residuals
+    metadata = {
+        "residuals": residuals,
+        "n_residuals": len(residuals),
+        "n_censored_excluded": n_censored_excluded,
+        "method": method,
+    }
+    
+    return sigma_day, metadata
 
 
 def safety_stock_for_csl(
@@ -397,7 +450,8 @@ def calculate_safety_stock(
     protection_period_days: int,
     target_csl: float = 0.95,
     window_weeks: int = DEFAULT_WINDOW_WEEKS,
-    method: str = "mad"
+    method: str = "mad",
+    censored_flags: Optional[List[bool]] = None,
 ) -> Dict[str, Any]:
     """
     Complete workflow: estimate uncertainty and calculate safety stock.
@@ -406,6 +460,9 @@ def calculate_safety_stock(
     all steps: residual calculation, robust sigma estimation, horizon scaling,
     and CSL-based safety stock computation.
     
+    CENSORED DAYS: Days with OOS/inevasi are excluded from uncertainty estimation
+    to prevent underestimation of safety stock due to artificially low sigma.
+    
     Args:
         history: Sales history with keys "date" and "qty_sold"
         forecast_func: Function(history, horizon) -> List[float]
@@ -413,6 +470,8 @@ def calculate_safety_stock(
         target_csl: Target Customer Service Level (default 95%)
         window_weeks: Rolling window for residuals (default 8 weeks)
         method: Uncertainty estimator - "mad" or "winsorized"
+        censored_flags: Optional list of bool (same length as history).
+                       Censored days excluded from sigma calculation.
     
     Returns:
         Dict with keys:
@@ -421,7 +480,10 @@ def calculate_safety_stock(
             - "sigma_horizon": float
             - "z_score": float (approximate)
             - "n_residuals": int
+            - "n_censored_excluded": int
             - "method": str
+            - "target_csl": float
+            - "protection_period_days": int
             
     Examples:
         >>> from src.forecast import fit_forecast_model, predict
@@ -437,14 +499,14 @@ def calculate_safety_stock(
         >>> print(f"Safety stock: {result['safety_stock']:.0f} units")
         
     Workflow:
-        1. Calculate forecast residuals using rolling window
+        1. Calculate forecast residuals using rolling window (exclude censored)
         2. Estimate σ_day using robust method (MAD or Winsorized)
         3. Scale to σ_P using √P formula
         4. Calculate safety stock = z_α × σ_P
     """
-    # Step 1: Estimate daily uncertainty
-    sigma_day, residuals = estimate_demand_uncertainty(
-        history, forecast_func, window_weeks, method
+    # Step 1: Estimate daily uncertainty (with censored filtering)
+    sigma_day, uncertainty_meta = estimate_demand_uncertainty(
+        history, forecast_func, window_weeks, method, censored_flags
     )
     
     # Step 2: Scale to protection period
@@ -462,7 +524,8 @@ def calculate_safety_stock(
         "sigma_daily": sigma_day,
         "sigma_horizon": sigma_horizon,
         "z_score": z_score,
-        "n_residuals": len(residuals),
+        "n_residuals": uncertainty_meta["n_residuals"],
+        "n_censored_excluded": uncertainty_meta["n_censored_excluded"],
         "method": method,
         "target_csl": target_csl,
         "protection_period_days": protection_period_days,

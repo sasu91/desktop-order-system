@@ -25,6 +25,8 @@ def fit_forecast_model(
     history: List[Dict[str, Any]],
     alpha: float = 0.3,
     min_samples_for_dow: int = 14,
+    censored_flags: Optional[List[bool]] = None,
+    alpha_boost_for_censored: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Fit a simple level + DOW factor forecasting model.
@@ -35,6 +37,10 @@ def fit_forecast_model(
         alpha: Smoothing parameter for exponential moving average (0 < alpha <= 1).
                Lower alpha = more smoothing. Default 0.3 for daily data.
         min_samples_for_dow: Minimum samples needed to compute DOW factors.
+        censored_flags: Optional list of bool (same length as history) indicating
+                       censored days (OOS/inevasi). Censored days excluded from model.
+        alpha_boost_for_censored: Increase alpha for SKUs with censored days.
+                                 alpha_eff = min(0.99, alpha + alpha_boost_for_censored)
     
     Returns:
         model_state: Dict containing:
@@ -42,6 +48,8 @@ def fit_forecast_model(
             - "dow_factors": List[float] (7 factors, Mon=0 to Sun=6)
             - "last_date": date (last date in training data)
             - "n_samples": int (number of samples used)
+            - "n_censored": int (number of censored days excluded)
+            - "alpha_eff": float (effective alpha used, possibly boosted)
             - "method": str (model method used: "full", "simple", "fallback")
     
     Example:
@@ -60,22 +68,40 @@ def fit_forecast_model(
             "dow_factors": [1.0] * 7,
             "last_date": None,
             "n_samples": 0,
+            "n_censored": 0,
+            "alpha_eff": alpha,
             "method": "fallback",
         }
     
-    # Extract dates and quantities
-    dates = [h["date"] for h in history]
-    quantities = [max(0, h["qty_sold"]) for h in history]  # Ensure non-negative
-    n_samples = len(history)
+    # Filter out censored days if provided
+    n_censored = 0
+    if censored_flags:
+        if len(censored_flags) != len(history):
+            raise ValueError(f"censored_flags length ({len(censored_flags)}) != history length ({len(history)})")
+        
+        # Keep only non-censored days
+        filtered_history = [h for h, is_censored in zip(history, censored_flags) if not is_censored]
+        n_censored = sum(censored_flags)
+    else:
+        filtered_history = history
+    
+    # Calculate effective alpha (boost if censored days present)
+    has_censored = n_censored > 0
+    alpha_eff = min(0.99, alpha + (alpha_boost_for_censored if has_censored else 0.0))
+    
+    # Extract dates and quantities from filtered history
+    dates = [h["date"] for h in filtered_history]
+    quantities = [max(0, h["qty_sold"]) for h in filtered_history]  # Ensure non-negative
+    n_samples = len(filtered_history)
     
     # Calculate base level using exponential smoothing
     if n_samples == 1:
         level = quantities[0]
     else:
-        # Exponential moving average (EMA)
+        # Exponential moving average (EMA) with effective alpha
         level = quantities[0]
         for qty in quantities[1:]:
-            level = alpha * qty + (1 - alpha) * level
+            level = alpha_eff * qty + (1 - alpha_eff) * level
     
     # Fallback if level is zero (no sales at all)
     if level == 0:
@@ -99,6 +125,8 @@ def fit_forecast_model(
         "dow_factors": dow_factors,
         "last_date": dates[-1] if dates else None,
         "n_samples": n_samples,
+        "n_censored": n_censored,
+        "alpha_eff": alpha_eff,
         "method": method,
     }
 

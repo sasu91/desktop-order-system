@@ -309,6 +309,75 @@ def calculate_sold_from_eod_stock(
     return qty_sold, adjustment
 
 
+def is_day_censored(
+    sku: str,
+    check_date: date,
+    transactions: List[Transaction],
+    sales_records: Optional[List[SalesRecord]] = None,
+    lookback_days: int = 3,
+) -> Tuple[bool, str]:
+    """
+    Determine if a day should be censored (excluded from demand calculations).
+    
+    A day is censored when demand observation is unreliable due to stockouts:
+    - Rule 1: OH==0 at EOD and sales==0 (true stockout, demand is censored)
+    - Rule 2: UNFULFILLED event on this date or within lookback_days (recent OOS)
+    
+    This prevents artificially low demand estimates when SKU was unavailable.
+    
+    Args:
+        sku: SKU identifier
+        check_date: Date to check for censoring
+        transactions: All ledger transactions
+        sales_records: Daily sales records (optional)
+        lookback_days: Days to look back for UNFULFILLED events (default 3)
+    
+    Returns:
+        Tuple[bool, str]: (is_censored, reason)
+            - is_censored: True if day should be excluded from demand calculations
+            - reason: Human-readable explanation (for logging/audit)
+    
+    Examples:
+        >>> is_day_censored("SKU001", date(2026, 1, 15), txns, sales)
+        (True, "OH=0 and sales=0 on 2026-01-15")
+        
+        >>> is_day_censored("SKU002", date(2026, 1, 20), txns, sales)
+        (True, "UNFULFILLED event on 2026-01-18 (within 3-day lookback)")
+    """
+    from datetime import timedelta
+    
+    # Calculate stock at EOD (end of check_date)
+    next_day = check_date + timedelta(days=1)
+    stock_eod = StockCalculator.calculate_asof(sku, next_day, transactions, sales_records)
+    
+    # Get sales for this day
+    sales_qty = 0
+    if sales_records:
+        day_sales = [s for s in sales_records if s.sku == sku and s.date == check_date]
+        if day_sales:
+            sales_qty = sum(s.qty_sold for s in day_sales)
+    
+    # Rule 1: OH=0 and sales=0 → stockout, demand censored
+    if stock_eod.on_hand == 0 and sales_qty == 0:
+        return True, f"OH=0 and sales=0 on {check_date}"
+    
+    # Rule 2: UNFULFILLED event on check_date or within lookback window
+    lookback_start = check_date - timedelta(days=lookback_days)
+    unfulfilled_events = [
+        t for t in transactions
+        if t.sku == sku
+        and t.event == EventType.UNFULFILLED
+        and lookback_start <= t.date <= check_date
+    ]
+    
+    if unfulfilled_events:
+        most_recent = max(unfulfilled_events, key=lambda t: t.date)
+        return True, f"UNFULFILLED event on {most_recent.date} (within {lookback_days}-day lookback)"
+    
+    # Not censored
+    return False, "Normal demand observation"
+
+
 def validate_ean(ean: Optional[str]) -> Tuple[bool, Optional[str]]:
     """
     Validate EAN-13 format (basic check).
