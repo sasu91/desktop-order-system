@@ -1747,7 +1747,7 @@ class DesktopOrderApp:
         transactions = self.csv_layer.read_transactions()
         sales = self.csv_layer.read_sales()
         
-        stock_by_sku = self.calculator.calculate_all_skus(
+        stock_by_sku = StockCalculator.calculate_all_skus(
             all_skus=all_skus,
             asof_date=today,
             transactions=transactions,
