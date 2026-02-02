@@ -23,7 +23,7 @@ stock = read_from_inventory_csv()  # No! Crea inconsistenza
 | RECEIPT | T | D (receipt happened) | on_order -= qty; on_hand += qty |
 | SALE | T | - | on_hand -= qty (from sales.csv) |
 | WASTE | T | - | on_hand -= qty |
-| ADJUST | T | - | on_hand ± qty |
+| ADJUST | T | - | on_hand := qty (absolute set) |
 | UNFULFILLED | T | - | No impact (tracking only) |
 
 ### AsOf Rule (Critica)

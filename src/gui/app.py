@@ -1734,54 +1734,85 @@ class DesktopOrderApp:
                 self.pending_treeview.detach(item_id)
     
     def _refresh_pending_orders(self):
-        """Calculate and display pending orders (qty_ordered - qty_received > 0)."""
+        """Calculate and display pending orders using ledger on_order as source of truth."""
         # Reset edits
         self.pending_qty_edits = {}
+        
         # Read order logs
         order_logs = self.csv_layer.read_order_logs()
         
-        # Read receiving logs
-        receiving_logs = self.csv_layer.read_receiving_logs()
+        # Calculate current on_order from ledger (source of truth)
+        today = date.today()
+        all_skus = self.csv_layer.get_all_sku_ids()
+        transactions = self.csv_layer.read_transactions()
+        sales = self.csv_layer.read_sales()
         
-        # Calculate qty_received per (order_id, sku)
-        received_by_order_sku = {}
-        for log in receiving_logs:
-            # Match by receipt_date to order's receipt_date (approximate)
-            # For now, aggregate by SKU only
-            sku = log.get("sku")
-            qty = int(log.get("qty_received", 0))
-            received_by_order_sku[sku] = received_by_order_sku.get(sku, 0) + qty
+        stock_by_sku = self.calculator.calculate_all_skus(
+            all_skus=all_skus,
+            asof_date=today,
+            transactions=transactions,
+            sales_records=sales,
+        )
         
         # Get SKU descriptions
         skus_by_id = {sku.sku: sku for sku in self.csv_layer.read_skus()}
         
-        # Calculate pending
+        # Group order logs by SKU and receipt_date (to show expected delivery dates)
+        # Filter to show only orders with status PENDING
         self.pending_treeview.delete(*self.pending_treeview.get_children())
         
+        # Track which SKUs have on_order > 0 (from ledger)
+        sku_with_orders = {sku: stock for sku, stock in stock_by_sku.items() if stock.on_order > 0}
+        
+        # Build display: group orders by (SKU, receipt_date) and sum quantities
+        order_groups = {}  # {(sku, receipt_date): [order_ids, total_qty_ordered]}
+        
         for log in order_logs:
-            order_id = log.get("order_id")
             sku = log.get("sku")
-            qty_ordered = int(log.get("qty_ordered", 0))
-            receipt_date_str = log.get("receipt_date", "")
             status = log.get("status", "PENDING")
             
-            # Calculate qty_received for this SKU (aggregate across all receipts)
-            qty_received = received_by_order_sku.get(sku, 0)
-            pending_qty = max(0, qty_ordered - qty_received)
+            # Only show PENDING orders
+            if status != "PENDING":
+                continue
             
-            # Only show if pending > 0
+            order_id = log.get("order_id")
+            qty_ordered = int(log.get("qty_ordered", 0))
+            receipt_date_str = log.get("receipt_date", "")
+            
+            key = (sku, receipt_date_str)
+            if key not in order_groups:
+                order_groups[key] = {"order_ids": [], "qty_ordered": 0}
+            
+            order_groups[key]["order_ids"].append(order_id)
+            order_groups[key]["qty_ordered"] += qty_ordered
+        
+        # Display orders, using ledger on_order as truth
+        for (sku, receipt_date_str), group_data in order_groups.items():
+            description = skus_by_id.get(sku).description if sku in skus_by_id else "N/A"
+            qty_ordered = group_data["qty_ordered"]
+            order_ids = ", ".join(group_data["order_ids"])
+            
+            # Get current on_order from ledger
+            current_on_order = stock_by_sku.get(sku, Stock(sku=sku, on_hand=0, on_order=0, asof_date=today)).on_order
+            
+            # Calculate pending: use ledger on_order (not order_log qty - received qty)
+            # This reflects actual stock state including all RECEIPT events
+            pending_qty = current_on_order
+            
+            # Only show if there's actually stock on order (from ledger)
             if pending_qty > 0:
-                description = skus_by_id.get(sku).description if sku in skus_by_id else "N/A"
+                # Qty received approximation: ordered - on_order
+                qty_received_approx = max(0, qty_ordered - pending_qty)
                 
                 self.pending_treeview.insert(
                     "",
                     "end",
                     values=(
-                        order_id,
+                        order_ids,
                         sku,
                         description,
                         qty_ordered,
-                        qty_received,
+                        qty_received_approx,
                         pending_qty,
                         receipt_date_str,
                     ),

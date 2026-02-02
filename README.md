@@ -38,7 +38,7 @@ stock = StockCalculator.calculate_asof(
 - **RECEIPT**: Receipt closure (on_order -= qty, on_hand += qty)
 - **SALE**: Reduce on_hand (from sales.csv)
 - **WASTE**: Reduce on_hand
-- **ADJUST**: Signed adjustment (on_hand ± qty)
+- **ADJUST**: Absolute set (on_hand := qty)
 - **UNFULFILLED**: Tracking only (no stock impact)
 
 ### CSV Files (Auto-Created on First Run)

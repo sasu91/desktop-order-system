@@ -235,28 +235,49 @@ class CSVLayer:
         rows = self._read_csv("skus.csv")
         updated = False
         
+        # Normalize all rows to ensure they have all required fields with defaults
+        normalized_rows = []
         for row in rows:
-            if row.get("sku") == old_sku_id:
-                row["sku"] = new_sku_id
-                row["description"] = new_description
-                row["ean"] = new_ean or ""
-                row["moq"] = str(moq)
-                row["pack_size"] = str(pack_size)
-                row["lead_time_days"] = str(lead_time_days)
-                row["review_period"] = str(review_period)
-                row["safety_stock"] = str(safety_stock)
-                row["shelf_life_days"] = str(shelf_life_days)
-                row["max_stock"] = str(max_stock)
-                row["reorder_point"] = str(reorder_point)
-                row["supplier"] = supplier
-                row["demand_variability"] = demand_variability.value
+            # Ensure all fields exist with proper defaults
+            normalized_row = {
+                "sku": row.get("sku", "").strip(),
+                "description": row.get("description", "").strip(),
+                "ean": row.get("ean", "").strip(),
+                "moq": row.get("moq", "1").strip() or "1",
+                "pack_size": row.get("pack_size", "1").strip() or "1",
+                "lead_time_days": row.get("lead_time_days", "7").strip() or "7",
+                "review_period": row.get("review_period", "7").strip() or "7",
+                "safety_stock": row.get("safety_stock", "0").strip() or "0",
+                "shelf_life_days": row.get("shelf_life_days", "0").strip() or "0",
+                "max_stock": row.get("max_stock", "999").strip() or "999",
+                "reorder_point": row.get("reorder_point", "10").strip() or "10",
+                "supplier": row.get("supplier", "").strip(),
+                "demand_variability": row.get("demand_variability", "STABLE").strip() or "STABLE",
+            }
+            
+            # Update the target row with new values
+            if normalized_row["sku"] == old_sku_id:
+                normalized_row["sku"] = new_sku_id
+                normalized_row["description"] = new_description
+                normalized_row["ean"] = new_ean or ""
+                normalized_row["moq"] = str(moq)
+                normalized_row["pack_size"] = str(pack_size)
+                normalized_row["lead_time_days"] = str(lead_time_days)
+                normalized_row["review_period"] = str(review_period)
+                normalized_row["safety_stock"] = str(safety_stock)
+                normalized_row["shelf_life_days"] = str(shelf_life_days)
+                normalized_row["max_stock"] = str(max_stock)
+                normalized_row["reorder_point"] = str(reorder_point)
+                normalized_row["supplier"] = supplier
+                normalized_row["demand_variability"] = demand_variability.value
                 updated = True
-                break
+            
+            normalized_rows.append(normalized_row)
         
         if not updated:
             return False
         
-        self._write_csv("skus.csv", rows)
+        self._write_csv("skus.csv", normalized_rows)
         
         # If SKU code changed, update all ledger references
         if old_sku_id != new_sku_id:

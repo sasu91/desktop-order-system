@@ -17,7 +17,7 @@ class EventType(Enum):
     RECEIPT = "RECEIPT"        # Receipt: on_order -= qty, on_hand += qty
     SALE = "SALE"              # Sale: on_hand -= qty
     WASTE = "WASTE"            # Waste: on_hand -= qty
-    ADJUST = "ADJUST"          # Signed adjustment: on_hand ± qty
+    ADJUST = "ADJUST"          # Absolute set: on_hand := qty (replaces stock like SNAPSHOT)
     UNFULFILLED = "UNFULFILLED"  # Tracking only (no impact on stock)
     SKU_EDIT = "SKU_EDIT"      # SKU metadata change (description/EAN) - no stock impact
     EXPORT_LOG = "EXPORT_LOG"  # Export operation log - no stock impact

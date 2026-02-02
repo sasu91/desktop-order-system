@@ -102,9 +102,9 @@ class ReceivingWorkflow:
         
         # Create RECEIPT events + UNFULFILLED events for each SKU
         for sku, qty_received in sku_quantities.items():
-            # RECEIPT event
+            # RECEIPT event: use receipt_date as event date (impacts stock on that day)
             txn_receipt = Transaction(
-                date=today,
+                date=receipt_date,
                 sku=sku,
                 event=EventType.RECEIPT,
                 qty=qty_received,
@@ -122,9 +122,9 @@ class ReceivingWorkflow:
             # 2. Received less than ordered (qty_unfulfilled > 0)
             # 3. Protection: never create UNFULFILLED > qty_ordered
             if qty_ordered > 0 and qty_unfulfilled > 0:
-                # Create UNFULFILLED event
+                # Create UNFULFILLED event: use receipt_date to match RECEIPT event timing
                 txn_unfulfilled = Transaction(
-                    date=today,
+                    date=receipt_date,
                     sku=sku,
                     event=EventType.UNFULFILLED,
                     qty=min(qty_unfulfilled, qty_ordered),  # Safety cap

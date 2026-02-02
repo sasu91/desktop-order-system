@@ -1,0 +1,11 @@
+sku,description,ean,moq,pack_size,lead_time_days,review_period,safety_stock,shelf_life_days,max_stock,reorder_point,supplier,demand_variability
+SKU001,Caffè Arabica 250g,8001234567890,10,1,7,7,0,0,500,50,Fornitore Caffè Srl,STABLE
+SKU002,Latte Intero 1L,8002345678901,20,1,3,7,0,0,1000,100,Latteria Alpina,HIGH
+SKU003,Biscotti Frollini 350g,8003456789012,12,1,5,7,0,0,300,40,Dolciaria Italiana,STABLE
+SKU004,Pasta Fusilli 500g,8004567890123,30,1,10,7,0,0,800,80,Pastificio Artigiano,LOW
+SKU005,Pomodori Pelati 400g,8005678901234,15,1,7,7,0,0,400,50,Conserve Sud,STABLE
+SKU006,Olio Extravergine 750ml,8006789012345,6,1,14,7,0,0,200,30,Oleificio Toscano,LOW
+SKU007,Zucchero 1kg,8007890123456,25,1,5,7,0,0,600,60,Zuccherificio Nord,STABLE
+SKU008,Sale Fino 1kg,8008901234567,20,1,3,7,0,0,500,50,Salina Marina,STABLE
+SKU009,Acqua Minerale 1.5L,8009012345678,50,1,2,7,0,0,2000,200,Acque Pure SpA,HIGH
+SKU010,Yogurt Bianco 125g,1234567890128,40,1,2,7,0,0,800,100,Latteria Alpina,HIGH

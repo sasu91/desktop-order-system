@@ -75,7 +75,7 @@ def verify_data_consistency():
     print(f"\n5. Ordini Registrati:")
     orders = csv_layer.read_order_logs()
     print(f"   Totale ordini: {len(orders)}")
-    pending = [o for o in orders if o.get('status') == 'pending']
+    pending = [o for o in orders if o.get('status') == 'PENDING']
     received = [o for o in orders if o.get('status') == 'received']
     print(f"   - Pending: {len(pending)}")
     print(f"   - Received: {len(received)}")

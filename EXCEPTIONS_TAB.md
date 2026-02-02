@@ -41,7 +41,7 @@ Form integrato nella parte superiore del tab per registrazione rapida eccezioni:
 **Campi:**
 - **Event Type** (Dropdown, readonly): WASTE, ADJUST, UNFULFILLED
 - **SKU** (Combobox): Lista di tutti gli SKU disponibili (popolata da `csv_layer.get_all_sku_ids()`)
-- **Quantity** (Entry): Numero intero (signed, può essere negativo per ADJUST)
+- **Quantity** (Entry): Numero intero (per ADJUST: valore assoluto finale; per WASTE: quantità da sottrarre)
 - **Date** (Entry): Formato YYYY-MM-DD (default: oggi)
 - **Notes** (Entry): Testo libero opzionale
 
@@ -119,7 +119,7 @@ reverted_count = exception_workflow.revert_exception_day(
 | Tipo | Significato | Impatto Stock | Uso Tipico |
 |------|------------|---------------|------------|
 | **WASTE** | Scarto/danno | `on_hand -= qty` | Merci danneggiate, scadute, perse |
-| **ADJUST** | Rettifica inventariale | `on_hand += qty` (qty signed) | Correzione errori di conteggio, inventario fisico |
+| **ADJUST** | Rettifica inventariale | `on_hand := qty` (set assoluto) | Correzione errori di conteggio, inventario fisico |
 | **UNFULFILLED** | Ordine non evaso (tracking) | Nessuno | Monitoraggio ordini non evasibili |
 
 **Esempi:**

@@ -126,8 +126,9 @@ class TestStockCalculatorEventOrdering:
             asof_date=date(2026, 1, 2),
             transactions=txns,
         )
-        # Order should be: SNAPSHOT (100) → ORDER (no effect) → ADJUST (+10)
-        assert stock.on_hand == 110
+        # Order should be: SNAPSHOT (100) → ORDER (no effect on on_hand) → ADJUST (set to 10)
+        # ADJUST is absolute set, not delta
+        assert stock.on_hand == 10
         assert stock.on_order == 50
 
 

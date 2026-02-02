@@ -95,7 +95,7 @@ class StockCalculator:
             elif txn.event == EventType.WASTE:
                 on_hand = max(0, on_hand - txn.qty)
             elif txn.event == EventType.ADJUST:
-                # ADJUST sostituisce on_hand con il valore specificato (come SNAPSHOT)
+                # ADJUST: absolute set (not delta). Sets on_hand to specified value.
                 on_hand = max(0, txn.qty)
             elif txn.event == EventType.UNFULFILLED:
                 # Track unfulfilled quantities (backorder/cancellazioni)

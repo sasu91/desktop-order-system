@@ -23,7 +23,7 @@
 - **RECEIPT**: Decrease on_order, increase on_hand (on_order -= qty, on_hand += qty)
 - **SALE**: Decrease on_hand (on_hand -= qty); consumed from daily sales.csv
 - **WASTE**: Decrease on_hand (on_hand -= qty)
-- **ADJUST**: Signed adjustment (on_hand ± qty)
+- **ADJUST**: Absolute set (on_hand := qty)
 - **UNFULFILLED**: Tracking only (no stock impact, but visible in reports)
 
 **Stock Calculation Rule**: All events with date < AsOf_date are applied sequentially per SKU. Order of event application per day: deterministic (by event type priority or insertion order—document choice).
