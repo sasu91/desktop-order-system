@@ -6,7 +6,7 @@ Deterministic and fully testable.
 """
 from dataclasses import dataclass, field
 from enum import Enum
-from datetime import date
+from datetime import date as Date
 from typing import Optional
 
 
@@ -76,15 +76,15 @@ class SKU:
 @dataclass(frozen=True)
 class Transaction:
     """Ledger transaction event - immutable."""
-    date: date          # Event date (YYYY-MM-DD)
+    date: Date          # Event date (YYYY-MM-DD)
     sku: str            # Reference to SKU
     event: EventType    # Event type
     qty: int            # Signed quantity
-    receipt_date: Optional[date] = None  # For ORDER/RECEIPT events
+    receipt_date: Optional[Date] = None  # For ORDER/RECEIPT events
     note: Optional[str] = None
     
     def __post_init__(self):
-        if self.date > date.today():
+        if self.date > Date.today():
             raise ValueError("Transaction date cannot be in the future")
         if self.event == EventType.SNAPSHOT and self.qty < 0:
             raise ValueError("SNAPSHOT qty must be non-negative")
@@ -97,7 +97,7 @@ class Stock:
     on_hand: int
     on_order: int
     unfulfilled_qty: int = 0  # Backorder/cancellazioni (reduce availability)
-    asof_date: Optional[date] = None
+    asof_date: Optional[Date] = None
     
     def __post_init__(self):
         if self.on_hand < 0:
@@ -129,7 +129,7 @@ class AuditLog:
 @dataclass(frozen=True)
 class SalesRecord:
     """Daily sales record from sales.csv."""
-    date: date
+    date: Date
     sku: str
     qty_sold: int
     
@@ -147,7 +147,7 @@ class OrderProposal:
     current_on_order: int
     daily_sales_avg: float
     proposed_qty: int
-    receipt_date: Optional[date] = None
+    receipt_date: Optional[Date] = None
     notes: Optional[str] = None
     shelf_life_warning: bool = False  # True if proposed qty exceeds shelf life capacity
     
@@ -176,10 +176,10 @@ class OrderProposal:
 class OrderConfirmation:
     """Confirmed order details."""
     order_id: str
-    date: date
+    date: Date
     sku: str
     qty_ordered: int
-    receipt_date: date
+    receipt_date: Date
     status: str = "PENDING"  # PENDING, RECEIVED, PARTIAL
 
 
@@ -187,7 +187,7 @@ class OrderConfirmation:
 class ReceivingLog:
     """Receiving closure record."""
     receipt_id: str
-    date: date
+    date: Date
     sku: str
     qty_received: int
-    receipt_date: date
+    receipt_date: Date
