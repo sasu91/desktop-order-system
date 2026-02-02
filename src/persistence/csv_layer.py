@@ -25,7 +25,7 @@ class CSVLayer:
         "skus.csv": ["sku", "description", "ean", "moq", "pack_size", "lead_time_days", "review_period", "safety_stock", "shelf_life_days", "max_stock", "reorder_point", "supplier", "demand_variability"],
         "transactions.csv": ["date", "sku", "event", "qty", "receipt_date", "note"],
         "sales.csv": ["date", "sku", "qty_sold"],
-        "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "status"],
+        "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "status", "receipt_date"],
         "receiving_logs.csv": ["receipt_id", "date", "sku", "qty_received", "receipt_date"],
         "audit_log.csv": ["timestamp", "operation", "sku", "details", "user"],
     }
@@ -484,14 +484,15 @@ class CSVLayer:
         """Read order logs."""
         return self._read_csv("order_logs.csv")
     
-    def write_order_log(self, order_id: str, date_str: str, sku: str, qty: int, status: str):
-        """Write order log entry."""
+    def write_order_log(self, order_id: str, date_str: str, sku: str, qty: int, status: str, receipt_date: Optional[str] = None):
+        """Write order log entry with expected receipt date."""
         self._append_csv("order_logs.csv", {
             "order_id": order_id,
             "date": date_str,
             "sku": sku,
             "qty_ordered": str(qty),
             "status": status,
+            "receipt_date": receipt_date or "",
         })
     
     # ============ Receiving Log Operations ============

@@ -237,6 +237,7 @@ class OrderWorkflow:
                 sku=confirmation.sku,
                 qty=confirmation.qty_ordered,
                 status=confirmation.status,
+                receipt_date=confirmation.receipt_date.isoformat() if confirmation.receipt_date else None,
             )
         
         return confirmations, transactions

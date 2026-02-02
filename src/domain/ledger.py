@@ -6,6 +6,7 @@ Core ledger processing: deterministic, testable, no I/O.
 from datetime import date
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
+from collections import defaultdict
 
 from .models import Transaction, EventType, Stock, SalesRecord
 
@@ -126,6 +127,127 @@ class StockCalculator:
             sku: StockCalculator.calculate_asof(sku, asof_date, transactions, sales_records)
             for sku in all_skus
         }
+    
+    @staticmethod
+    def on_order_by_date(
+        sku: str,
+        transactions: List[Transaction],
+        as_of_date: Optional[date] = None,
+    ) -> Dict[date, int]:
+        """
+        Calculate on-order quantities by expected receipt date for a SKU.
+        
+        This provides granular visibility into the order pipeline, enabling:
+        - Distinction between Saturday vs Monday deliveries (Friday dual orders)
+        - Accurate inventory position calculation for future dates
+        - Order fulfillment tracking by delivery window
+        
+        Args:
+            sku: SKU identifier
+            transactions: All ledger transactions
+            as_of_date: Optional cutoff date (only orders placed before this date). 
+                       If None, uses today.
+        
+        Returns:
+            Dict mapping {receipt_date: qty} for pending orders.
+            Only includes ORDER events that have not been fully RECEIPT-ed yet.
+        
+        Algorithm:
+            1. Find all ORDER events for SKU (with receipt_date)
+            2. Find all RECEIPT events for SKU
+            3. Match RECEIPTs to ORDERs by receipt_date
+            4. Return ORDER quantities not yet received
+        
+        Example:
+            Friday dual order scenario:
+            - ORDER(qty=30, receipt_date=2026-02-07 Sat)
+            - ORDER(qty=50, receipt_date=2026-02-09 Mon)
+            Result: {2026-02-07: 30, 2026-02-09: 50}
+            
+            After Saturday receipt:
+            - RECEIPT(qty=30, receipt_date=2026-02-07)
+            Result: {2026-02-09: 50}  # Saturday order fulfilled
+        """
+        cutoff = as_of_date or date.today()
+        
+        # Track orders by receipt_date
+        orders_by_date: Dict[date, int] = defaultdict(int)
+        receipts_by_date: Dict[date, int] = defaultdict(int)
+        
+        for txn in transactions:
+            if txn.sku != sku:
+                continue
+            if txn.date >= cutoff:
+                continue  # Only consider transactions before cutoff
+            
+            if txn.event == EventType.ORDER and txn.receipt_date:
+                orders_by_date[txn.receipt_date] += txn.qty
+            elif txn.event == EventType.RECEIPT and txn.receipt_date:
+                receipts_by_date[txn.receipt_date] += txn.qty
+        
+        # Calculate pending (unfulfilled) orders by date
+        pending_by_date: Dict[date, int] = {}
+        for receipt_date, ordered_qty in orders_by_date.items():
+            received_qty = receipts_by_date.get(receipt_date, 0)
+            pending = ordered_qty - received_qty
+            if pending > 0:
+                pending_by_date[receipt_date] = pending
+        
+        return pending_by_date
+    
+    @staticmethod
+    def inventory_position(
+        sku: str,
+        as_of_date: date,
+        transactions: List[Transaction],
+        sales_records: Optional[List[SalesRecord]] = None,
+    ) -> int:
+        """
+        Calculate inventory position (IP) for a SKU as of a specific date.
+        
+        IP accounts for inventory that will be available by as_of_date:
+        - on_hand (current physical stock)
+        - on_order (only orders with receipt_date <= as_of_date)
+        - unfulfilled_qty (backorders, reduces availability)
+        
+        This enables accurate stock projections for future dates, critical for:
+        - Friday dual order logic (different IP on Saturday vs Monday)
+        - Multi-day lead time planning
+        - Stock-out risk assessment
+        
+        Args:
+            sku: SKU identifier
+            as_of_date: Target date for IP calculation
+            transactions: All ledger transactions
+            sales_records: Daily sales records (optional)
+        
+        Returns:
+            Inventory position = on_hand + on_order_by(as_of_date) - unfulfilled_qty
+        
+        Example:
+            Current state (as of Friday evening):
+            - on_hand: 50
+            - ORDER(qty=30, receipt_date=Sat)
+            - ORDER(qty=50, receipt_date=Mon)
+            - unfulfilled_qty: 10
+            
+            IP(as_of=Saturday) = 50 + 30 - 10 = 70  (includes Sat order)
+            IP(as_of=Monday) = 50 + 30 + 50 - 10 = 120  (includes both orders)
+        """
+        # Get base stock (on_hand, unfulfilled_qty)
+        stock = StockCalculator.calculate_asof(sku, as_of_date, transactions, sales_records)
+        
+        # Get pending orders by receipt date
+        pending_orders = StockCalculator.on_order_by_date(sku, transactions, as_of_date)
+        
+        # Sum only orders that will arrive by as_of_date
+        on_order_by_date = sum(
+            qty for receipt_date, qty in pending_orders.items()
+            if receipt_date <= as_of_date
+        )
+        
+        # IP = on_hand + on_order (filtered by date) - unfulfilled_qty
+        return stock.on_hand + on_order_by_date - stock.unfulfilled_qty
 
 
 def calculate_sold_from_eod_stock(
