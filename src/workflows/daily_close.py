@@ -96,7 +96,7 @@ class DailyCloseWorkflow:
                 sku=sku,
                 event=EventType.ADJUST,
                 qty=eod_stock_on_hand,  # ADJUST sets stock to this value
-                notes=f"EOD adjustment (discrepancy: {adjustment:+d})",
+                note=f"EOD adjustment (discrepancy: {adjustment:+d})",
             )
             self.csv_layer.append_transaction(adjust_txn)
         

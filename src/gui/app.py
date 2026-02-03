@@ -473,9 +473,9 @@ class DesktopOrderApp:
             total_skus = len(sku_ids)
             self.kpi_total_skus_label.config(text=f"Totale SKU: {total_skus}")
             
-            # 2. Total Stock Value (assuming unit price = 10 for demo; ideally from SKU data)
-            # TODO: Add price field to SKU model
-            unit_price = 10  # Default price
+            # 2. Total Stock Value (from settings)
+            settings = self.csv_layer.read_settings()
+            unit_price = settings.get("dashboard", {}).get("stock_unit_price", {}).get("value", 10)
             total_stock_units = sum(stock.on_hand for stock in stocks.values())
             total_stock_value = total_stock_units * unit_price
             self.kpi_stock_value_label.config(text=f"Valore Stock: €{total_stock_value:,.0f}")
@@ -834,14 +834,6 @@ class DesktopOrderApp:
         params_row = ttk.Frame(param_frame)
         params_row.pack(side="top", fill="x", pady=5)
         
-        ttk.Label(params_row, text="Stock Minimo:", width=12).pack(side="left", padx=(0, 5))
-        self.min_stock_var = tk.StringVar(value=str(engine.get("min_stock", {}).get("value", 10)))
-        ttk.Entry(params_row, textvariable=self.min_stock_var, width=10).pack(side="left", padx=(0, 20))
-        
-        ttk.Label(params_row, text="Giorni Copertura:", width=12).pack(side="left", padx=(0, 5))
-        self.days_cover_var = tk.StringVar(value=str(engine.get("days_cover", {}).get("value", 30)))
-        ttk.Entry(params_row, textvariable=self.days_cover_var, width=10).pack(side="left", padx=(0, 20))
-        
         ttk.Label(params_row, text="Lead Time (giorni):", width=15).pack(side="left", padx=(0, 5))
         self.lead_time_var = tk.StringVar(value=str(engine.get("lead_time_days", {}).get("value", 7)))
         ttk.Entry(params_row, textvariable=self.lead_time_var, width=10).pack(side="left", padx=(0, 20))
@@ -1080,8 +1072,6 @@ class DesktopOrderApp:
             engine = settings.get("reorder_engine", {})
             
             # Use user input if provided, otherwise use settings defaults
-            min_stock = int(self.min_stock_var.get()) if self.min_stock_var.get() else engine.get("min_stock", {}).get("value", 10)
-            days_cover = int(self.days_cover_var.get()) if self.days_cover_var.get() else engine.get("days_cover", {}).get("value", 14)
             lead_time = int(self.lead_time_var.get()) if self.lead_time_var.get() else engine.get("lead_time_days", {}).get("value", 7)
             
         except ValueError:
@@ -1151,8 +1141,6 @@ class DesktopOrderApp:
                 description=description,
                 current_stock=stock,
                 daily_sales_avg=daily_sales,
-                min_stock=min_stock,
-                days_cover=days_cover,
                 sku_obj=sku_obj,
                 oos_days_count=oos_days_count,
                 oos_boost_percent=oos_boost_percent,
@@ -1757,15 +1745,11 @@ class DesktopOrderApp:
         # Get SKU descriptions
         skus_by_id = {sku.sku: sku for sku in self.csv_layer.read_skus()}
         
-        # Group order logs by SKU and receipt_date (to show expected delivery dates)
-        # Filter to show only orders with status PENDING
+        # Display pending orders using ledger on_order as source of truth
         self.pending_treeview.delete(*self.pending_treeview.get_children())
         
-        # Track which SKUs have on_order > 0 (from ledger)
-        sku_with_orders = {sku: stock for sku, stock in stock_by_sku.items() if stock.on_order > 0}
-        
-        # Build display: group orders by (SKU, receipt_date) and sum quantities
-        order_groups = {}  # {(sku, receipt_date): [order_ids, total_qty_ordered]}
+        # Group order logs by (SKU, receipt_date) for display purposes
+        order_groups = {}  # {(sku, receipt_date): {order_ids: [], qty_ordered_total: int}}
         
         for log in order_logs:
             sku = log.get("sku")
@@ -1781,39 +1765,36 @@ class DesktopOrderApp:
             
             key = (sku, receipt_date_str)
             if key not in order_groups:
-                order_groups[key] = {"order_ids": [], "qty_ordered": 0}
+                order_groups[key] = {"order_ids": [], "qty_ordered_total": 0}
             
             order_groups[key]["order_ids"].append(order_id)
-            order_groups[key]["qty_ordered"] += qty_ordered
+            order_groups[key]["qty_ordered_total"] += qty_ordered
         
-        # Display orders, using ledger on_order as truth
+        # Display rows: one per (SKU, receipt_date) with ledger on_order as pending qty
         for (sku, receipt_date_str), group_data in order_groups.items():
             description = skus_by_id.get(sku).description if sku in skus_by_id else "N/A"
-            qty_ordered = group_data["qty_ordered"]
-            order_ids = ", ".join(group_data["order_ids"])
+            qty_ordered_total = group_data["qty_ordered_total"]
+            order_ids_str = ", ".join(group_data["order_ids"])
             
-            # Get current on_order from ledger
-            current_on_order = stock_by_sku.get(sku, Stock(sku=sku, on_hand=0, on_order=0, asof_date=today)).on_order
+            # Get current on_order from ledger (source of truth)
+            stock = stock_by_sku.get(sku, Stock(sku=sku, on_hand=0, on_order=0, asof_date=today))
+            ledger_on_order = stock.on_order
             
-            # Calculate pending: use ledger on_order (not order_log qty - received qty)
-            # This reflects actual stock state including all RECEIPT events
-            pending_qty = current_on_order
-            
-            # Only show if there's actually stock on order (from ledger)
-            if pending_qty > 0:
-                # Qty received approximation: ordered - on_order
-                qty_received_approx = max(0, qty_ordered - pending_qty)
+            # Only show if ledger reports on_order > 0
+            if ledger_on_order > 0:
+                # Estimate received: total ordered - current on_order
+                qty_received_est = max(0, qty_ordered_total - ledger_on_order)
                 
                 self.pending_treeview.insert(
                     "",
                     "end",
                     values=(
-                        order_ids,
+                        order_ids_str,
                         sku,
                         description,
-                        qty_ordered,
-                        qty_received_approx,
-                        pending_qty,
+                        qty_ordered_total,
+                        qty_received_est,
+                        ledger_on_order,
                         receipt_date_str,
                     ),
                 )
@@ -3717,28 +3698,36 @@ class DesktopOrderApp:
                 "max": 90
             },
             {
-                "key": "min_stock",
-                "label": "Stock Minimo (unità)",
-                "description": "Soglia minima di sicurezza per lo stock",
-                "type": "int",
-                "min": 0,
-                "max": 1000
-            },
-            {
-                "key": "days_cover",
-                "label": "Giorni di Copertura",
-                "description": "Numero di giorni di vendite da coprire con ordini",
-                "type": "int",
-                "min": 1,
-                "max": 90
-            },
-            {
                 "key": "moq",
                 "label": "MOQ (Quantità Minima Ordine)",
                 "description": "Multiplo minimo per gli ordini",
                 "type": "int",
                 "min": 1,
                 "max": 1000
+            },
+            {
+                "key": "pack_size",
+                "label": "Pack Size (unità)",
+                "description": "Multiplo di arrotondamento per colli",
+                "type": "int",
+                "min": 1,
+                "max": 1000
+            },
+            {
+                "key": "review_period",
+                "label": "Review Period (giorni)",
+                "description": "Finestra di revisione per il target S",
+                "type": "int",
+                "min": 1,
+                "max": 90
+            },
+            {
+                "key": "safety_stock",
+                "label": "Safety Stock (unità)",
+                "description": "Scorta di sicurezza aggiunta al target S",
+                "type": "int",
+                "min": 0,
+                "max": 10000
             },
             {
                 "key": "max_stock",
@@ -3762,6 +3751,24 @@ class DesktopOrderApp:
                 "description": "Livello di variabilità della domanda",
                 "type": "choice",
                 "choices": ["STABLE", "MODERATE", "HIGH"]
+            },
+            {
+                "key": "oos_boost_percent",
+                "label": "OOS Boost (%)",
+                "description": "Percentuale di incremento ordine per SKU con giorni OOS",
+                "type": "int",
+                "min": 0,
+                "max": 100,
+                "section": "reorder_engine"
+            },
+            {
+                "key": "stock_unit_price",
+                "label": "Prezzo Unitario Stock (€)",
+                "description": "Prezzo medio unitario per calcolo valore stock in Dashboard",
+                "type": "int",
+                "min": 1,
+                "max": 10000,
+                "section": "dashboard"
             }
         ]
         
@@ -3857,10 +3864,26 @@ class DesktopOrderApp:
         """Refresh settings tab with current values."""
         try:
             settings = self.csv_layer.read_settings()
-            engine = settings.get("reorder_engine", {})
+            
+            # Read parameters list to determine section
+            parameters = [
+                {"key": "lead_time_days", "section": "reorder_engine"},
+                {"key": "moq", "section": "reorder_engine"},
+                {"key": "pack_size", "section": "reorder_engine"},
+                {"key": "review_period", "section": "reorder_engine"},
+                {"key": "safety_stock", "section": "reorder_engine"},
+                {"key": "max_stock", "section": "reorder_engine"},
+                {"key": "reorder_point", "section": "reorder_engine"},
+                {"key": "demand_variability", "section": "reorder_engine"},
+                {"key": "oos_boost_percent", "section": "reorder_engine"},
+                {"key": "stock_unit_price", "section": "dashboard"},
+            ]
+            
+            param_sections = {p["key"]: p.get("section", "reorder_engine") for p in parameters}
             
             for param_key, widgets in self.settings_widgets.items():
-                param_config = engine.get(param_key, {})
+                section = param_sections.get(param_key, "reorder_engine")
+                param_config = settings.get(section, {}).get(param_key, {})
                 widgets["value_var"].set(param_config.get("value", 0))
                 widgets["auto_apply_var"].set(param_config.get("auto_apply_to_new_sku", True))
         
@@ -3872,9 +3895,31 @@ class DesktopOrderApp:
         try:
             settings = self.csv_layer.read_settings()
             
-            # Update reorder_engine section
+            # Parameters with sections
+            parameters = [
+                {"key": "lead_time_days", "section": "reorder_engine"},
+                {"key": "moq", "section": "reorder_engine"},
+                {"key": "pack_size", "section": "reorder_engine"},
+                {"key": "review_period", "section": "reorder_engine"},
+                {"key": "safety_stock", "section": "reorder_engine"},
+                {"key": "max_stock", "section": "reorder_engine"},
+                {"key": "reorder_point", "section": "reorder_engine"},
+                {"key": "demand_variability", "section": "reorder_engine"},
+                {"key": "oos_boost_percent", "section": "reorder_engine"},
+                {"key": "stock_unit_price", "section": "dashboard"},
+            ]
+            
+            param_sections = {p["key"]: p.get("section", "reorder_engine") for p in parameters}
+            
+            # Update settings by section
             for param_key, widgets in self.settings_widgets.items():
-                settings["reorder_engine"][param_key] = {
+                section = param_sections.get(param_key, "reorder_engine")
+                
+                # Ensure section exists
+                if section not in settings:
+                    settings[section] = {}
+                
+                settings[section][param_key] = {
                     "value": widgets["value_var"].get(),
                     "auto_apply_to_new_sku": widgets["auto_apply_var"].get()
                 }

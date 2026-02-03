@@ -137,7 +137,10 @@ class CSVLayer:
             description=sku.description,
             ean=sku.ean,
             moq=defaults.get("moq", sku.moq) if sku.moq == 1 else sku.moq,
+            pack_size=defaults.get("pack_size", sku.pack_size) if sku.pack_size == 1 else sku.pack_size,
             lead_time_days=defaults.get("lead_time_days", sku.lead_time_days) if sku.lead_time_days == 7 else sku.lead_time_days,
+            review_period=defaults.get("review_period", sku.review_period) if sku.review_period == 7 else sku.review_period,
+            safety_stock=defaults.get("safety_stock", sku.safety_stock) if sku.safety_stock == 0 else sku.safety_stock,
             max_stock=defaults.get("max_stock", sku.max_stock) if sku.max_stock == 999 else sku.max_stock,
             reorder_point=defaults.get("reorder_point", sku.reorder_point) if sku.reorder_point == 10 else sku.reorder_point,
             supplier=sku.supplier,
@@ -591,16 +594,20 @@ class CSVLayer:
                     "value": 7,
                     "auto_apply_to_new_sku": True
                 },
-                "min_stock": {
-                    "value": 10,
-                    "auto_apply_to_new_sku": True
-                },
-                "days_cover": {
-                    "value": 14,
-                    "auto_apply_to_new_sku": True
-                },
                 "moq": {
                     "value": 1,
+                    "auto_apply_to_new_sku": True
+                },
+                "pack_size": {
+                    "value": 1,
+                    "auto_apply_to_new_sku": True
+                },
+                "review_period": {
+                    "value": 7,
+                    "auto_apply_to_new_sku": True
+                },
+                "safety_stock": {
+                    "value": 0,
                     "auto_apply_to_new_sku": True
                 },
                 "max_stock": {
@@ -614,6 +621,16 @@ class CSVLayer:
                 "demand_variability": {
                     "value": "STABLE",
                     "auto_apply_to_new_sku": True
+                },
+                "oos_boost_percent": {
+                    "value": 20,
+                    "auto_apply_to_new_sku": False
+                }
+            },
+            "dashboard": {
+                "stock_unit_price": {
+                    "value": 10,
+                    "description": "Prezzo unitario medio per calcolo valore stock"
                 }
             }
         }
@@ -651,14 +668,14 @@ class CSVLayer:
         Get default SKU parameters from settings (for auto-apply to new SKUs).
         
         Returns:
-            Dict with keys: moq, lead_time_days, max_stock, reorder_point, demand_variability
+            Dict with keys: moq, pack_size, lead_time_days, review_period, safety_stock, max_stock, reorder_point, demand_variability
         """
         settings = self.read_settings()
         engine = settings.get("reorder_engine", {})
         
         defaults = {}
         
-        for param_name in ["moq", "lead_time_days", "max_stock", "reorder_point", "demand_variability"]:
+        for param_name in ["moq", "pack_size", "lead_time_days", "review_period", "safety_stock", "max_stock", "reorder_point", "demand_variability"]:
             param_config = engine.get(param_name, {})
             if param_config.get("auto_apply_to_new_sku", False):
                 defaults[param_name] = param_config.get("value")
