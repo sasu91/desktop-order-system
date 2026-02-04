@@ -3715,9 +3715,35 @@ class DesktopOrderApp:
             wraplength=800
         ).pack(side="left")
         
-        # Settings form
-        settings_container = ttk.LabelFrame(main_frame, text="Parametri Globali", padding=20)
-        settings_container.pack(fill="both", expand=True, pady=10)
+        # Scrollable container for settings form
+        scroll_container = ttk.Frame(main_frame)
+        scroll_container.pack(fill="both", expand=True, pady=10)
+        
+        # Canvas with scrollbar
+        canvas = tk.Canvas(scroll_container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Enable mouse wheel scrolling
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        # Settings form inside scrollable frame
+        settings_container = ttk.LabelFrame(scrollable_frame, text="Parametri Globali", padding=20)
+        settings_container.pack(fill="both", expand=True)
         
         # Storage for widgets
         self.settings_widgets = {}
