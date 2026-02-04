@@ -8,6 +8,75 @@ from ..domain.models import Stock, OrderProposal, OrderConfirmation, Transaction
 from ..persistence.csv_layer import CSVLayer
 from ..domain.ledger import StockCalculator
 
+def simulate_intermittent_demand(
+    daily_sales_avg: float,
+    current_ip: int,
+    pack_size: int,
+    lead_time: int,
+    review_period: int,
+    moq: int,
+    max_stock: int,
+) -> Tuple[int, int, str]:
+    """
+    Simulate intermittent/low-volume demand day-by-day.
+    
+    For SKUs with low movement (< 1 pack every 2-3 days), linear forecast
+    can underestimate. This simulates daily consumption and triggers reorder
+    when IP would drop below 1 pack.
+    
+    Args:
+        daily_sales_avg: Average daily sales (can be < 1)
+        current_ip: Current inventory position (on_hand + on_order - unfulfilled)
+        pack_size: Pack size
+        lead_time: Lead time in days
+        review_period: Review period in days
+        moq: Minimum order quantity
+        max_stock: Max stock cap
+    
+    Returns:
+        (proposed_qty, trigger_day, notes)
+        - proposed_qty: Quantity to order (in units, not packs)
+        - trigger_day: Day when IP drops below 1 pack (0=today, 1=tomorrow, etc.)
+        - notes: Simulation explanation
+    """
+    horizon = lead_time + review_period
+    ip_simulated = current_ip
+    trigger_day = -1
+    
+    # Simulate consumption day by day
+    for day in range(horizon):
+        # Expected consumption for this day
+        expected_consumption = daily_sales_avg
+        ip_simulated -= expected_consumption
+        
+        # Trigger if IP would drop below 1 pack
+        if ip_simulated < pack_size and trigger_day == -1:
+            trigger_day = day
+            break
+    
+    # If no trigger found in horizon, no order needed
+    if trigger_day == -1:
+        return 0, -1, "Simulazione: IP rimane sopra 1 collo per tutto l'orizzonte"
+    
+    # Propose 1 pack (or MOQ if higher)
+    proposed_packs = 1
+    proposed_qty = proposed_packs * pack_size
+    
+    # Apply MOQ
+    if proposed_qty < moq:
+        proposed_qty = moq
+    
+    # Cap at max_stock
+    if current_ip + proposed_qty > max_stock:
+        proposed_qty = max(0, max_stock - current_ip)
+        # Re-apply pack constraint
+        if proposed_qty > 0 and pack_size > 1:
+            proposed_qty = (proposed_qty // pack_size) * pack_size
+    
+    notes = f"Simulazione: IP scenderebbe sotto 1 collo al giorno {trigger_day} (orizzonte {horizon}d)"
+    return proposed_qty, trigger_day, notes
+
+
 class OrderWorkflow:
     """Order processing: proposal generation and confirmation."""
     
@@ -69,6 +138,15 @@ class OrderWorkflow:
         shelf_life_days = sku_obj.shelf_life_days if sku_obj else 0
         max_stock = sku_obj.max_stock if sku_obj else 999
         
+        # Detect intermittent demand pattern (low movement)
+        # Threshold: if daily_sales_avg < pack_size / 2.5, use simulation
+        intermittent_threshold = pack_size / 2.5 if pack_size > 1 else 0.5
+        use_simulation = daily_sales_avg < intermittent_threshold
+        
+        simulation_used = False
+        simulation_trigger_day = 0
+        simulation_notes = ""
+        
         # NEW FORMULA: S = forecast × (lead_time + review_period) + safety_stock
         forecast_period = lead_time + review_period
         forecast_qty = int(daily_sales_avg * forecast_period)
@@ -87,9 +165,26 @@ class OrderWorkflow:
         inventory_position = current_stock.inventory_position()
         unfulfilled_qty = current_stock.unfulfilled_qty
         
-        # proposed = max(0, S − IP)
-        proposed_qty_raw = max(0, S - inventory_position)
-        proposed_qty_before_rounding = proposed_qty_raw
+        # Use simulation for intermittent demand
+        if use_simulation:
+            sim_qty, sim_trigger, sim_notes = simulate_intermittent_demand(
+                daily_sales_avg=daily_sales_avg,
+                current_ip=inventory_position,
+                pack_size=pack_size,
+                lead_time=lead_time,
+                review_period=review_period,
+                moq=moq,
+                max_stock=max_stock,
+            )
+            proposed_qty_raw = sim_qty
+            simulation_used = True
+            simulation_trigger_day = sim_trigger
+            simulation_notes = sim_notes
+            proposed_qty_before_rounding = proposed_qty_raw
+        else:
+            # Standard formula: proposed = max(0, S − IP)
+            proposed_qty_raw = max(0, S - inventory_position)
+            proposed_qty_before_rounding = proposed_qty_raw
         
         # Apply OOS boost if requested (increase proposed qty)
         oos_boost_applied = False
@@ -100,14 +195,19 @@ class OrderWorkflow:
             proposed_qty_before_rounding = proposed_qty_raw
         
         # Apply pack_size rounding (round up to nearest pack_size multiple)
-        if proposed_qty_raw > 0 and pack_size > 1:
-            proposed_qty = ((proposed_qty_raw + pack_size - 1) // pack_size) * pack_size
+        # Skip if simulation already applied it
+        if not simulation_used:
+            if proposed_qty_raw > 0 and pack_size > 1:
+                proposed_qty = ((proposed_qty_raw + pack_size - 1) // pack_size) * pack_size
+            else:
+                proposed_qty = proposed_qty_raw
+            
+            # Apply MOQ rounding (round up to nearest MOQ multiple)
+            if proposed_qty > 0 and moq > 1:
+                proposed_qty = ((proposed_qty + moq - 1) // moq) * moq
         else:
+            # Simulation already rounded
             proposed_qty = proposed_qty_raw
-        
-        # Apply MOQ rounding (round up to nearest MOQ multiple)
-        if proposed_qty > 0 and moq > 1:
-            proposed_qty = ((proposed_qty + moq - 1) // moq) * moq
         
         # Cap at max_stock (use IP for capping logic)
         capped_by_max_stock = False
@@ -171,6 +271,9 @@ class OrderWorkflow:
             oos_days_count=oos_days_count,
             oos_boost_applied=oos_boost_applied,
             oos_boost_percent=oos_boost_percent,
+            simulation_used=simulation_used,
+            simulation_trigger_day=simulation_trigger_day,
+            simulation_notes=simulation_notes,
         )
     
     def confirm_order(

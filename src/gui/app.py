@@ -1050,6 +1050,16 @@ class DesktopOrderApp:
                 details.append("Boost rifiutato dall'utente")
             details.append("")
         
+        # Simulation details (for intermittent demand)
+        if proposal.simulation_used:
+            details.append("═══ SIMULAZIONE DOMANDA INTERMITTENTE ═══")
+            details.append(f"Rilevata domanda bassa (<{pack_size/2.5:.2f} pz/gg)")
+            details.append(f"Usata simulazione giornaliera invece di formula lineare")
+            if proposal.simulation_trigger_day >= 0:
+                details.append(f"Trigger: IP scenderebbe sotto 1 collo al giorno {proposal.simulation_trigger_day}")
+            details.append(f"Note: {proposal.simulation_notes}")
+            details.append("")
+        
         # Final motivation
         details.append("═══ MOTIVAZIONE FINALE ═══")
         if proposal.proposed_qty == 0:
@@ -1059,7 +1069,10 @@ class DesktopOrderApp:
                 details.append("Qty = 0 (cap o constraints)")
         else:
             details.append(f"Ordinare {to_colli(proposal.proposed_qty, pack_size)}")
-            details.append(f"per raggiungere target S")
+            if proposal.simulation_used:
+                details.append(f"(determinato via simulazione giornaliera)")
+            else:
+                details.append(f"per raggiungere target S")
         
         if proposal.notes:
             details.append("")

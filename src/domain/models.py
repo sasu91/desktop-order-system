@@ -170,6 +170,9 @@ class OrderProposal:
     oos_days_count: int = 0  # Giorni OOS nel periodo lookback
     oos_boost_applied: bool = False  # True se è stato applicato uplift OOS
     oos_boost_percent: float = 0.0  # Percentuale uplift applicata (es. 0.20 = 20%)
+    simulation_used: bool = False  # True se è stata usata simulazione intermittente
+    simulation_trigger_day: int = 0  # Giorno in cui IP scende sotto soglia (0 = oggi)
+    simulation_notes: str = ""  # Note sulla simulazione
 
 
 @dataclass
