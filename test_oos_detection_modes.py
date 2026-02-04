@@ -71,34 +71,39 @@ def test_oos_detection_modes():
             oos_detection_mode="relaxed"
         )
         
-        print("=== Test OOS Detection Modes ===\\n")
+        print("=== Test OOS Detection Modes ===")
+        print()
         print("Scenario:")
         print("  - Day -30: SNAPSHOT 100 units")
         print("  - Day -10: ORDER 100 units (arrival day -3)")
         print("  - Days -9 to -4: SALES 20 units/day (120 total)")
         print("  - Day -5: on_hand reaches 0, on_order=100")
-        print("  - Day -3: RECEIPT 100 units\\n")
+        print("  - Day -3: RECEIPT 100 units")
+        print()
         
         print(f"TEST 1: Strict Mode (on_hand == 0)")
         print(f"  OOS Days Count: {oos_days_strict}")
         print(f"  Daily Sales Avg: {daily_sales_strict:.2f}")
         print(f"  Expected: OOS days >= 2 (days -5, -4 with on_hand=0)")
         assert oos_days_strict >= 2, f"Strict mode should detect at least 2 OOS days, got {oos_days_strict}"
-        print(f"  ✓ Strict mode detected OOS correctly\\n")
+        print(f"  ✓ Strict mode detected OOS correctly")
+        print()
         
         print(f"TEST 2: Relaxed Mode (on_hand + on_order == 0)")
         print(f"  OOS Days Count: {oos_days_relaxed}")
         print(f"  Daily Sales Avg: {daily_sales_relaxed:.2f}")
         print(f"  Expected: OOS days = 0 (on_order covers)")
         assert oos_days_relaxed == 0, f"Relaxed mode should detect 0 OOS days, got {oos_days_relaxed}"
-        print(f"  ✓ Relaxed mode ignored days with on_order\\n")
+        print(f"  ✓ Relaxed mode ignored days with on_order")
+        print()
         
         print(f"TEST 3: Daily Sales Comparison")
         print(f"  Strict avg: {daily_sales_strict:.2f} (excludes OOS days)")
         print(f"  Relaxed avg: {daily_sales_relaxed:.2f} (includes all days)")
         print(f"  Impact: Strict excludes days with on_hand=0 (likely zero sales)")
         # Note: strict avg might be lower because it excludes fewer zero-sale days
-        print(f"  ✓ Both modes calculated averages correctly\n")
+        print(f"  ✓ Both modes calculated averages correctly")
+        print()
         
         # TEST 4: Low-movement SKU (1 unit every 3 days)
         print("TEST 4: Low-movement SKU (1 unit every 3 days)")
@@ -159,7 +164,8 @@ def test_oos_detection_modes():
         print(f"  Strict avg: {low_avg_strict:.2f}")
         print(f"  Relaxed avg: {low_avg_relaxed:.2f}")
         assert low_oos_strict > low_oos_relaxed, "Strict should detect more OOS days for low-movement SKU"
-        print("  ✓ Strict mode protects low-movement SKU from under-ordering\n")
+        print("  ✓ Strict mode protects low-movement SKU from under-ordering")
+        print()
         
         # TEST 5: Per-SKU override
         print("TEST 5: Per-SKU Override")
@@ -220,7 +226,8 @@ def test_oos_detection_modes():
         assert sku_relaxed_loaded.oos_detection_mode == "relaxed"
         assert sku_default_loaded.oos_detection_mode == ""
         
-        print(f"  ✓ Per-SKU modes persisted correctly\\n")
+        print(f"  ✓ Per-SKU modes persisted correctly")
+        print()
         
         # TEST 6: Settings integration
         print("TEST 6: Global Settings")
@@ -229,7 +236,8 @@ def test_oos_detection_modes():
         print(f"  Global OOS detection mode: '{global_mode}'")
         print(f"  Expected: 'strict'")
         assert global_mode == "strict", f"Global mode should be 'strict', got '{global_mode}'"
-        print(f"  ✓ Global setting correct\\n")
+        print(f"  ✓ Global setting correct")
+        print()
         
         print("=" * 50)
         print("✓ All tests passed!")
@@ -240,7 +248,8 @@ def test_oos_detection_modes():
         
     finally:
         shutil.rmtree(test_dir)
-        print("\\n✓ Test completed successfully")
+        print()
+        print("✓ Test completed successfully")
 
 
 if __name__ == "__main__":
