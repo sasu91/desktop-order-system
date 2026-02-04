@@ -893,9 +893,17 @@ class DesktopOrderApp:
         details_frame.pack(side="right", fill="both", padx=(5, 0))
         details_frame.config(width=350)
         
-        # Details text widget (read-only)
-        self.proposal_details_text = tk.Text(details_frame, wrap="word", width=40, height=20, state="disabled", font=("Courier", 9))
-        self.proposal_details_text.pack(fill="both", expand=True)
+        # Details text widget with scrollbar (read-only)
+        details_text_frame = ttk.Frame(details_frame)
+        details_text_frame.pack(fill="both", expand=True)
+        
+        details_scrollbar = ttk.Scrollbar(details_text_frame)
+        details_scrollbar.pack(side="right", fill="y")
+        
+        self.proposal_details_text = tk.Text(details_text_frame, wrap="word", width=40, height=20, state="disabled", font=("Courier", 9), yscrollcommand=details_scrollbar.set)
+        self.proposal_details_text.pack(side="left", fill="both", expand=True)
+        
+        details_scrollbar.config(command=self.proposal_details_text.yview)
         
         # === CONFIRMATION SECTION ===
         confirm_frame = ttk.LabelFrame(main_frame, text="Conferma Ordini", padding=10)
