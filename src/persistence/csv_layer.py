@@ -632,6 +632,10 @@ class CSVLayer:
                 "oos_boost_percent": {
                     "value": 20,
                     "auto_apply_to_new_sku": False
+                },
+                "oos_lookback_days": {
+                    "value": 30,
+                    "auto_apply_to_new_sku": False
                 }
             },
             "dashboard": {

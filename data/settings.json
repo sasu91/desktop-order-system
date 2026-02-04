@@ -31,6 +31,10 @@
     "oos_boost_percent": {
       "value": 20,
       "description": "Percentuale di aumento ordine per OOS (%)"
+    },
+    "oos_lookback_days": {
+      "value": 30,
+      "description": "Giorni di storico per rilevamento OOS"
     }
   }
 }

@@ -1123,6 +1123,7 @@ class DesktopOrderApp:
         
         # Read OOS boost default from settings
         oos_boost_default = settings.get("reorder_engine", {}).get("oos_boost_percent", {}).get("value", 20) / 100.0
+        oos_lookback_days = settings.get("reorder_engine", {}).get("oos_lookback_days", {}).get("value", 30)
         
         # Track SKU-specific OOS boost preferences (in memory for this session)
         if not hasattr(self, 'oos_boost_preferences'):
@@ -1134,7 +1135,7 @@ class DesktopOrderApp:
             description = sku_obj.description if sku_obj else "N/A"
             
             # Calculate daily sales average (with OOS exclusion) - NOW RETURNS TUPLE
-            daily_sales, oos_days_count = calculate_daily_sales_average(sales_records, sku_id, days_lookback=30, transactions=transactions, asof_date=date.today())
+            daily_sales, oos_days_count = calculate_daily_sales_average(sales_records, sku_id, days_lookback=oos_lookback_days, transactions=transactions, asof_date=date.today())
             
             # Determine OOS boost for this SKU
             oos_boost_percent = 0.0
@@ -3793,6 +3794,15 @@ class DesktopOrderApp:
                 "type": "int",
                 "min": 0,
                 "max": 100,
+                "section": "reorder_engine"
+            },
+            {
+                "key": "oos_lookback_days",
+                "label": "Giorni Storico OOS",
+                "description": "Numero giorni passati da analizzare per rilevare OOS (es. 30 = ultimi 30 giorni)",
+                "type": "int",
+                "min": 7,
+                "max": 90,
                 "section": "reorder_engine"
             },
             {

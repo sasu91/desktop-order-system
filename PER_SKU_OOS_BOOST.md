@@ -5,28 +5,33 @@ Implementata funzionalità di boost OOS configurabile per singolo SKU, permetten
 
 ## Componenti Modificati
 
-### 1. Domain Model (`src/domain/models.py`)
+### 1. Settings Configuration
+- **`settings.json`**: Aggiunto `oos_lookback_days` (default: 30, range 7-90)
+- **`csv_layer.py`**: Default settings includono `oos_lookback_days`
+- **`app.py`**: Settings tab ha campo "Giorni Storico OOS" modificabile
+
+### 2. Domain Model (`src/domain/models.py`)
 - Aggiunto campo `oos_boost_percent: float = 0.0` al dataclass `SKU`
 - Validazione: valore deve essere tra 0 e 100
 - **Semantica**: `0` = usa setting globale, `>0` = usa valore specifico SKU
 
 ### 2. Persistence Layer (`src/persistence/csv_layer.py`)
-- **Schema CSV**: Aggiunta colonna `oos_boost_percent` a `skus.csv` (ora 14 colonne)
-- **`read_skus()`**: Parse con backward compatibility (default "0" se colonna mancante)
+- **Schema CSV**: Aggiunta colonna `oos_boost_percent` a `skus.csv` (ora 14 colonne)- **Default settings**: Include `oos_lookback_days` (30 giorni)- **`read_skus()`**: Parse con backward compatibility (default "0" se colonna mancante)
 - **`write_sku()`**: Salva `oos_boost_percent` preservando valore originale
 - **`update_sku()`**: Aggiunto parametro `oos_boost_percent` con gestione in `normalized_row`
 
 ### 3. Order Workflow (`src/workflows/order.py`)
-- **Logica di override**: Se `sku_obj.oos_boost_percent > 0`, usa valore SKU; altrimenti usa `oos_boost_percent` globale
-- Variabile `effective_boost` determina quale boost applicare
+- **Logica di override**: Se `sku_obj.oos_boost_percent > 0`, usa valore SKU; altrimenti usa `oos_boost_percent` globale- **Lookback dinamico**: Usa `settings.oos_lookback_days` invece di hardcoded 30- Variabile `effective_boost` determina quale boost applicare
 - Formula: `boost_qty = int(proposed_qty_raw * effective_boost)`
 
 ### 4. GUI (`src/gui/app.py`)
+- **Settings Tab**: Campo "Giorni Storico OOS" (7-90, default 30)
 - **Form SKU**: Aggiunto campo "OOS Boost % (0=usa globale)" nella finestra di edit/creazione SKU
 - Input: campo testuale con validazione 0-100
 - Posizione: dopo "Variabilità Domanda", prima di "Valida EAN"
 - **Validazione**: Controllo range 0-100 con messaggio di errore user-friendly
 - **Persistenza**: Campo salvato automaticamente tramite `write_sku()` e `update_sku()`
+- **Order generation**: Legge `oos_lookback_days` da settings e usa in `calculate_daily_sales_average()`
 
 ### 5. Dataset (`data/skus.csv`)
 - Migrazione: Aggiunta colonna `oos_boost_percent` con valore di default `0` per tutti gli SKU esistenti
@@ -34,6 +39,14 @@ Implementata funzionalità di boost OOS configurabile per singolo SKU, permetten
 - Valori: CAFE001=0, LATTE002=0, PASTA003=0 (tutti usano globale)
 
 ## Workflow Utente
+
+### Configurare Periodo Lookback OOS (Globale)
+1. **Settings Tab** → sezione "Reorder Engine"
+2. Campo **"Giorni Storico OOS"** (default: 30 giorni)
+   - Range: 7-90 giorni
+   - 7 = settimana, 30 = mese, 90 = trimestre
+3. Sistema rileva OOS negli ultimi N giorni prima di generare proposta
+4. Valore salvato in `settings.json → reorder_engine.oos_lookback_days`
 
 ### Impostare Boost Personalizzato
 1. **Admin Tab** → seleziona SKU → "Modifica"
@@ -44,11 +57,13 @@ Implementata funzionalità di boost OOS configurabile per singolo SKU, permetten
 
 ### Generazione Proposta con Boost
 1. **Order Tab** → "Genera Proposta"
-2. Se input "Giorni OOS" > 0:
+2. Sistema legge lookback_days da Settings (es. 30 giorni)
+3. Calcola `oos_days_count` negli ultimi N giorni (giorni con `on_hand + on_order = 0`)
+4. Se `oos_days_count > 0`:
    - Sistema legge `sku_obj.oos_boost_percent`
    - Se > 0 → applica boost SKU
    - Se = 0 → applica boost globale da settings.json
-3. Proposta mostra quantità incrementata secondo boost applicato
+5. Proposta mostra quantità incrementata secondo boost applicato
 
 ## Test di Verifica
 
