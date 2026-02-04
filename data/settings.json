@@ -35,6 +35,10 @@
     "oos_lookback_days": {
       "value": 30,
       "description": "Giorni di storico per rilevamento OOS"
+    },
+    "oos_detection_mode": {
+      "value": "strict",
+      "description": "Modalità rilevamento OOS: strict (on_hand=0) o relaxed (on_hand+on_order=0)"
     }
   }
 }

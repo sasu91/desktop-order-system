@@ -355,13 +355,16 @@ def calculate_daily_sales_average(
     days_lookback: int = 30,
     transactions=None,
     asof_date: date = None,
+    oos_detection_mode: str = "strict",
 ) -> float:
     """
     Calculate average daily sales for a SKU using calendar-based approach.
     
-    NEW BEHAVIOR (2026-01-29):
+    NEW BEHAVIOR (2026-02-04):
     - Uses real calendar days (30 days = 30 data points, including zeros)
-    - Excludes days when SKU was out-of-stock (on_hand + on_order == 0)
+    - Excludes days when SKU was out-of-stock based on detection mode:
+      * "strict": on_hand == 0 (ignora on_order, più conservativo)
+      * "relaxed": on_hand + on_order == 0 (comportamento precedente)
     - More accurate forecast for irregular sales patterns
     
     Args:
@@ -398,8 +401,15 @@ def calculate_daily_sales_average(
     if transactions:
         for day in calendar_days:
             stock = StockCalculator.calculate_asof(sku, day, transactions, sales_records)
-            if stock.on_hand + stock.on_order == 0:
-                oos_days.add(day)
+            # Apply OOS detection mode
+            if oos_detection_mode == "strict":
+                # Strict mode: count as OOS if on_hand == 0 (ignora on_order)
+                if stock.on_hand == 0:
+                    oos_days.add(day)
+            else:  # "relaxed" or default
+                # Relaxed mode: count as OOS only if both on_hand and on_order == 0
+                if stock.on_hand + stock.on_order == 0:
+                    oos_days.add(day)
     
     # Calculate average excluding OOS days
     total_sales = 0

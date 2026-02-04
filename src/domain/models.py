@@ -50,6 +50,7 @@ class SKU:
     supplier: str = ""              # Default supplier
     demand_variability: DemandVariability = DemandVariability.STABLE
     oos_boost_percent: float = 0.0  # OOS boost percentage (0-100, 0 = use global setting)
+    oos_detection_mode: str = ""  # OOS detection mode: "strict", "relaxed", or "" (use global)
     
     def __post_init__(self):
         if not self.sku or not self.sku.strip():
@@ -74,6 +75,8 @@ class SKU:
             raise ValueError("Reorder point cannot be negative")
         if self.oos_boost_percent < 0 or self.oos_boost_percent > 100:
             raise ValueError("OOS boost percent must be between 0 and 100")
+        if self.oos_detection_mode not in ["", "strict", "relaxed"]:
+            raise ValueError("OOS detection mode must be '', 'strict', or 'relaxed'")
 
 
 @dataclass(frozen=True)

@@ -1124,6 +1124,7 @@ class DesktopOrderApp:
         # Read OOS boost default from settings
         oos_boost_default = settings.get("reorder_engine", {}).get("oos_boost_percent", {}).get("value", 20) / 100.0
         oos_lookback_days = settings.get("reorder_engine", {}).get("oos_lookback_days", {}).get("value", 30)
+        oos_detection_mode_global = settings.get("reorder_engine", {}).get("oos_detection_mode", {}).get("value", "strict")
         
         # Track SKU-specific OOS boost preferences (in memory for this session)
         if not hasattr(self, 'oos_boost_preferences'):
@@ -1134,8 +1135,17 @@ class DesktopOrderApp:
             sku_obj = skus_by_id.get(sku_id)
             description = sku_obj.description if sku_obj else "N/A"
             
+            # Determine OOS detection mode: use SKU-specific if set, otherwise global
+            oos_detection_mode = sku_obj.oos_detection_mode if (sku_obj and sku_obj.oos_detection_mode) else oos_detection_mode_global
+            
             # Calculate daily sales average (with OOS exclusion) - NOW RETURNS TUPLE
-            daily_sales, oos_days_count = calculate_daily_sales_average(sales_records, sku_id, days_lookback=oos_lookback_days, transactions=transactions, asof_date=date.today())
+            daily_sales, oos_days_count = calculate_daily_sales_average(
+                sales_records, sku_id, 
+                days_lookback=oos_lookback_days, 
+                transactions=transactions, 
+                asof_date=date.today(),
+                oos_detection_mode=oos_detection_mode
+            )
             
             # Determine OOS boost for this SKU
             oos_boost_percent = 0.0
@@ -3000,16 +3010,24 @@ class DesktopOrderApp:
         oos_boost_var = tk.StringVar(value=str(current_sku.oos_boost_percent) if current_sku else "0")
         ttk.Entry(form_frame, textvariable=oos_boost_var, width=40).grid(row=13, column=1, sticky="ew", pady=5, padx=(10, 0))
         
+        # OOS Detection Mode field
+        ttk.Label(form_frame, text="Modalità OOS (\"\"=usa globale):", font=("Helvetica", 10, "bold")).grid(
+            row=14, column=0, sticky="w", pady=5
+        )
+        oos_mode_var = tk.StringVar(value=current_sku.oos_detection_mode if current_sku else "")
+        oos_mode_combo = ttk.Combobox(form_frame, textvariable=oos_mode_var, values=["", "strict", "relaxed"], state="readonly", width=37)
+        oos_mode_combo.grid(row=14, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
         # Validate EAN button and status label
         ean_status_var = tk.StringVar(value="")
         ttk.Button(
             form_frame, 
             text="Valida EAN", 
             command=lambda: self._validate_ean_field(ean_var.get(), ean_status_var)
-        ).grid(row=14, column=1, sticky="w", pady=5, padx=(10, 0))
+        ).grid(row=15, column=1, sticky="w", pady=5, padx=(10, 0))
         
         ean_status_label = ttk.Label(form_frame, textvariable=ean_status_var, foreground="green")
-        ean_status_label.grid(row=15, column=1, sticky="w", padx=(10, 0))
+        ean_status_label.grid(row=16, column=1, sticky="w", padx=(10, 0))
         
         # Configure grid
         form_frame.columnconfigure(1, weight=1)
@@ -3026,7 +3044,7 @@ class DesktopOrderApp:
                 moq_var.get(), pack_size_var.get(), lead_time_var.get(), 
                 review_period_var.get(), safety_stock_var.get(), shelf_life_var.get(),
                 max_stock_var.get(), reorder_point_var.get(), supplier_var.get(), 
-                demand_var.get(), oos_boost_var.get(), current_sku
+                demand_var.get(), oos_boost_var.get(), oos_mode_var.get(), current_sku
             ),
         ).pack(side="right", padx=5)
         
@@ -3053,7 +3071,7 @@ class DesktopOrderApp:
     def _save_sku_form(self, popup, mode, sku_code, description, ean,
                         moq_str, pack_size_str, lead_time_str, review_period_str, 
                         safety_stock_str, shelf_life_str, max_stock_str, reorder_point_str,
-                        supplier, demand_variability_str, oos_boost_str, current_sku):
+                        supplier, demand_variability_str, oos_boost_str, oos_mode_str, current_sku):
         """Save SKU from form."""
         # Validate inputs
         if not sku_code or not sku_code.strip():
@@ -3095,6 +3113,11 @@ class DesktopOrderApp:
         
         if oos_boost_percent < 0 or oos_boost_percent > 100:
             messagebox.showerror("Errore di Validazione", "OOS Boost deve essere tra 0 e 100.", parent=popup)
+            return
+        
+        oos_detection_mode = (oos_mode_str or "").strip()
+        if oos_detection_mode not in ["", "strict", "relaxed"]:
+            messagebox.showerror("Errore di Validazione", "Modalità OOS non valida. Usa: strict, relaxed o vuoto.", parent=popup)
             return
         
         # Parse demand variability
@@ -3139,6 +3162,7 @@ class DesktopOrderApp:
                     supplier=supplier,
                     demand_variability=demand_variability,
                     oos_boost_percent=oos_boost_percent,
+                    oos_detection_mode=oos_detection_mode,
                 )
                 self.csv_layer.write_sku(new_sku)
                 
@@ -3158,7 +3182,7 @@ class DesktopOrderApp:
                     old_sku_code, sku_code, description, ean,
                     moq, pack_size, lead_time_days, review_period, 
                     safety_stock, shelf_life_days, max_stock, reorder_point,
-                    supplier, demand_variability, oos_boost_percent
+                    supplier, demand_variability, oos_boost_percent, oos_detection_mode
                 )
                 if success:
                     # Build change details
@@ -3829,6 +3853,14 @@ class DesktopOrderApp:
                 "type": "int",
                 "min": 7,
                 "max": 90,
+                "section": "reorder_engine"
+            },
+            {
+                "key": "oos_detection_mode",
+                "label": "Modalità Rilevamento OOS",
+                "description": "strict = on_hand=0 (più conservativo), relaxed = on_hand+on_order=0",
+                "type": "choice",
+                "choices": ["strict", "relaxed"],
                 "section": "reorder_engine"
             },
             {
