@@ -22,7 +22,7 @@ class CSVLayer:
     
     # CSV file schemas (filename -> list of columns)
     SCHEMAS = {
-        "skus.csv": ["sku", "description", "ean", "moq", "pack_size", "lead_time_days", "review_period", "safety_stock", "shelf_life_days", "max_stock", "reorder_point", "supplier", "demand_variability"],
+        "skus.csv": ["sku", "description", "ean", "moq", "pack_size", "lead_time_days", "review_period", "safety_stock", "shelf_life_days", "max_stock", "reorder_point", "supplier", "demand_variability", "oos_boost_percent"],
         "transactions.csv": ["date", "sku", "event", "qty", "receipt_date", "note"],
         "sales.csv": ["date", "sku", "qty_sold"],
         "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "status", "receipt_date"],
@@ -115,6 +115,7 @@ class CSVLayer:
                     reorder_point=int(row.get("reorder_point", "10")),
                     supplier=row.get("supplier", "").strip(),
                     demand_variability=demand_var,
+                    oos_boost_percent=float(row.get("oos_boost_percent", "0")),
                 )
                 skus.append(sku)
             except (ValueError, KeyError) as e:
@@ -145,6 +146,8 @@ class CSVLayer:
             reorder_point=defaults.get("reorder_point", sku.reorder_point) if sku.reorder_point == 10 else sku.reorder_point,
             supplier=sku.supplier,
             demand_variability=DemandVariability[defaults.get("demand_variability", sku.demand_variability.value)] if sku.demand_variability == DemandVariability.STABLE else sku.demand_variability,
+            shelf_life_days=sku.shelf_life_days,
+            oos_boost_percent=sku.oos_boost_percent,
         )
         
         rows = self._read_csv("skus.csv")
@@ -162,6 +165,7 @@ class CSVLayer:
             "reorder_point": str(final_sku.reorder_point),
             "supplier": final_sku.supplier,
             "demand_variability": final_sku.demand_variability.value,
+            "oos_boost_percent": str(final_sku.oos_boost_percent),
         })
         self._write_csv("skus.csv", rows)
     
@@ -211,6 +215,7 @@ class CSVLayer:
         reorder_point: int = 10,
         supplier: str = "",
         demand_variability: DemandVariability = DemandVariability.STABLE,
+        oos_boost_percent: float = 0.0
     ) -> bool:
         """
         Update SKU (code, description, EAN, and parameters).
@@ -256,6 +261,7 @@ class CSVLayer:
                 "reorder_point": row.get("reorder_point", "10").strip() or "10",
                 "supplier": row.get("supplier", "").strip(),
                 "demand_variability": row.get("demand_variability", "STABLE").strip() or "STABLE",
+                "oos_boost_percent": row.get("oos_boost_percent", "0").strip() or "0",
             }
             
             # Update the target row with new values
@@ -273,6 +279,7 @@ class CSVLayer:
                 normalized_row["reorder_point"] = str(reorder_point)
                 normalized_row["supplier"] = supplier
                 normalized_row["demand_variability"] = demand_variability.value
+                normalized_row["oos_boost_percent"] = str(oos_boost_percent)
                 updated = True
             
             normalized_rows.append(normalized_row)

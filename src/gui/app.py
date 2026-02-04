@@ -2992,16 +2992,23 @@ class DesktopOrderApp:
         demand_combo = ttk.Combobox(form_frame, textvariable=demand_var, values=["STABLE", "LOW", "HIGH", "SEASONAL"], state="readonly", width=37)
         demand_combo.grid(row=12, column=1, sticky="ew", pady=5, padx=(10, 0))
         
+        # OOS Boost Percent field
+        ttk.Label(form_frame, text="OOS Boost % (0=usa globale):", font=("Helvetica", 10, "bold")).grid(
+            row=13, column=0, sticky="w", pady=5
+        )
+        oos_boost_var = tk.StringVar(value=str(current_sku.oos_boost_percent) if current_sku else "0")
+        ttk.Entry(form_frame, textvariable=oos_boost_var, width=40).grid(row=13, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
         # Validate EAN button and status label
         ean_status_var = tk.StringVar(value="")
         ttk.Button(
             form_frame, 
             text="Valida EAN", 
             command=lambda: self._validate_ean_field(ean_var.get(), ean_status_var)
-        ).grid(row=13, column=1, sticky="w", pady=5, padx=(10, 0))
+        ).grid(row=14, column=1, sticky="w", pady=5, padx=(10, 0))
         
         ean_status_label = ttk.Label(form_frame, textvariable=ean_status_var, foreground="green")
-        ean_status_label.grid(row=14, column=1, sticky="w", padx=(10, 0))
+        ean_status_label.grid(row=15, column=1, sticky="w", padx=(10, 0))
         
         # Configure grid
         form_frame.columnconfigure(1, weight=1)
@@ -3018,7 +3025,7 @@ class DesktopOrderApp:
                 moq_var.get(), pack_size_var.get(), lead_time_var.get(), 
                 review_period_var.get(), safety_stock_var.get(), shelf_life_var.get(),
                 max_stock_var.get(), reorder_point_var.get(), supplier_var.get(), 
-                demand_var.get(), current_sku
+                demand_var.get(), oos_boost_var.get(), current_sku
             ),
         ).pack(side="right", padx=5)
         
@@ -3045,7 +3052,7 @@ class DesktopOrderApp:
     def _save_sku_form(self, popup, mode, sku_code, description, ean,
                         moq_str, pack_size_str, lead_time_str, review_period_str, 
                         safety_stock_str, shelf_life_str, max_stock_str, reorder_point_str,
-                        supplier, demand_variability_str, current_sku):
+                        supplier, demand_variability_str, oos_boost_str, current_sku):
         """Save SKU from form."""
         # Validate inputs
         if not sku_code or not sku_code.strip():
@@ -3071,8 +3078,9 @@ class DesktopOrderApp:
             shelf_life_days = int(shelf_life_str)
             max_stock = int(max_stock_str)
             reorder_point = int(reorder_point_str)
+            oos_boost_percent = float(oos_boost_str)
         except ValueError:
-            messagebox.showerror("Errore di Validazione", "Tutti i campi numerici devono essere numeri interi.", parent=popup)
+            messagebox.showerror("Errore di Validazione", "Tutti i campi numerici devono essere numeri validi.", parent=popup)
             return
         
         # Validate positive values
@@ -3082,6 +3090,10 @@ class DesktopOrderApp:
         
         if pack_size < 1:
             messagebox.showerror("Errore di Validazione", "Pack Size deve essere almeno 1.", parent=popup)
+            return
+        
+        if oos_boost_percent < 0 or oos_boost_percent > 100:
+            messagebox.showerror("Errore di Validazione", "OOS Boost deve essere tra 0 e 100.", parent=popup)
             return
         
         # Parse demand variability
@@ -3125,6 +3137,7 @@ class DesktopOrderApp:
                     reorder_point=reorder_point,
                     supplier=supplier,
                     demand_variability=demand_variability,
+                    oos_boost_percent=oos_boost_percent,
                 )
                 self.csv_layer.write_sku(new_sku)
                 
@@ -3144,7 +3157,7 @@ class DesktopOrderApp:
                     old_sku_code, sku_code, description, ean,
                     moq, pack_size, lead_time_days, review_period, 
                     safety_stock, shelf_life_days, max_stock, reorder_point,
-                    supplier, demand_variability
+                    supplier, demand_variability, oos_boost_percent
                 )
                 if success:
                     # Build change details

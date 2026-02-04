@@ -49,6 +49,7 @@ class SKU:
     reorder_point: int = 10         # Reorder trigger point
     supplier: str = ""              # Default supplier
     demand_variability: DemandVariability = DemandVariability.STABLE
+    oos_boost_percent: float = 0.0  # OOS boost percentage (0-100, 0 = use global setting)
     
     def __post_init__(self):
         if not self.sku or not self.sku.strip():
@@ -71,6 +72,8 @@ class SKU:
             raise ValueError("Max stock must be >= 1")
         if self.reorder_point < 0:
             raise ValueError("Reorder point cannot be negative")
+        if self.oos_boost_percent < 0 or self.oos_boost_percent > 100:
+            raise ValueError("OOS boost percent must be between 0 and 100")
 
 
 @dataclass(frozen=True)

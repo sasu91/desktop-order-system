@@ -138,6 +138,9 @@ class OrderWorkflow:
         shelf_life_days = sku_obj.shelf_life_days if sku_obj else 0
         max_stock = sku_obj.max_stock if sku_obj else 999
         
+        # Use SKU-specific OOS boost if set (> 0), otherwise use global setting
+        effective_boost = sku_obj.oos_boost_percent if (sku_obj and sku_obj.oos_boost_percent > 0) else oos_boost_percent
+        
         # Detect intermittent demand pattern (low movement)
         # Threshold: if daily_sales_avg < pack_size / 2.5, use simulation
         intermittent_threshold = pack_size / 2.5 if pack_size > 1 else 0.5
@@ -188,9 +191,9 @@ class OrderWorkflow:
         
         # Apply OOS boost if requested (increase proposed qty)
         oos_boost_applied = False
-        if oos_days_count > 0 and oos_boost_percent > 0:
+        if oos_days_count > 0 and effective_boost > 0:
             oos_boost_applied = True
-            boost_qty = int(proposed_qty_raw * oos_boost_percent)
+            boost_qty = int(proposed_qty_raw * effective_boost)
             proposed_qty_raw += boost_qty
             proposed_qty_before_rounding = proposed_qty_raw
         
