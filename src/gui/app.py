@@ -43,7 +43,7 @@ except ImportError:
 
 from ..persistence.csv_layer import CSVLayer
 from ..domain.ledger import StockCalculator, validate_ean
-from ..domain.models import SKU, EventType, OrderProposal, Stock
+from ..domain.models import SKU, EventType, OrderProposal, Stock, Transaction
 from ..workflows.order import OrderWorkflow, calculate_daily_sales_average
 from ..workflows.receiving import ReceivingWorkflow, ExceptionWorkflow
 from ..workflows.daily_close import DailyCloseWorkflow
@@ -1208,8 +1208,63 @@ class DesktopOrderApp:
                     # User already decided (could be None for "no", or a percent for "yes"/"yes, always")
                     oos_boost_percent = self.oos_boost_preferences[sku_id] or 0.0
                 else:
-                    # Ask user via dialog
-                    boost_choice = self._ask_oos_boost(sku_id, description, oos_days_count, oos_boost_default)
+                    # Ask user via dialog (now returns tuple with estimate info)
+                    boost_choice, estimate_date, estimate_colli = self._ask_oos_boost(sku_id, description, oos_days_count, oos_boost_default)
+                    
+                    # Process estimate if provided
+                    if estimate_date and estimate_colli and estimate_colli > 0:
+                        try:
+                            # Convert colli to pezzi
+                            pack_size = sku_obj.pack_size if sku_obj else 1
+                            estimate_pz = estimate_colli * pack_size
+                            
+                            # Check if estimate already registered for this date
+                            existing_sales = [s for s in sales_records if s.sku == sku_id and s.date == estimate_date]
+                            
+                            # Idempotency key in note
+                            estimate_note = f"OOS_ESTIMATE_OVERRIDE:{estimate_date.isoformat()}"
+                            existing_override = any(
+                                t.sku == sku_id and t.date == estimate_date and estimate_note in (t.note or "")
+                                for t in transactions
+                            )
+                            
+                            if not existing_override:
+                                # Write sales record for estimated lost sales
+                                self.csv_layer.write_sales(
+                                    date_str=estimate_date.isoformat(),
+                                    sku=sku_id,
+                                    qty=estimate_pz,
+                                )
+                                sales_records.append(
+                                    type('SalesRecord', (), {'sku': sku_id, 'date': estimate_date, 'qty_sold': estimate_pz})()
+                                )
+                                
+                                # Write WASTE event with special note to mark this day as non-OOS
+                                # WASTE qty=0 is just a marker, doesn't change stock
+                                marker_txn = Transaction(
+                                    date=estimate_date,
+                                    sku=sku_id,
+                                    event=EventType.WASTE,
+                                    qty=0,
+                                    note=f"{estimate_note}|{estimate_colli} colli ({estimate_pz} pz) - prevents OOS counting"
+                                )
+                                self.csv_layer.write_transaction(marker_txn)
+                                transactions.append(marker_txn)
+                                
+                                # Recalculate daily average with override marker
+                                daily_sales, oos_days_count = calculate_daily_sales_average(
+                                    sales_records, sku_id,
+                                    days_lookback=oos_lookback_days,
+                                    transactions=transactions,
+                                    asof_date=date.today(),
+                                    oos_detection_mode=oos_detection_mode
+                                )
+                                
+                                logger.info(f"OOS estimate registered for {sku_id} on {estimate_date}: {estimate_colli} colli ({estimate_pz} pz)")
+                        except Exception as e:
+                            logger.error(f"Failed to register OOS estimate for {sku_id}: {e}", exc_info=True)
+                    
+                    # Process boost choice
                     if boost_choice == "yes":
                         oos_boost_percent = oos_boost_default
                         self.oos_boost_preferences[sku_id] = oos_boost_default
@@ -1240,21 +1295,26 @@ class DesktopOrderApp:
             f"Generate {len(self.current_proposals)} proposte ordine.\nProposte con Q.tà > 0: {sum(1 for p in self.current_proposals if p.proposed_qty > 0)}",
         )
     
-    def _ask_oos_boost(self, sku: str, description: str, oos_days_count: int, default_percent: float) -> str:
+    def _ask_oos_boost(self, sku: str, description: str, oos_days_count: int, default_percent: float) -> tuple:
         """
         Ask user if they want to apply OOS boost for a specific SKU.
         
         Returns:
-            "yes", "yes_always", or "no"
+            (boost_choice, estimate_date, estimate_colli)
+            - boost_choice: "yes", "yes_always", or "no"
+            - estimate_date: date object or None (stima mancata vendita)
+            - estimate_colli: int or None (colli stimati per quella data)
         """
         popup = tk.Toplevel(self.root)
         popup.title("OOS Boost")
-        popup.geometry("500x250")
+        popup.geometry("550x400")
         popup.resizable(False, False)
         popup.transient(self.root)
         popup.grab_set()
         
         result = tk.StringVar(value="no")
+        estimate_date_var = tk.StringVar(value=(date.today() - timedelta(days=1)).isoformat())
+        estimate_colli_var = tk.StringVar(value="")
         
         # Content frame
         content_frame = ttk.Frame(popup, padding=20)
@@ -1277,15 +1337,57 @@ class DesktopOrderApp:
         ttk.Label(
             content_frame,
             text=f"Rilevati {oos_days_count} giorni di OOS (Out-of-Stock) negli ultimi 30 giorni.",
-            wraplength=450,
+            wraplength=500,
         ).pack(anchor="w", pady=(0, 10))
         
         ttk.Label(
             content_frame,
             text=f"Vuoi aumentare la quantità ordinata del {int(default_percent * 100)}% per compensare?",
             font=("Helvetica", 10, "bold"),
-            wraplength=450,
-        ).pack(anchor="w", pady=(0, 20))
+            wraplength=500,
+        ).pack(anchor="w", pady=(0, 15))
+        
+        # Optional estimate section
+        separator = ttk.Separator(content_frame, orient="horizontal")
+        separator.pack(fill="x", pady=(0, 15))
+        
+        ttk.Label(
+            content_frame,
+            text="Opzionale: Stima mancata vendita",
+            font=("Helvetica", 9, "bold"),
+        ).pack(anchor="w", pady=(0, 5))
+        
+        ttk.Label(
+            content_frame,
+            text="Se hai una stima di vendite perse in un giorno OOS, inseriscila qui.\nIl giorno NON sarà conteggiato come OOS e verrà registrato con vendite = IP + stima.",
+            font=("Helvetica", 8),
+            foreground="gray",
+            wraplength=500,
+        ).pack(anchor="w", pady=(0, 10))
+        
+        estimate_frame = ttk.Frame(content_frame)
+        estimate_frame.pack(fill="x", pady=(0, 15))
+        
+        # Date selector
+        date_row = ttk.Frame(estimate_frame)
+        date_row.pack(fill="x", pady=(0, 5))
+        ttk.Label(date_row, text="Data:", width=15).pack(side="left")
+        if TKCALENDAR_AVAILABLE:
+            DateEntry(
+                date_row,
+                textvariable=estimate_date_var,
+                width=12,
+                date_pattern="yyyy-mm-dd",
+            ).pack(side="left")
+        else:
+            ttk.Entry(date_row, textvariable=estimate_date_var, width=15).pack(side="left")
+        
+        # Colli estimate
+        colli_row = ttk.Frame(estimate_frame)
+        colli_row.pack(fill="x")
+        ttk.Label(colli_row, text="Colli stimati:", width=15).pack(side="left")
+        ttk.Entry(colli_row, textvariable=estimate_colli_var, width=10).pack(side="left")
+        ttk.Label(colli_row, text="(lascia vuoto se non hai stima)", font=("Helvetica", 8), foreground="gray").pack(side="left", padx=(5, 0))
         
         # Buttons
         button_frame = ttk.Frame(content_frame)
@@ -1316,7 +1418,19 @@ class DesktopOrderApp:
         # Wait for user choice
         popup.wait_window()
         
-        return result.get()
+        # Parse estimate
+        estimate_date = None
+        estimate_colli = None
+        estimate_str = estimate_colli_var.get().strip()
+        if estimate_str:
+            try:
+                estimate_colli = int(estimate_str)
+                if estimate_colli > 0:
+                    estimate_date = date.fromisoformat(estimate_date_var.get())
+            except (ValueError, TypeError):
+                pass  # Invalid input, ignore estimate
+        
+        return (result.get(), estimate_date, estimate_colli)
     
     def _refresh_proposal_table(self):
         """Refresh proposals table."""

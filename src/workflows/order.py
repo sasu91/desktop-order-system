@@ -382,7 +382,7 @@ def calculate_daily_sales_average(
     transactions=None,
     asof_date: date = None,
     oos_detection_mode: str = "strict",
-) -> float:
+) -> tuple:
     """
     Calculate average daily sales for a SKU using calendar-based approach.
     
@@ -392,20 +392,27 @@ def calculate_daily_sales_average(
       * "strict": on_hand == 0 (ignora on_order, più conservativo)
       * "relaxed": on_hand + on_order == 0 (comportamento precedente)
     - More accurate forecast for irregular sales patterns
+    - OOS_ESTIMATE_OVERRIDE markers: Days with WASTE(qty=0) + note "OOS_ESTIMATE_OVERRIDE:{date}"
+      are excluded from OOS detection (allows manual lost sales entry for OOS days)
     
     Args:
         sales_records: List of SalesRecord objects
         sku: SKU identifier
         days_lookback: Number of calendar days to look back (default: 30)
-        transactions: List of Transaction objects (for OOS detection)
+        transactions: List of Transaction objects (for OOS detection + override markers)
         asof_date: As-of date for calculation (defaults to today)
+        oos_detection_mode: "strict" (on_hand==0) or "relaxed" (on_hand+on_order==0)
     
     Returns:
-        Average daily sales qty (excluding OOS days)
+        Tuple (avg_daily_sales, oos_days_count):
+        - avg_daily_sales: Average daily sales qty (excluding OOS days)
+        - oos_days_count: Number of OOS days detected (after override exclusions)
     
     Example:
-        If last 30 days have 10 days with sales, 15 days zero, 5 days OOS:
-        avg = sum(sales_10_days) / 25  (excludes 5 OOS days)
+        If last 30 days have 10 days with sales, 15 days zero, 5 days OOS (3 with overrides):
+        avg, oos_count = calculate_daily_sales_average(...)
+        # avg = sum(sales_10_days) / 27  (excludes 2 real OOS days, 3 overrides excluded)
+        # oos_count = 2  (only non-override OOS days)
     """
     from ..domain.ledger import StockCalculator
     
@@ -424,8 +431,19 @@ def calculate_daily_sales_average(
     
     # Detect OOS days (if transactions provided)
     oos_days = set()
+    oos_override_days = set()  # Days with OOS_ESTIMATE_OVERRIDE marker
+    
     if transactions:
+        # First, identify days with override markers
+        for txn in transactions:
+            if txn.sku == sku and txn.note and "OOS_ESTIMATE_OVERRIDE:" in txn.note:
+                oos_override_days.add(txn.date)
+        
+        # Then detect OOS days, excluding override days
         for day in calendar_days:
+            if day in oos_override_days:
+                continue  # Skip days with estimate override
+            
             stock = StockCalculator.calculate_asof(sku, day, transactions, sales_records)
             # Apply OOS detection mode
             if oos_detection_mode == "strict":

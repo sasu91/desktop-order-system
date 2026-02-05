@@ -259,13 +259,15 @@ class TestDailySalesAverage:
             SalesRecord(date=date(2026, 1, 3), sku="SKU001", qty_sold=20),
         ]
         
-        avg = calculate_daily_sales_average(sales, "SKU001", days_lookback=30)
+        avg, oos_count = calculate_daily_sales_average(sales, "SKU001", days_lookback=30)
         assert avg == 15.0  # (10 + 15 + 20) / 3
+        assert oos_count == 0  # No OOS days
     
     def test_daily_sales_avg_no_data(self):
         """Daily sales avg with no data should be 0.0."""
-        avg = calculate_daily_sales_average([], "SKU001")
+        avg, oos_count = calculate_daily_sales_average([], "SKU001")
         assert avg == 0.0
+        assert oos_count == 0  # No OOS days
 
 
 class TestDailyCloseWorkflow:
