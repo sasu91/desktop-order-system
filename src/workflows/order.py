@@ -8,6 +8,28 @@ from ..domain.models import Stock, OrderProposal, OrderConfirmation, Transaction
 from ..persistence.csv_layer import CSVLayer
 from ..domain.ledger import StockCalculator
 
+
+def _normalize_boost_to_fraction(boost: float) -> float:
+    """Normalize OOS boost to a fraction.
+
+    Accepts either:
+    - fraction (e.g. 0.20 for 20%)
+    - percent points (e.g. 20 for 20%)
+    """
+    try:
+        boost_val = float(boost)
+    except (TypeError, ValueError):
+        return 0.0
+
+    if boost_val <= 0:
+        return 0.0
+
+    # Heuristic: values > 1 are interpreted as "percent points" (0..100)
+    if boost_val > 1.0:
+        return boost_val / 100.0
+
+    return boost_val
+
 def simulate_intermittent_demand(
     daily_sales_avg: float,
     current_ip: int,
@@ -138,8 +160,10 @@ class OrderWorkflow:
         shelf_life_days = sku_obj.shelf_life_days if sku_obj else 0
         max_stock = sku_obj.max_stock if sku_obj else 999
         
-        # Use SKU-specific OOS boost if set (> 0), otherwise use global setting
-        effective_boost = sku_obj.oos_boost_percent if (sku_obj and sku_obj.oos_boost_percent > 0) else oos_boost_percent
+        # Use SKU-specific OOS boost if set (> 0), otherwise use global setting.
+        # Note: SKU stores boost as percent points (0..100), while UI may pass a fraction (0..1).
+        effective_boost_raw = sku_obj.oos_boost_percent if (sku_obj and sku_obj.oos_boost_percent > 0) else oos_boost_percent
+        effective_boost = _normalize_boost_to_fraction(effective_boost_raw)
         
         # Detect intermittent demand pattern (low movement)
         # Threshold: if daily_sales_avg < pack_size / 2.5, use simulation
@@ -190,12 +214,14 @@ class OrderWorkflow:
             proposed_qty_before_rounding = proposed_qty_raw
         
         # Apply OOS boost if requested (increase proposed qty)
+        # Regola "almeno +1": se boost_qty calcolato è 0 ma boost è attivo, applica +1
         oos_boost_applied = False
-        if oos_days_count > 0 and effective_boost > 0:
-            oos_boost_applied = True
+        if oos_days_count > 0 and effective_boost > 0 and proposed_qty_raw > 0:
             boost_qty = int(proposed_qty_raw * effective_boost)
+            if boost_qty == 0:
+                boost_qty = 1  # Almeno +1 pezzo quando boost attivo
+            oos_boost_applied = True
             proposed_qty_raw += boost_qty
-            proposed_qty_before_rounding = proposed_qty_raw
         
         # Apply pack_size rounding (round up to nearest pack_size multiple)
         # Skip if simulation already applied it
@@ -273,7 +299,7 @@ class OrderWorkflow:
             projected_stock_at_receipt=projected_stock_at_receipt,
             oos_days_count=oos_days_count,
             oos_boost_applied=oos_boost_applied,
-            oos_boost_percent=oos_boost_percent,
+            oos_boost_percent=effective_boost,
             simulation_used=simulation_used,
             simulation_trigger_day=simulation_trigger_day,
             simulation_notes=simulation_notes,

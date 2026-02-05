@@ -3182,13 +3182,26 @@ class DesktopOrderApp:
             messagebox.showerror("Errore di Validazione", "Tutti i campi numerici devono essere numeri validi.", parent=popup)
             return
         
-        # Validate positive values
+        # Validate MOQ specifically (must be >= 1)
+        if moq < 1:
+            messagebox.showerror("Errore di Validazione", "MOQ (Quantità Minima Ordine) deve essere almeno 1.", parent=popup)
+            return
+        
+        # Validate positive values (allow 0 for review_period, safety_stock, shelf_life, reorder_point)
         if any(v < 0 for v in [moq, pack_size, lead_time_days, review_period, safety_stock, shelf_life_days, max_stock, reorder_point]):
             messagebox.showerror("Errore di Validazione", "I valori numerici non possono essere negativi.", parent=popup)
             return
         
         if pack_size < 1:
             messagebox.showerror("Errore di Validazione", "Pack Size deve essere almeno 1.", parent=popup)
+            return
+        
+        if lead_time_days < 1:
+            messagebox.showerror("Errore di Validazione", "Lead Time deve essere almeno 1 giorno.", parent=popup)
+            return
+        
+        if max_stock < 1:
+            messagebox.showerror("Errore di Validazione", "Max Stock deve essere almeno 1.", parent=popup)
             return
         
         if oos_boost_percent < 0 or oos_boost_percent > 100:
