@@ -147,12 +147,13 @@ class DesktopOrderApp:
         self.admin_tab = ttk.Frame(self.notebook)
         self.settings_tab = ttk.Frame(self.notebook)
         
+        # Order tabs by daily workflow: Stock EOD → Orders → Receiving → Exceptions → Monitoring → Config
+        self.notebook.add(self.stock_tab, text="📦 Stock & Chiusura")
+        self.notebook.add(self.order_tab, text="📋 Ordini")
+        self.notebook.add(self.receiving_tab, text="📥 Ricevimenti")
+        self.notebook.add(self.exception_tab, text="⚠️ Eccezioni")
         self.notebook.add(self.dashboard_tab, text="📊 Dashboard")
-        self.notebook.add(self.stock_tab, text="Stock (CalcolAto)")
-        self.notebook.add(self.order_tab, text="Ordini")
-        self.notebook.add(self.receiving_tab, text="Ricevimenti")
-        self.notebook.add(self.exception_tab, text="Eccezioni")
-        self.notebook.add(self.admin_tab, text="Admin")
+        self.notebook.add(self.admin_tab, text="🔧 Gestione SKU")
         self.notebook.add(self.settings_tab, text="⚙️ Impostazioni")
         
         # Build tab contents
@@ -242,12 +243,16 @@ class DesktopOrderApp:
         self.stock_search_var.trace('w', lambda *args: self._filter_stock_table())
         ttk.Entry(controls_frame, textvariable=self.stock_search_var, width=30).pack(side="left", padx=5)
         
-        # EOD confirmation button
-        ttk.Button(
+        # EOD confirmation button (prominent, styled)
+        eod_btn = ttk.Button(
             controls_frame,
             text="✓ Conferma Chiusura Giornaliera",
             command=self._confirm_eod_close,
-        ).pack(side="left", padx=20)
+        )
+        eod_btn.pack(side="left", padx=20)
+        
+        # Tooltip hint
+        ttk.Label(controls_frame, text="(Doppio click su Stock EOD per modificare)", font=("Helvetica", 8, "italic"), foreground="#777").pack(side="left", padx=5)
         
         # Right panel: Audit Timeline
         right_panel = ttk.LabelFrame(main_frame, text="📋 Storico Audit (Seleziona SKU)", padding=5)
@@ -303,6 +308,7 @@ class DesktopOrderApp:
         title_frame = ttk.Frame(main_frame)
         title_frame.pack(side="top", fill="x", pady=(0, 10))
         ttk.Label(title_frame, text="📊 Dashboard & Analisi KPI", font=("Helvetica", 16, "bold")).pack(side="left")
+        ttk.Label(title_frame, text="(Monitoraggio vendite e andamento stock)", font=("Helvetica", 9, "italic"), foreground="gray").pack(side="left", padx=(10, 0))
         
         # Moving Average Controls
         ma_controls = ttk.Frame(title_frame)
@@ -854,11 +860,11 @@ class DesktopOrderApp:
         self.lead_time_var = tk.StringVar(value=str(engine.get("lead_time_days", {}).get("value", 7)))
         ttk.Entry(params_row, textvariable=self.lead_time_var, width=10).pack(side="left", padx=(0, 20))
         
-        # Buttons row
+        # Buttons row with workflow guidance
         buttons_row = ttk.Frame(param_frame)
         buttons_row.pack(side="top", fill="x", pady=5)
         
-        ttk.Button(buttons_row, text="✓ Genera Tutte le Proposte", command=self._generate_all_proposals).pack(side="left", padx=5)
+        ttk.Button(buttons_row, text="1️⃣ Genera Tutte le Proposte", command=self._generate_all_proposals).pack(side="left", padx=5)
         ttk.Button(buttons_row, text="🔄 Aggiorna Dati Stock", command=self._refresh_order_stock_data).pack(side="left", padx=5)
         ttk.Button(buttons_row, text="✗ Cancella Proposte", command=self._clear_proposals).pack(side="left", padx=5)
         
@@ -922,12 +928,12 @@ class DesktopOrderApp:
         details_scrollbar.config(command=self.proposal_details_text.yview)
         
         # === CONFIRMATION SECTION ===
-        confirm_frame = ttk.LabelFrame(main_frame, text="Conferma Ordini", padding=10)
+        confirm_frame = ttk.LabelFrame(main_frame, text="2️⃣ Conferma Ordini", padding=10)
         confirm_frame.pack(side="bottom", fill="x", pady=(10, 0))
         
         info_row = ttk.Frame(confirm_frame)
         info_row.pack(side="top", fill="x", pady=(0, 10))
-        ttk.Label(info_row, text="Seleziona proposte con Colli Proposti > 0 sopra, poi clicca Conferma per creare ordini.").pack(side="left")
+        ttk.Label(info_row, text="Verifica le proposte sopra (doppio click per modificare), poi conferma gli ordini con Colli > 0.", font=("Helvetica", 9)).pack(side="left")
         
         buttons_row = ttk.Frame(confirm_frame)
         buttons_row.pack(side="top", fill="x")
@@ -1623,7 +1629,8 @@ class DesktopOrderApp:
         # Title
         title_frame = ttk.Frame(main_frame)
         title_frame.pack(side="top", fill="x", pady=(0, 10))
-        ttk.Label(title_frame, text="Gestione Ricevimenti", font=("Helvetica", 14, "bold")).pack(side="left")
+        ttk.Label(title_frame, text="3️⃣ Gestione Ricevimenti", font=("Helvetica", 14, "bold")).pack(side="left")
+        ttk.Label(title_frame, text="(Chiudi ordini quando arriva la merce)", font=("Helvetica", 9, "italic"), foreground="gray").pack(side="left", padx=(10, 0))
         
         # === PENDING ORDERS SECTION ===
         pending_frame = ttk.LabelFrame(main_frame, text="Ordini in Sospeso (Non Completamente Ricevuti)", padding=5)
@@ -1695,7 +1702,7 @@ class DesktopOrderApp:
         confirm_frame = ttk.Frame(main_frame)
         confirm_frame.pack(side="top", fill="x", pady=(0, 10))
         
-        ttk.Label(confirm_frame, text="Modifica le quantità ricevute nella tabella sopra (doppio click), poi:", font=("Helvetica", 10)).pack(side="left", padx=(10, 20))
+        ttk.Label(confirm_frame, text="Verifica quantità nella tabella (doppio click per modificare), poi:", font=("Helvetica", 10)).pack(side="left", padx=(10, 20))
         ttk.Button(confirm_frame, text="✓ Chiudi Ricevimento (Conferma Tutte)", command=self._close_receipt_bulk, style="Accent.TButton").pack(side="left", padx=5)
         
         # === RECEIVING HISTORY ===
@@ -2092,10 +2099,11 @@ class DesktopOrderApp:
         # Title
         title_frame = ttk.Frame(main_frame)
         title_frame.pack(side="top", fill="x", pady=(0, 10))
-        ttk.Label(title_frame, text="Gestione Eccezioni", font=("Helvetica", 14, "bold")).pack(side="left")
+        ttk.Label(title_frame, text="4️⃣ Gestione Eccezioni", font=("Helvetica", 14, "bold")).pack(side="left")
+        ttk.Label(title_frame, text="(Scarti, correzioni, merce non consegnata)", font=("Helvetica", 9, "italic"), foreground="gray").pack(side="left", padx=(10, 0))
         
         # === QUICK ENTRY FORM (GRID LAYOUT) ===
-        form_frame = ttk.LabelFrame(main_frame, text="Inserimento Rapido", padding=15)
+        form_frame = ttk.LabelFrame(main_frame, text="Inserimento Rapido Eccezione (campi obbligatori marcati con *)", padding=15)
         form_frame.pack(side="top", fill="x", pady=(0, 10))
         
         # Grid configuration (3 columns x 3 rows + buttons)
@@ -2758,6 +2766,7 @@ class DesktopOrderApp:
         title_frame = ttk.Frame(main_frame)
         title_frame.pack(side="top", fill="x", pady=(0, 10))
         ttk.Label(title_frame, text="Gestione SKU", font=("Helvetica", 14, "bold")).pack(side="left")
+        ttk.Label(title_frame, text="(Crea, modifica, elimina prodotti)", font=("Helvetica", 9, "italic"), foreground="gray").pack(side="left", padx=(10, 0))
         
         # Search bar
         search_frame = ttk.Frame(main_frame)
@@ -3775,6 +3784,7 @@ class DesktopOrderApp:
             text="⚙️ Impostazioni Motore di Riordino",
             font=("Helvetica", 16, "bold")
         ).pack(side="left")
+        ttk.Label(title_frame, text="(Parametri globali per ordini automatici)", font=("Helvetica", 9, "italic"), foreground="gray").pack(side="left", padx=(10, 0))
         
         # Info label
         info_frame = ttk.Frame(main_frame)
