@@ -107,6 +107,20 @@ class DesktopOrderApp:
         self.dashboard_sku_var = tk.StringVar()
         self.dashboard_sku_items = []  # Available SKU list for autocomplete
         
+        # Tab order mapping (tab_id -> tab_name)
+        self.tab_map = {
+            "stock": "📦 Stock & Chiusura",
+            "order": "📋 Ordini",
+            "receiving": "📥 Ricevimenti",
+            "exception": "⚠️ Eccezioni",
+            "dashboard": "📊 Dashboard",
+            "admin": "🔧 Gestione SKU",
+            "settings": "⚙️ Impostazioni"
+        }
+        
+        # Load saved tab order from settings
+        self.tab_order = self._load_tab_order()
+        
         # Create GUI
         self._create_widgets()
         self._refresh_all()
@@ -138,6 +152,15 @@ class DesktopOrderApp:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=5, pady=5)
         
+        # Tab drag-and-drop state
+        self.drag_tab_index = None
+        self.drag_start_x = None
+        
+        # Bind events for tab reordering
+        self.notebook.bind("<Button-1>", self._on_tab_press)
+        self.notebook.bind("<B1-Motion>", self._on_tab_drag)
+        self.notebook.bind("<ButtonRelease-1>", self._on_tab_release)
+        
         # Create tabs
         self.dashboard_tab = ttk.Frame(self.notebook)
         self.stock_tab = ttk.Frame(self.notebook)
@@ -147,14 +170,22 @@ class DesktopOrderApp:
         self.admin_tab = ttk.Frame(self.notebook)
         self.settings_tab = ttk.Frame(self.notebook)
         
-        # Order tabs by daily workflow: Stock EOD → Orders → Receiving → Exceptions → Monitoring → Config
-        self.notebook.add(self.stock_tab, text="📦 Stock & Chiusura")
-        self.notebook.add(self.order_tab, text="📋 Ordini")
-        self.notebook.add(self.receiving_tab, text="📥 Ricevimenti")
-        self.notebook.add(self.exception_tab, text="⚠️ Eccezioni")
-        self.notebook.add(self.dashboard_tab, text="📊 Dashboard")
-        self.notebook.add(self.admin_tab, text="🔧 Gestione SKU")
-        self.notebook.add(self.settings_tab, text="⚙️ Impostazioni")
+        # Map tab IDs to frame objects
+        self.tab_frames = {
+            "stock": self.stock_tab,
+            "order": self.order_tab,
+            "receiving": self.receiving_tab,
+            "exception": self.exception_tab,
+            "dashboard": self.dashboard_tab,
+            "admin": self.admin_tab,
+            "settings": self.settings_tab
+        }
+        
+        # Add tabs in saved order (or default order if not saved)
+        for tab_id in self.tab_order:
+            tab_frame = self.tab_frames[tab_id]
+            tab_text = self.tab_map[tab_id]
+            self.notebook.add(tab_frame, text=tab_text)
         
         # Build tab contents
         self._build_dashboard_tab()
@@ -4141,6 +4172,116 @@ class DesktopOrderApp:
         
         except Exception as e:
             messagebox.showerror("Errore", f"Impossibile ripristinare impostazioni: {str(e)}")
+    
+    def _on_tab_press(self, event):
+        """Handle mouse press on tab for drag-and-drop reordering."""
+        # Check if click is on a tab
+        try:
+            clicked = self.notebook.tk.call(self.notebook._w, "identify", "tab", event.x, event.y)
+            if clicked != "":
+                self.drag_tab_index = int(clicked)
+                self.drag_start_x = event.x
+            else:
+                self.drag_tab_index = None
+                self.drag_start_x = None
+        except:
+            self.drag_tab_index = None
+            self.drag_start_x = None
+    
+    def _on_tab_drag(self, event):
+        """Handle mouse drag on tab."""
+        if self.drag_tab_index is None or self.drag_start_x is None:
+            return
+        
+        # Check if dragged far enough (minimum 30 pixels)
+        if abs(event.x - self.drag_start_x) < 30:
+            return
+        
+        # Find which tab position the mouse is over
+        try:
+            target = self.notebook.tk.call(self.notebook._w, "identify", "tab", event.x, event.y)
+            if target != "":
+                target_index = int(target)
+                
+                # Only move if different position
+                if target_index != self.drag_tab_index:
+                    # Get tab info before moving
+                    tab_id = self.notebook.tabs()[self.drag_tab_index]
+                    tab_text = self.notebook.tab(tab_id, "text")
+                    
+                    # Remove and reinsert at new position
+                    self.notebook.forget(self.drag_tab_index)
+                    self.notebook.insert(target_index, tab_id, text=tab_text)
+                    
+                    # Update drag index to new position
+                    self.drag_tab_index = target_index
+                    self.drag_start_x = event.x
+        except:
+            pass
+    
+    def _on_tab_release(self, event):
+        """Handle mouse release after tab drag."""
+        # Save new tab order if tabs were reordered
+        if self.drag_tab_index is not None:
+            self._save_tab_order()
+        
+        self.drag_tab_index = None
+        self.drag_start_x = None
+    
+    def _load_tab_order(self):
+        """
+        Load saved tab order from settings.
+        
+        Returns:
+            List of tab IDs in saved order (or default order if not saved)
+        """
+        default_order = ["stock", "order", "receiving", "exception", "dashboard", "admin", "settings"]
+        
+        try:
+            settings = self.csv_layer.read_settings()
+            if "ui" in settings and "tab_order" in settings["ui"]:
+                saved_order = settings["ui"]["tab_order"]
+                # Validate saved order (must contain all tab IDs)
+                if set(saved_order) == set(default_order) and len(saved_order) == len(default_order):
+                    return saved_order
+        except:
+            pass
+        
+        return default_order
+    
+    def _save_tab_order(self):
+        """Save current tab order to settings."""
+        try:
+            # Get current tab order from notebook
+            current_order = []
+            for tab_id in self.notebook.tabs():
+                tab_text = self.notebook.tab(tab_id, "text")
+                # Find which tab this is
+                for tid, tname in self.tab_map.items():
+                    if tname == tab_text:
+                        current_order.append(tid)
+                        break
+            
+            # Load current settings
+            settings = self.csv_layer.read_settings()
+            
+            # Ensure "ui" section exists
+            if "ui" not in settings:
+                settings["ui"] = {}
+            
+            # Update tab order
+            settings["ui"]["tab_order"] = current_order
+            
+            # Save settings
+            self.csv_layer.write_settings(settings)
+            
+            # Update instance variable
+            self.tab_order = current_order
+            
+            logger.info(f"Tab order saved: {current_order}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save tab order: {str(e)}", exc_info=True)
 
 
 def main():
