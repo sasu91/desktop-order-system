@@ -14,6 +14,13 @@ from collections import defaultdict
 import logging
 
 try:
+    from tkcalendar import DateEntry
+    TKCALENDAR_AVAILABLE = True
+except ImportError:
+    DateEntry = None
+    TKCALENDAR_AVAILABLE = False
+
+try:
     import matplotlib
     matplotlib.use('TkAgg')
     from matplotlib.figure import Figure
@@ -173,7 +180,16 @@ class DesktopOrderApp:
         
         ttk.Label(date_frame, text="Data AsOf:").pack(side="left", padx=5)
         self.asof_date_var = tk.StringVar(value=self.asof_date.isoformat())
-        ttk.Entry(date_frame, textvariable=self.asof_date_var, width=15).pack(side="left", padx=5)
+        if TKCALENDAR_AVAILABLE:
+            DateEntry(
+                date_frame,
+                textvariable=self.asof_date_var,
+                width=12,
+                date_pattern="yyyy-mm-dd",
+            ).pack(side="left", padx=5)
+        else:
+            ttk.Entry(date_frame, textvariable=self.asof_date_var, width=15).pack(side="left", padx=5)
+            ttk.Label(date_frame, text="(Installa tkcalendar)").pack(side="left", padx=5)
         ttk.Button(date_frame, text="Aggiorna", command=self._refresh_stock_tab).pack(side="left", padx=5)
         
         # Stock table
@@ -2148,7 +2164,15 @@ class DesktopOrderApp:
         # ROW 1 col 2: Data (obbligatorio)
         ttk.Label(form_frame, text="Data: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=1, column=2, sticky="e", padx=(20, 8), pady=8)
         self.exception_date_var = tk.StringVar(value=self.exception_date.isoformat())
-        ttk.Entry(form_frame, textvariable=self.exception_date_var, width=15).grid(row=1, column=3, sticky="w", pady=8)
+        if TKCALENDAR_AVAILABLE:
+            DateEntry(
+                form_frame,
+                textvariable=self.exception_date_var,
+                width=12,
+                date_pattern="yyyy-mm-dd",
+            ).grid(row=1, column=3, sticky="w", pady=8)
+        else:
+            ttk.Entry(form_frame, textvariable=self.exception_date_var, width=15).grid(row=1, column=3, sticky="w", pady=8)
         self.exception_date_var.trace('w', lambda *args: self._validate_exception_form())
         
         # ROW 2: Notes (opzionale) - span 4 colonne
@@ -2178,7 +2202,15 @@ class DesktopOrderApp:
         
         ttk.Label(toolbar_frame, text="Visualizza Data:", font=("Helvetica", 9)).pack(side="left", padx=(0, 5))
         self.exception_view_date_var = tk.StringVar(value=self.exception_date.isoformat())
-        ttk.Entry(toolbar_frame, textvariable=self.exception_view_date_var, width=15).pack(side="left", padx=(0, 5))
+        if TKCALENDAR_AVAILABLE:
+            DateEntry(
+                toolbar_frame,
+                textvariable=self.exception_view_date_var,
+                width=12,
+                date_pattern="yyyy-mm-dd",
+            ).pack(side="left", padx=(0, 5))
+        else:
+            ttk.Entry(toolbar_frame, textvariable=self.exception_view_date_var, width=15).pack(side="left", padx=(0, 5))
         ttk.Button(toolbar_frame, text="🔄 Aggiorna", command=self._refresh_exception_tab).pack(side="left", padx=5)
         ttk.Button(toolbar_frame, text="📅 Oggi", command=self._set_exception_today).pack(side="left", padx=5)
         
@@ -2650,7 +2682,15 @@ class DesktopOrderApp:
         # Date
         ttk.Label(form_frame, text="Date:", font=("Helvetica", 10)).pack(anchor="w", pady=(0, 5))
         bulk_date_var = tk.StringVar(value=self.exception_view_date_var.get())
-        ttk.Entry(form_frame, textvariable=bulk_date_var, width=30).pack(fill="x", pady=(0, 15))
+        if TKCALENDAR_AVAILABLE:
+            DateEntry(
+                form_frame,
+                textvariable=bulk_date_var,
+                width=28,
+                date_pattern="yyyy-mm-dd",
+            ).pack(fill="x", pady=(0, 15))
+        else:
+            ttk.Entry(form_frame, textvariable=bulk_date_var, width=30).pack(fill="x", pady=(0, 15))
         
         # Buttons
         button_frame = ttk.Frame(form_frame)
@@ -3454,13 +3494,21 @@ class DesktopOrderApp:
         if not self.eod_stock_edits:
             messagebox.showinfo("Info", "Nessun dato EOD inserito. Modifica almeno un valore Stock EOD nella tabella.")
             return
+
+        try:
+            asof_str = self.asof_date_var.get()
+            selected_date = date.fromisoformat(asof_str)
+        except ValueError:
+            messagebox.showerror("Error", "Formato data non valido. Usa YYYY-MM-DD.")
+            return
+        self.asof_date = selected_date
         
         # Confirm with user
         num_entries = len(self.eod_stock_edits)
         confirm = messagebox.askyesno(
             "Conferma Chiusura",
             f"Confermare chiusura giornaliera per {num_entries} SKU?\n\n"
-            f"Data: {self.asof_date.isoformat()}\n\n"
+            f"Data: {selected_date.isoformat()}\n\n"
             "Questo calcolerà il venduto e aggiornerà stock e vendite.",
         )
         
@@ -3471,7 +3519,7 @@ class DesktopOrderApp:
         try:
             results = self.daily_close_workflow.process_bulk_eod_stock(
                 eod_entries=self.eod_stock_edits,
-                eod_date=self.asof_date,
+                eod_date=selected_date,
             )
             
             # Show results
