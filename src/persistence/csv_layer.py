@@ -133,7 +133,60 @@ class CSVLayer:
         Add a new SKU to skus.csv.
         
         Auto-applies default parameters from settings if configured.
+        Auto-classifies demand variability based on historical sales.
         """
+        from ..domain.models import auto_classify_variability
+        import json
+        
+        # Load settings for auto-classification
+        settings_path = self.data_dir / "settings.json"
+        settings = {}
+        if settings_path.exists():
+            with open(settings_path, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+        
+        # Check if auto-classification is enabled
+        auto_settings = settings.get("auto_variability", {})
+        enabled = auto_settings.get("enabled", {}).get("value", True)
+        
+        # Auto-classify if enabled and SKU has STABLE (default) variability
+        # This preserves manual classifications while auto-classifying new/default SKUs
+        if enabled and sku.demand_variability == DemandVariability.STABLE:
+            try:
+                # Load sales records for classification
+                sales_records = self.read_sales()
+                
+                # Perform auto-classification
+                classified_variability = auto_classify_variability(
+                    sku=sku.sku,
+                    sales_records=sales_records,
+                    settings=settings
+                )
+                
+                # Create updated SKU with auto-classified variability
+                sku = SKU(
+                    sku=sku.sku,
+                    description=sku.description,
+                    ean=sku.ean,
+                    moq=sku.moq,
+                    pack_size=sku.pack_size,
+                    lead_time_days=sku.lead_time_days,
+                    review_period=sku.review_period,
+                    safety_stock=sku.safety_stock,
+                    shelf_life_days=sku.shelf_life_days,
+                    max_stock=sku.max_stock,
+                    reorder_point=sku.reorder_point,
+                    supplier=sku.supplier,
+                    demand_variability=classified_variability,  # Auto-classified
+                    oos_boost_percent=sku.oos_boost_percent,
+                    oos_detection_mode=sku.oos_detection_mode,
+                    oos_popup_preference=sku.oos_popup_preference,
+                )
+            except Exception as e:
+                # Fallback to original if auto-classification fails
+                import logging
+                logging.warning(f"Auto-classification failed for {sku.sku}: {e}")
+        
         # Get defaults from settings
         defaults = self.get_default_sku_params()
         
@@ -231,6 +284,7 @@ class CSVLayer:
         """
         Update SKU (code, description, EAN, and parameters).
         If SKU code changes, automatically updates all ledger references.
+        Auto-classifies demand variability if enabled.
         
         Args:
             old_sku_id: Current SKU identifier
@@ -251,6 +305,37 @@ class CSVLayer:
         Returns:
             True if updated, False if not found
         """
+        from ..domain.models import auto_classify_variability
+        import json
+        
+        # Load settings for auto-classification
+        settings_path = self.data_dir / "settings.json"
+        settings = {}
+        if settings_path.exists():
+            with open(settings_path, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+        
+        # Check if auto-classification is enabled
+        auto_settings = settings.get("auto_variability", {})
+        enabled = auto_settings.get("enabled", {}).get("value", True)
+        
+        # Auto-classify if enabled and demand_variability is STABLE (default)
+        if enabled and demand_variability == DemandVariability.STABLE:
+            try:
+                # Load sales records for classification
+                sales_records = self.read_sales()
+                
+                # Perform auto-classification
+                demand_variability = auto_classify_variability(
+                    sku=new_sku_id,  # Use new SKU ID for classification
+                    sales_records=sales_records,
+                    settings=settings
+                )
+            except Exception as e:
+                # Fallback to STABLE if auto-classification fails
+                import logging
+                logging.warning(f"Auto-classification failed for {new_sku_id}: {e}")
+        
         rows = self._read_csv("skus.csv")
         updated = False
         

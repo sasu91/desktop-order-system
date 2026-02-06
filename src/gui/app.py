@@ -4122,6 +4122,58 @@ class DesktopOrderApp:
                 "type": "choice",
                 "choices": ["STABLE", "MODERATE", "HIGH"]
             },
+            # Auto-classification parameters
+            {
+                "key": "auto_variability_enabled",
+                "label": "⚡ Auto-classificazione Variabilità",
+                "description": "Abilita classificazione automatica variabilità domanda al salvataggio SKU",
+                "type": "bool",
+                "section": "auto_variability"
+            },
+            {
+                "key": "auto_variability_min_observations",
+                "label": "Min. Osservazioni (giorni)",
+                "description": "Minimo giorni vendita richiesti per auto-classificazione",
+                "type": "int",
+                "min": 7,
+                "max": 365,
+                "section": "auto_variability"
+            },
+            {
+                "key": "auto_variability_stable_percentile",
+                "label": "Percentile STABLE (Q)",
+                "description": "Percentile per soglia STABLE (es. 25 = primo quartile)",
+                "type": "int",
+                "min": 1,
+                "max": 50,
+                "section": "auto_variability"
+            },
+            {
+                "key": "auto_variability_high_percentile",
+                "label": "Percentile HIGH (Q)",
+                "description": "Percentile per soglia HIGH (es. 75 = terzo quartile)",
+                "type": "int",
+                "min": 50,
+                "max": 99,
+                "section": "auto_variability"
+            },
+            {
+                "key": "auto_variability_seasonal_threshold",
+                "label": "Soglia Autocorrelazione SEASONAL",
+                "description": "Soglia autocorrelazione settimanale per rilevare pattern stagionali (0-1)",
+                "type": "float",
+                "min": 0.0,
+                "max": 1.0,
+                "section": "auto_variability"
+            },
+            {
+                "key": "auto_variability_fallback_category",
+                "label": "Categoria Fallback",
+                "description": "Categoria assegnata se dati insufficienti",
+                "type": "choice",
+                "choices": ["LOW", "STABLE", "SEASONAL", "HIGH"],
+                "section": "auto_variability"
+            },
             {
                 "key": "oos_boost_percent",
                 "label": "OOS Boost (%)",
@@ -4185,8 +4237,18 @@ class DesktopOrderApp:
             right_frame = ttk.Frame(row_frame)
             right_frame.pack(side="right")
             
-            # Value input
-            if param["type"] == "int":
+            # Value input based on type
+            if param["type"] == "bool":
+                # Boolean checkbox (no separate auto-apply for bool)
+                value_var = tk.BooleanVar()
+                value_check = ttk.Checkbutton(
+                    right_frame,
+                    text="Abilitato",
+                    variable=value_var
+                )
+                value_check.pack(side="left", padx=5)
+                auto_apply_var = None  # No auto-apply for bool
+            elif param["type"] == "int":
                 value_var = tk.IntVar()
                 value_entry = ttk.Spinbox(
                     right_frame,
@@ -4196,6 +4258,34 @@ class DesktopOrderApp:
                     width=10
                 )
                 value_entry.pack(side="left", padx=5)
+                # Auto-apply checkbox
+                auto_apply_var = tk.BooleanVar()
+                auto_apply_check = ttk.Checkbutton(
+                    right_frame,
+                    text="Auto-applica ai nuovi SKU",
+                    variable=auto_apply_var
+                )
+                auto_apply_check.pack(side="left", padx=10)
+            elif param["type"] == "float":
+                value_var = tk.DoubleVar()
+                value_entry = ttk.Spinbox(
+                    right_frame,
+                    from_=param["min"],
+                    to=param["max"],
+                    increment=0.1,
+                    textvariable=value_var,
+                    width=10,
+                    format="%.2f"
+                )
+                value_entry.pack(side="left", padx=5)
+                # Auto-apply checkbox
+                auto_apply_var = tk.BooleanVar()
+                auto_apply_check = ttk.Checkbutton(
+                    right_frame,
+                    text="Auto-applica ai nuovi SKU",
+                    variable=auto_apply_var
+                )
+                auto_apply_check.pack(side="left", padx=10)
             elif param["type"] == "choice":
                 value_var = tk.StringVar()
                 value_entry = ttk.Combobox(
@@ -4206,15 +4296,14 @@ class DesktopOrderApp:
                     width=12
                 )
                 value_entry.pack(side="left", padx=5)
-            
-            # Auto-apply checkbox
-            auto_apply_var = tk.BooleanVar()
-            auto_apply_check = ttk.Checkbutton(
-                right_frame,
-                text="Auto-applica ai nuovi SKU",
-                variable=auto_apply_var
-            )
-            auto_apply_check.pack(side="left", padx=10)
+                # Auto-apply checkbox
+                auto_apply_var = tk.BooleanVar()
+                auto_apply_check = ttk.Checkbutton(
+                    right_frame,
+                    text="Auto-applica ai nuovi SKU",
+                    variable=auto_apply_var
+                )
+                auto_apply_check.pack(side="left", padx=10)
             
             # Store widgets
             self.settings_widgets[param["key"]] = {
@@ -4262,17 +4351,26 @@ class DesktopOrderApp:
                 {"key": "max_stock", "section": "reorder_engine"},
                 {"key": "reorder_point", "section": "reorder_engine"},
                 {"key": "demand_variability", "section": "reorder_engine"},
+                {"key": "auto_variability_enabled", "section": "auto_variability", "settings_key": "enabled"},
+                {"key": "auto_variability_min_observations", "section": "auto_variability", "settings_key": "min_observations"},
+                {"key": "auto_variability_stable_percentile", "section": "auto_variability", "settings_key": "stable_percentile"},
+                {"key": "auto_variability_high_percentile", "section": "auto_variability", "settings_key": "high_percentile"},
+                {"key": "auto_variability_seasonal_threshold", "section": "auto_variability", "settings_key": "seasonal_threshold"},
+                {"key": "auto_variability_fallback_category", "section": "auto_variability", "settings_key": "fallback_category"},
                 {"key": "oos_boost_percent", "section": "reorder_engine"},
                 {"key": "stock_unit_price", "section": "dashboard"},
             ]
             
-            param_sections = {p["key"]: p.get("section", "reorder_engine") for p in parameters}
+            param_map = {p["key"]: (p.get("section", "reorder_engine"), p.get("settings_key", p["key"])) for p in parameters}
             
             for param_key, widgets in self.settings_widgets.items():
-                section = param_sections.get(param_key, "reorder_engine")
-                param_config = settings.get(section, {}).get(param_key, {})
+                if param_key not in param_map:
+                    continue
+                section, settings_key = param_map[param_key]
+                param_config = settings.get(section, {}).get(settings_key, {})
                 widgets["value_var"].set(param_config.get("value", 0))
-                widgets["auto_apply_var"].set(param_config.get("auto_apply_to_new_sku", True))
+                if widgets["auto_apply_var"]:
+                    widgets["auto_apply_var"].set(param_config.get("auto_apply_to_new_sku", True))
         
         except Exception as e:
             messagebox.showerror("Errore", f"Impossibile caricare impostazioni: {str(e)}")
@@ -4292,24 +4390,35 @@ class DesktopOrderApp:
                 {"key": "max_stock", "section": "reorder_engine"},
                 {"key": "reorder_point", "section": "reorder_engine"},
                 {"key": "demand_variability", "section": "reorder_engine"},
+                {"key": "auto_variability_enabled", "section": "auto_variability", "settings_key": "enabled"},
+                {"key": "auto_variability_min_observations", "section": "auto_variability", "settings_key": "min_observations"},
+                {"key": "auto_variability_stable_percentile", "section": "auto_variability", "settings_key": "stable_percentile"},
+                {"key": "auto_variability_high_percentile", "section": "auto_variability", "settings_key": "high_percentile"},
+                {"key": "auto_variability_seasonal_threshold", "section": "auto_variability", "settings_key": "seasonal_threshold"},
+                {"key": "auto_variability_fallback_category", "section": "auto_variability", "settings_key": "fallback_category"},
                 {"key": "oos_boost_percent", "section": "reorder_engine"},
                 {"key": "stock_unit_price", "section": "dashboard"},
             ]
             
-            param_sections = {p["key"]: p.get("section", "reorder_engine") for p in parameters}
+            param_map = {p["key"]: (p.get("section", "reorder_engine"), p.get("settings_key", p["key"])) for p in parameters}
             
             # Update settings by section
             for param_key, widgets in self.settings_widgets.items():
-                section = param_sections.get(param_key, "reorder_engine")
+                if param_key not in param_map:
+                    continue
+                section, settings_key = param_map[param_key]
                 
                 # Ensure section exists
                 if section not in settings:
                     settings[section] = {}
                 
-                settings[section][param_key] = {
-                    "value": widgets["value_var"].get(),
-                    "auto_apply_to_new_sku": widgets["auto_apply_var"].get()
+                settings[section][settings_key] = {
+                    "value": widgets["value_var"].get()
                 }
+                
+                # Add auto_apply only if widget has it (bool params don't)
+                if widgets["auto_apply_var"]:
+                    settings[section][settings_key]["auto_apply_to_new_sku"] = widgets["auto_apply_var"].get()
             
             # Write to file
             self.csv_layer.write_settings(settings)

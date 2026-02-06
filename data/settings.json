@@ -40,5 +40,31 @@
       "value": "strict",
       "description": "Modalità rilevamento OOS: strict (on_hand=0) o relaxed (on_hand+on_order=0)"
     }
+  },
+  "auto_variability": {
+    "enabled": {
+      "value": true,
+      "description": "Abilita classificazione automatica variabilità domanda"
+    },
+    "min_observations": {
+      "value": 30,
+      "description": "Minimo giorni vendita richiesti per classificazione"
+    },
+    "stable_percentile": {
+      "value": 25,
+      "description": "Percentile per soglia STABLE (CV <= Q1)"
+    },
+    "high_percentile": {
+      "value": 75,
+      "description": "Percentile per soglia HIGH (CV >= Q3)"
+    },
+    "seasonal_threshold": {
+      "value": 0.3,
+      "description": "Soglia autocorrelazione per rilevare SEASONAL (0-1)"
+    },
+    "fallback_category": {
+      "value": "LOW",
+      "description": "Categoria di default se dati insufficienti (LOW, STABLE, SEASONAL, HIGH)"
+    }
   }
 }

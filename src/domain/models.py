@@ -203,3 +203,61 @@ class ReceivingLog:
     sku: str
     qty_received: int
     receipt_date: Date
+
+
+# Helper function for auto-classification integration
+def auto_classify_variability(
+    sku: str,
+    sales_records: list,
+    settings: dict
+) -> DemandVariability:
+    """
+    Auto-classify demand variability for a SKU using adaptive thresholds.
+    
+    This is a convenience wrapper around auto_variability module that:
+    1. Loads settings parameters
+    2. Calls classification logic
+    3. Returns single SKU result
+    
+    Args:
+        sku: SKU identifier
+        sales_records: List of SalesRecord objects
+        settings: Settings dict from JSON
+    
+    Returns:
+        DemandVariability: Classified category
+    """
+    from .auto_variability import (
+        compute_sku_metrics,
+        compute_adaptive_thresholds,
+        classify_demand_variability,
+        classify_all_skus
+    )
+    
+    # Extract settings
+    auto_settings = settings.get("auto_variability", {})
+    enabled = auto_settings.get("enabled", {}).get("value", True)
+    
+    if not enabled:
+        # Return default if auto-classification disabled
+        fallback = auto_settings.get("fallback_category", {}).get("value", "LOW")
+        return DemandVariability[fallback]
+    
+    min_obs = auto_settings.get("min_observations", {}).get("value", 30)
+    stable_pct = auto_settings.get("stable_percentile", {}).get("value", 25)
+    high_pct = auto_settings.get("high_percentile", {}).get("value", 75)
+    seasonal_thresh = auto_settings.get("seasonal_threshold", {}).get("value", 0.3)
+    fallback = auto_settings.get("fallback_category", {}).get("value", "LOW")
+    
+    # Classify all SKUs to get adaptive thresholds
+    all_classifications = classify_all_skus(
+        sales_records=sales_records,
+        min_observations=min_obs,
+        stable_percentile=stable_pct,
+        high_percentile=high_pct,
+        seasonal_threshold=seasonal_thresh,
+        fallback_category=DemandVariability[fallback]
+    )
+    
+    # Return classification for requested SKU
+    return all_classifications.get(sku, DemandVariability[fallback])
