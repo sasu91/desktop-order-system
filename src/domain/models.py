@@ -51,6 +51,7 @@ class SKU:
     demand_variability: DemandVariability = DemandVariability.STABLE
     oos_boost_percent: float = 0.0  # OOS boost percentage (0-100, 0 = use global setting)
     oos_detection_mode: str = ""  # OOS detection mode: "strict", "relaxed", or "" (use global)
+    oos_popup_preference: str = "ask"  # OOS popup behavior: "ask", "always_yes", "always_no"
     
     def __post_init__(self):
         if not self.sku or not self.sku.strip():
@@ -77,6 +78,8 @@ class SKU:
             raise ValueError("OOS boost percent must be between 0 and 100")
         if self.oos_detection_mode not in ["", "strict", "relaxed"]:
             raise ValueError("OOS detection mode must be '', 'strict', or 'relaxed'")
+        if self.oos_popup_preference not in ["ask", "always_yes", "always_no"]:
+            raise ValueError("OOS popup preference must be 'ask', 'always_yes', or 'always_no'")
 
 
 @dataclass(frozen=True)

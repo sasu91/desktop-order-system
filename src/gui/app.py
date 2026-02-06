@@ -1203,8 +1203,17 @@ class DesktopOrderApp:
             # Determine OOS boost for this SKU
             oos_boost_percent = 0.0
             if oos_days_count > 0:
-                # Check if user has already decided for this SKU in this session
-                if sku_id in self.oos_boost_preferences:
+                # First, check SKU's permanent preference
+                if sku_obj and sku_obj.oos_popup_preference == "always_yes":
+                    # Always apply boost without asking
+                    oos_boost_percent = oos_boost_default
+                    self.oos_boost_preferences[sku_id] = oos_boost_default
+                elif sku_obj and sku_obj.oos_popup_preference == "always_no":
+                    # Never apply boost without asking
+                    oos_boost_percent = 0.0
+                    self.oos_boost_preferences[sku_id] = None
+                # Then check if user has already decided for this SKU in this session
+                elif sku_id in self.oos_boost_preferences:
                     # User already decided (could be None for "no", or a percent for "yes"/"yes, always")
                     oos_boost_percent = self.oos_boost_preferences[sku_id] or 0.0
                 else:
@@ -1271,6 +1280,29 @@ class DesktopOrderApp:
                     elif boost_choice == "yes_always":
                         oos_boost_percent = oos_boost_default
                         self.oos_boost_preferences[sku_id] = oos_boost_default  # Store for session
+                        # Save permanently to SKU
+                        if sku_obj:
+                            self.csv_layer.update_sku(
+                                sku_obj.sku, sku_obj.sku, sku_obj.description, sku_obj.ean,
+                                sku_obj.moq, sku_obj.pack_size, sku_obj.lead_time_days, 
+                                sku_obj.review_period, sku_obj.safety_stock, sku_obj.shelf_life_days,
+                                sku_obj.max_stock, sku_obj.reorder_point, sku_obj.supplier, 
+                                sku_obj.demand_variability, sku_obj.oos_boost_percent, 
+                                sku_obj.oos_detection_mode, "always_yes"
+                            )
+                    elif boost_choice == "no_never":
+                        oos_boost_percent = 0.0
+                        self.oos_boost_preferences[sku_id] = None
+                        # Save permanently to SKU
+                        if sku_obj:
+                            self.csv_layer.update_sku(
+                                sku_obj.sku, sku_obj.sku, sku_obj.description, sku_obj.ean,
+                                sku_obj.moq, sku_obj.pack_size, sku_obj.lead_time_days, 
+                                sku_obj.review_period, sku_obj.safety_stock, sku_obj.shelf_life_days,
+                                sku_obj.max_stock, sku_obj.reorder_point, sku_obj.supplier, 
+                                sku_obj.demand_variability, sku_obj.oos_boost_percent, 
+                                sku_obj.oos_detection_mode, "always_no"
+                            )
                     else:  # "no"
                         oos_boost_percent = 0.0
                         self.oos_boost_preferences[sku_id] = None
@@ -1413,6 +1445,12 @@ class DesktopOrderApp:
             button_frame,
             text="No",
             command=lambda: choose("no"),
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="No, mai (per questo SKU)",
+            command=lambda: choose("no_never"),
         ).pack(side="left", padx=5)
         
         # Wait for user choice
@@ -3212,16 +3250,38 @@ class DesktopOrderApp:
         oos_mode_combo = ttk.Combobox(form_frame, textvariable=oos_mode_var, values=["", "strict", "relaxed"], state="readonly", width=37)
         oos_mode_combo.grid(row=14, column=1, sticky="ew", pady=5, padx=(10, 0))
         
+        # OOS Popup Preference field
+        ttk.Label(form_frame, text="Popup OOS:", font=("Helvetica", 10, "bold")).grid(
+            row=15, column=0, sticky="w", pady=5
+        )
+        oos_popup_var = tk.StringVar(value=current_sku.oos_popup_preference if current_sku else "ask")
+        oos_popup_combo = ttk.Combobox(
+            form_frame, 
+            textvariable=oos_popup_var, 
+            values=["ask", "always_yes", "always_no"], 
+            state="readonly", 
+            width=37
+        )
+        oos_popup_combo.grid(row=15, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # Tooltip labels for OOS popup preference
+        ttk.Label(
+            form_frame, 
+            text="ask=chiedi, always_yes=applica sempre boost, always_no=mai boost", 
+            font=("Helvetica", 8), 
+            foreground="gray"
+        ).grid(row=16, column=1, sticky="w", padx=(10, 0))
+        
         # Validate EAN button and status label
         ean_status_var = tk.StringVar(value="")
         ttk.Button(
             form_frame, 
             text="Valida EAN", 
             command=lambda: self._validate_ean_field(ean_var.get(), ean_status_var)
-        ).grid(row=15, column=1, sticky="w", pady=5, padx=(10, 0))
+        ).grid(row=17, column=1, sticky="w", pady=5, padx=(10, 0))
         
         ean_status_label = ttk.Label(form_frame, textvariable=ean_status_var, foreground="green")
-        ean_status_label.grid(row=16, column=1, sticky="w", padx=(10, 0))
+        ean_status_label.grid(row=18, column=1, sticky="w", padx=(10, 0))
         
         # Configure grid
         form_frame.columnconfigure(1, weight=1)
@@ -3238,7 +3298,8 @@ class DesktopOrderApp:
                 moq_var.get(), pack_size_var.get(), lead_time_var.get(), 
                 review_period_var.get(), safety_stock_var.get(), shelf_life_var.get(),
                 max_stock_var.get(), reorder_point_var.get(), supplier_var.get(), 
-                demand_var.get(), oos_boost_var.get(), oos_mode_var.get(), current_sku
+                demand_var.get(), oos_boost_var.get(), oos_mode_var.get(), 
+                oos_popup_var.get(), current_sku
             ),
         ).pack(side="right", padx=5)
         
@@ -3265,7 +3326,8 @@ class DesktopOrderApp:
     def _save_sku_form(self, popup, mode, sku_code, description, ean,
                         moq_str, pack_size_str, lead_time_str, review_period_str, 
                         safety_stock_str, shelf_life_str, max_stock_str, reorder_point_str,
-                        supplier, demand_variability_str, oos_boost_str, oos_mode_str, current_sku):
+                        supplier, demand_variability_str, oos_boost_str, oos_mode_str, 
+                        oos_popup_pref, current_sku):
         """Save SKU from form."""
         # Validate inputs
         if not sku_code or not sku_code.strip():
@@ -3327,6 +3389,11 @@ class DesktopOrderApp:
             messagebox.showerror("Errore di Validazione", "Modalità OOS non valida. Usa: strict, relaxed o vuoto.", parent=popup)
             return
         
+        oos_popup_preference = (oos_popup_pref or "ask").strip()
+        if oos_popup_preference not in ["ask", "always_yes", "always_no"]:
+            messagebox.showerror("Errore di Validazione", "Preferenza popup OOS non valida. Usa: ask, always_yes o always_no.", parent=popup)
+            return
+        
         # Parse demand variability
         from ..domain.models import DemandVariability
         try:
@@ -3370,6 +3437,7 @@ class DesktopOrderApp:
                     demand_variability=demand_variability,
                     oos_boost_percent=oos_boost_percent,
                     oos_detection_mode=oos_detection_mode,
+                    oos_popup_preference=oos_popup_preference,
                 )
                 self.csv_layer.write_sku(new_sku)
                 
@@ -3389,7 +3457,8 @@ class DesktopOrderApp:
                     old_sku_code, sku_code, description, ean,
                     moq, pack_size, lead_time_days, review_period, 
                     safety_stock, shelf_life_days, max_stock, reorder_point,
-                    supplier, demand_variability, oos_boost_percent, oos_detection_mode
+                    supplier, demand_variability, oos_boost_percent, oos_detection_mode,
+                    oos_popup_preference
                 )
                 if success:
                     # Build change details

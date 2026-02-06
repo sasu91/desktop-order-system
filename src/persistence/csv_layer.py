@@ -24,7 +24,8 @@ class CSVLayer:
     SCHEMAS = {
         "skus.csv": ["sku", "description", "ean", "moq", "pack_size", "lead_time_days", 
                      "review_period", "safety_stock", "shelf_life_days", "max_stock", 
-                     "reorder_point", "supplier", "demand_variability", "oos_boost_percent", "oos_detection_mode"],
+                     "reorder_point", "supplier", "demand_variability", "oos_boost_percent", 
+                     "oos_detection_mode", "oos_popup_preference"],
         "transactions.csv": ["date", "sku", "event", "qty", "receipt_date", "note"],
         "sales.csv": ["date", "sku", "qty_sold"],
         "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "status", "receipt_date"],
@@ -119,6 +120,7 @@ class CSVLayer:
                     demand_variability=demand_var,
                     oos_boost_percent=float(row.get("oos_boost_percent", "0")),
                     oos_detection_mode=row.get("oos_detection_mode", "").strip(),
+                    oos_popup_preference=row.get("oos_popup_preference", "ask").strip(),
                 )
                 skus.append(sku)
             except (ValueError, KeyError) as e:
@@ -152,6 +154,7 @@ class CSVLayer:
             shelf_life_days=sku.shelf_life_days,
             oos_boost_percent=sku.oos_boost_percent,
             oos_detection_mode=sku.oos_detection_mode,
+            oos_popup_preference=sku.oos_popup_preference,
         )
         
         rows = self._read_csv("skus.csv")
@@ -171,6 +174,7 @@ class CSVLayer:
             "demand_variability": final_sku.demand_variability.value,
             "oos_boost_percent": str(final_sku.oos_boost_percent),
             "oos_detection_mode": final_sku.oos_detection_mode,
+            "oos_popup_preference": final_sku.oos_popup_preference,
         })
         self._write_csv("skus.csv", rows)
     
@@ -221,7 +225,8 @@ class CSVLayer:
         supplier: str = "",
         demand_variability: DemandVariability = DemandVariability.STABLE,
         oos_boost_percent: float = 0.0,
-        oos_detection_mode: str = ""
+        oos_detection_mode: str = "",
+        oos_popup_preference: str = "ask"
     ) -> bool:
         """
         Update SKU (code, description, EAN, and parameters).
@@ -269,6 +274,7 @@ class CSVLayer:
                 "demand_variability": row.get("demand_variability", "STABLE").strip() or "STABLE",
                 "oos_boost_percent": row.get("oos_boost_percent", "0").strip() or "0",
                 "oos_detection_mode": row.get("oos_detection_mode", "").strip(),
+                "oos_popup_preference": row.get("oos_popup_preference", "ask").strip() or "ask",
             }
             
             # Update the target row with new values
@@ -288,6 +294,7 @@ class CSVLayer:
                 normalized_row["demand_variability"] = demand_variability.value
                 normalized_row["oos_boost_percent"] = str(oos_boost_percent)
                 normalized_row["oos_detection_mode"] = oos_detection_mode
+                normalized_row["oos_popup_preference"] = oos_popup_preference
                 updated = True
             
             normalized_rows.append(normalized_row)

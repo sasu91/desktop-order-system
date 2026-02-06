@@ -102,7 +102,7 @@ def simulate_intermittent_demand(
 class OrderWorkflow:
     """Order processing: proposal generation and confirmation."""
     
-    def __init__(self, csv_layer: CSVLayer, lead_time_days: int = None):
+    def __init__(self, csv_layer: CSVLayer, lead_time_days: Optional[int] = None):
         """
         Initialize order workflow.
         
@@ -380,7 +380,7 @@ def calculate_daily_sales_average(
     sku: str,
     days_lookback: int = 30,
     transactions=None,
-    asof_date: date = None,
+    asof_date: Optional[date] = None,
     oos_detection_mode: str = "strict",
 ) -> tuple:
     """

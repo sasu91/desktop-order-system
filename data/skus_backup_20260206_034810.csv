@@ -1,0 +1,5 @@
+sku,description,ean,moq,pack_size,lead_time_days,review_period,safety_stock,shelf_life_days,max_stock,reorder_point,supplier,demand_variability,oos_boost_percent,oos_detection_mode
+CAFE001,Caffè Espresso Premium 1kg,8001234567890,12,6,7,7,30,365,300,50,Torrefazione Italiana,MODERATE,0,
+LATTE002,Latte Intero Fresco 1L,8002345678901,20,10,3,5,50,7,500,80,Latteria Alpina,HIGH,0,
+PASTA003,Pasta Penne Rigate 500g,8003456789012,24,12,10,7,40,730,400,60,Pastificio Artigiano,STABLE,0,
+LOWMOVE001,Spezia Rara 50g,8004567890123,6,1,2,7,2,180,20,3,Importatore Spezie,HIGH,0,strict
