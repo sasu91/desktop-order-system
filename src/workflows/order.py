@@ -3,6 +3,7 @@ Order workflow: proposal generation and confirmation.
 """
 from datetime import date, timedelta
 from typing import List, Tuple, Optional
+import logging
 
 from ..domain.models import Stock, OrderProposal, OrderConfirmation, Transaction, EventType, SKU
 from ..persistence.csv_layer import CSVLayer
@@ -119,6 +120,46 @@ class OrderWorkflow:
         else:
             self.lead_time_days = lead_time_days
     
+    def _get_mc_parameters(self, sku_obj: Optional[SKU], settings: dict) -> dict:
+        """
+        Get Monte Carlo parameters with SKU override → global fallback logic.
+        
+        Args:
+            sku_obj: SKU object (may have MC overrides)
+            settings: Global settings dict
+        
+        Returns:
+            Dict with MC parameters: distribution, n_simulations, random_seed, etc.
+        """
+        mc_section = settings.get("monte_carlo", {})
+        
+        # Helper to get value with SKU override fallback
+        def _get_param(sku_field, global_key, default):
+            if sku_obj:
+                sku_value = getattr(sku_obj, sku_field, None)
+                # For string fields: empty string means use global
+                if isinstance(default, str):
+                    if sku_value and sku_value.strip():
+                        return sku_value
+                # For numeric fields: 0 means use global
+                elif isinstance(default, int):
+                    if sku_value and sku_value > 0:
+                        return sku_value
+            
+            # Fallback to global
+            return mc_section.get(global_key, {}).get("value", default)
+        
+        return {
+            "distribution": _get_param("mc_distribution", "distribution", "empirical"),
+            "n_simulations": _get_param("mc_n_simulations", "n_simulations", 1000),
+            "random_seed": _get_param("mc_random_seed", "random_seed", 42),
+            "output_stat": _get_param("mc_output_stat", "output_stat", "mean"),
+            "output_percentile": _get_param("mc_output_percentile", "output_percentile", 80),
+            "horizon_mode": _get_param("mc_horizon_mode", "horizon_mode", "auto"),
+            "horizon_days": _get_param("mc_horizon_days", "horizon_days", 14),
+        }
+
+    
     def generate_proposal(
         self,
         sku: str,
@@ -190,8 +231,61 @@ class OrderWorkflow:
         
         # NEW FORMULA: S = forecast × (lead_time + review_period) + safety_stock
         forecast_period = lead_time + review_period
-        forecast_qty = int(daily_sales_avg * forecast_period)
-        lead_time_demand = int(daily_sales_avg * lead_time)
+        
+        # === FORECAST METHOD SELECTION (SIMPLE vs MONTE CARLO) ===
+        # Read global settings
+        settings = self.csv_layer.read_settings()
+        global_forecast_method = settings.get("reorder_engine", {}).get("forecast_method", {}).get("value", "simple")
+        
+        # Override with SKU-specific method if provided
+        forecast_method = sku_obj.forecast_method if (sku_obj and sku_obj.forecast_method) else global_forecast_method
+        
+        # Execute forecast based on selected method
+        if forecast_method == "monte_carlo":
+            # === MONTE CARLO FORECAST ===
+            # Get MC parameters (SKU override → global fallback)
+            mc_params = self._get_mc_parameters(sku_obj, settings)
+            
+            # Determine horizon
+            if mc_params["horizon_mode"] == "auto":
+                horizon_days = forecast_period
+            else:  # custom
+                horizon_days = mc_params["horizon_days"]
+            
+            # Fetch historical sales data for SKU
+            sales_records = self.csv_layer.read_sales()
+            sku_sales_history = [
+                {"date": rec.date, "qty_sold": rec.qty_sold}
+                for rec in sales_records if rec.sku == sku
+            ]
+            
+            # Run Monte Carlo forecast
+            from ..forecast import monte_carlo_forecast
+            try:
+                mc_forecast_values = monte_carlo_forecast(
+                    history=sku_sales_history,
+                    horizon_days=horizon_days,
+                    distribution=mc_params["distribution"],
+                    n_simulations=mc_params["n_simulations"],
+                    random_seed=mc_params["random_seed"],
+                    output_stat=mc_params["output_stat"],
+                    output_percentile=mc_params["output_percentile"],
+                )
+                
+                # Use sum of forecast over horizon as total demand
+                forecast_qty = int(sum(mc_forecast_values))
+                lead_time_demand = int(sum(mc_forecast_values[:lead_time])) if len(mc_forecast_values) >= lead_time else forecast_qty
+            except Exception as e:
+                # Fallback to simple forecast if MC fails
+                logging.warning(f"Monte Carlo forecast failed for SKU {sku}: {e}. Falling back to simple forecast.")
+                forecast_qty = int(daily_sales_avg * forecast_period)
+                lead_time_demand = int(daily_sales_avg * lead_time)
+        
+        else:
+            # === SIMPLE FORECAST (level × period) ===
+            forecast_qty = int(daily_sales_avg * forecast_period)
+            lead_time_demand = int(daily_sales_avg * lead_time)
+        
         S = forecast_qty + safety_stock
         
         # Check shelf life warning (if shelf_life_days > 0)

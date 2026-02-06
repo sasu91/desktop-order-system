@@ -39,6 +39,48 @@
     "oos_detection_mode": {
       "value": "strict",
       "description": "Modalità rilevamento OOS: strict (on_hand=0) o relaxed (on_hand+on_order=0)"
+    },
+    "forecast_method": {
+      "value": "simple",
+      "auto_apply_to_new_sku": true,
+      "description": "Metodo forecast globale: simple (level+DOW) o monte_carlo"
+    }
+  },
+  "monte_carlo": {
+    "distribution": {
+      "value": "empirical",
+      "auto_apply_to_new_sku": true,
+      "description": "Distribuzione MC: empirical (bootstrap storico), normal, lognormal, residuals"
+    },
+    "n_simulations": {
+      "value": 1000,
+      "auto_apply_to_new_sku": true,
+      "description": "Numero simulazioni Monte Carlo"
+    },
+    "random_seed": {
+      "value": 42,
+      "auto_apply_to_new_sku": true,
+      "description": "Seed deterministico per riproducibilità (0 = random)"
+    },
+    "output_stat": {
+      "value": "mean",
+      "auto_apply_to_new_sku": true,
+      "description": "Statistica output MC: mean (media) o percentile"
+    },
+    "output_percentile": {
+      "value": 80,
+      "auto_apply_to_new_sku": true,
+      "description": "Percentile output se output_stat=percentile (50-99)"
+    },
+    "horizon_mode": {
+      "value": "auto",
+      "auto_apply_to_new_sku": true,
+      "description": "Calcolo orizzonte: auto (lead_time+review_period) o custom"
+    },
+    "horizon_days": {
+      "value": 14,
+      "auto_apply_to_new_sku": true,
+      "description": "Orizzonte fisso (giorni) se horizon_mode=custom"
     }
   },
   "auto_variability": {

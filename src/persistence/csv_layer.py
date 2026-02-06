@@ -25,7 +25,9 @@ class CSVLayer:
         "skus.csv": ["sku", "description", "ean", "moq", "pack_size", "lead_time_days", 
                      "review_period", "safety_stock", "shelf_life_days", "max_stock", 
                      "reorder_point", "supplier", "demand_variability", "oos_boost_percent", 
-                     "oos_detection_mode", "oos_popup_preference"],
+                     "oos_detection_mode", "oos_popup_preference", "forecast_method",
+                     "mc_distribution", "mc_n_simulations", "mc_random_seed", "mc_output_stat",
+                     "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days"],
         "transactions.csv": ["date", "sku", "event", "qty", "receipt_date", "note"],
         "sales.csv": ["date", "sku", "qty_sold"],
         "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "status", "receipt_date"],
@@ -121,6 +123,15 @@ class CSVLayer:
                     oos_boost_percent=float(row.get("oos_boost_percent", "0")),
                     oos_detection_mode=row.get("oos_detection_mode", "").strip(),
                     oos_popup_preference=row.get("oos_popup_preference", "ask").strip(),
+                    # Monte Carlo forecast parameters
+                    forecast_method=row.get("forecast_method", "").strip(),
+                    mc_distribution=row.get("mc_distribution", "").strip(),
+                    mc_n_simulations=int(row.get("mc_n_simulations", "0")),
+                    mc_random_seed=int(row.get("mc_random_seed", "0")),
+                    mc_output_stat=row.get("mc_output_stat", "").strip(),
+                    mc_output_percentile=int(row.get("mc_output_percentile", "0")),
+                    mc_horizon_mode=row.get("mc_horizon_mode", "").strip(),
+                    mc_horizon_days=int(row.get("mc_horizon_days", "0")),
                 )
                 skus.append(sku)
             except (ValueError, KeyError) as e:
@@ -208,6 +219,14 @@ class CSVLayer:
             oos_boost_percent=sku.oos_boost_percent,
             oos_detection_mode=sku.oos_detection_mode,
             oos_popup_preference=sku.oos_popup_preference,
+            forecast_method=sku.forecast_method,
+            mc_distribution=sku.mc_distribution,
+            mc_n_simulations=sku.mc_n_simulations,
+            mc_random_seed=sku.mc_random_seed,
+            mc_output_stat=sku.mc_output_stat,
+            mc_output_percentile=sku.mc_output_percentile,
+            mc_horizon_mode=sku.mc_horizon_mode,
+            mc_horizon_days=sku.mc_horizon_days,
         )
         
         rows = self._read_csv("skus.csv")
@@ -228,6 +247,14 @@ class CSVLayer:
             "oos_boost_percent": str(final_sku.oos_boost_percent),
             "oos_detection_mode": final_sku.oos_detection_mode,
             "oos_popup_preference": final_sku.oos_popup_preference,
+            "forecast_method": final_sku.forecast_method,
+            "mc_distribution": final_sku.mc_distribution,
+            "mc_n_simulations": str(final_sku.mc_n_simulations),
+            "mc_random_seed": str(final_sku.mc_random_seed),
+            "mc_output_stat": final_sku.mc_output_stat,
+            "mc_output_percentile": str(final_sku.mc_output_percentile),
+            "mc_horizon_mode": final_sku.mc_horizon_mode,
+            "mc_horizon_days": str(final_sku.mc_horizon_days),
         })
         self._write_csv("skus.csv", rows)
     
@@ -279,7 +306,15 @@ class CSVLayer:
         demand_variability: DemandVariability = DemandVariability.STABLE,
         oos_boost_percent: float = 0.0,
         oos_detection_mode: str = "",
-        oos_popup_preference: str = "ask"
+        oos_popup_preference: str = "ask",
+        forecast_method: str = "",
+        mc_distribution: str = "",
+        mc_n_simulations: int = 0,
+        mc_random_seed: int = 0,
+        mc_output_stat: str = "",
+        mc_output_percentile: int = 0,
+        mc_horizon_mode: str = "",
+        mc_horizon_days: int = 0
     ) -> bool:
         """
         Update SKU (code, description, EAN, and parameters).
@@ -380,6 +415,14 @@ class CSVLayer:
                 normalized_row["oos_boost_percent"] = str(oos_boost_percent)
                 normalized_row["oos_detection_mode"] = oos_detection_mode
                 normalized_row["oos_popup_preference"] = oos_popup_preference
+                normalized_row["forecast_method"] = forecast_method
+                normalized_row["mc_distribution"] = mc_distribution
+                normalized_row["mc_n_simulations"] = str(mc_n_simulations)
+                normalized_row["mc_random_seed"] = str(mc_random_seed)
+                normalized_row["mc_output_stat"] = mc_output_stat
+                normalized_row["mc_output_percentile"] = str(mc_output_percentile)
+                normalized_row["mc_horizon_mode"] = mc_horizon_mode
+                normalized_row["mc_horizon_days"] = str(mc_horizon_days)
                 updated = True
             
             normalized_rows.append(normalized_row)
@@ -739,6 +782,40 @@ class CSVLayer:
                 },
                 "oos_detection_mode": {
                     "value": "strict",
+                    "auto_apply_to_new_sku": False
+                },
+                "forecast_method": {
+                    "value": "simple",
+                    "auto_apply_to_new_sku": False
+                }
+            },
+            "monte_carlo": {
+                "distribution": {
+                    "value": "empirical",
+                    "auto_apply_to_new_sku": False
+                },
+                "n_simulations": {
+                    "value": 1000,
+                    "auto_apply_to_new_sku": False
+                },
+                "random_seed": {
+                    "value": 42,
+                    "auto_apply_to_new_sku": False
+                },
+                "output_stat": {
+                    "value": "mean",
+                    "auto_apply_to_new_sku": False
+                },
+                "output_percentile": {
+                    "value": 80,
+                    "auto_apply_to_new_sku": False
+                },
+                "horizon_mode": {
+                    "value": "auto",
+                    "auto_apply_to_new_sku": False
+                },
+                "horizon_days": {
+                    "value": 14,
                     "auto_apply_to_new_sku": False
                 }
             },

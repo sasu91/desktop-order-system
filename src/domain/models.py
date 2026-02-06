@@ -53,6 +53,18 @@ class SKU:
     oos_detection_mode: str = ""  # OOS detection mode: "strict", "relaxed", or "" (use global)
     oos_popup_preference: str = "ask"  # OOS popup behavior: "ask", "always_yes", "always_no"
     
+    # Forecast method selection
+    forecast_method: str = ""  # "simple", "monte_carlo", or "" (use global default)
+    
+    # Monte Carlo override parameters (used only if forecast_method="monte_carlo")
+    mc_distribution: str = ""  # "empirical", "normal", "lognormal", "residuals", or "" (use global)
+    mc_n_simulations: int = 0  # Number of simulations (0 = use global)
+    mc_random_seed: int = 0  # Random seed (0 = use global)
+    mc_output_stat: str = ""  # "mean", "percentile", or "" (use global)
+    mc_output_percentile: int = 0  # Percentile value 50-99 (0 = use global)
+    mc_horizon_mode: str = ""  # "auto", "custom", or "" (use global)
+    mc_horizon_days: int = 0  # Custom horizon days (0 = use global)
+    
     def __post_init__(self):
         if not self.sku or not self.sku.strip():
             raise ValueError("SKU cannot be empty")
@@ -80,6 +92,20 @@ class SKU:
             raise ValueError("OOS detection mode must be '', 'strict', or 'relaxed'")
         if self.oos_popup_preference not in ["ask", "always_yes", "always_no"]:
             raise ValueError("OOS popup preference must be 'ask', 'always_yes', or 'always_no'")
+        if self.forecast_method not in ["", "simple", "monte_carlo"]:
+            raise ValueError("Forecast method must be '', 'simple', or 'monte_carlo'")
+        if self.mc_distribution not in ["", "empirical", "normal", "lognormal", "residuals"]:
+            raise ValueError("MC distribution must be '', 'empirical', 'normal', 'lognormal', or 'residuals'")
+        if self.mc_n_simulations < 0:
+            raise ValueError("MC n_simulations cannot be negative")
+        if self.mc_output_stat not in ["", "mean", "percentile"]:
+            raise ValueError("MC output_stat must be '', 'mean', or 'percentile'")
+        if self.mc_output_percentile < 0 or self.mc_output_percentile > 99:
+            raise ValueError("MC output_percentile must be 0-99")
+        if self.mc_horizon_mode not in ["", "auto", "custom"]:
+            raise ValueError("MC horizon_mode must be '', 'auto', or 'custom'")
+        if self.mc_horizon_days < 0:
+            raise ValueError("MC horizon_days cannot be negative")
 
 
 @dataclass(frozen=True)

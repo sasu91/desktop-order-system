@@ -3112,7 +3112,7 @@ class DesktopOrderApp:
         # Create popup window
         popup = tk.Toplevel(self.root)
         popup.title("Nuovo SKU" if mode == "new" else "Modifica SKU")
-        popup.geometry("600x700")
+        popup.geometry("600x1000")
         popup.resizable(False, False)
         
         # Center popup
@@ -3272,16 +3272,101 @@ class DesktopOrderApp:
             foreground="gray"
         ).grid(row=16, column=1, sticky="w", padx=(10, 0))
         
+        # ========== MONTE CARLO OVERRIDE SECTION ==========
+        # Forecast Method Override
+        ttk.Label(form_frame, text="🎲 Metodo Forecast (\"\"=globale):", font=("Helvetica", 10, "bold")).grid(
+            row=17, column=0, sticky="w", pady=5
+        )
+        forecast_method_var = tk.StringVar(value=current_sku.forecast_method if current_sku else "")
+        forecast_method_combo = ttk.Combobox(
+            form_frame,
+            textvariable=forecast_method_var,
+            values=["", "simple", "monte_carlo"],
+            state="readonly",
+            width=37
+        )
+        forecast_method_combo.grid(row=17, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # MC Distribution Override
+        ttk.Label(form_frame, text="MC Distribuzione (\"\"=globale):", font=("Helvetica", 10, "bold")).grid(
+            row=18, column=0, sticky="w", pady=5
+        )
+        mc_distribution_var = tk.StringVar(value=current_sku.mc_distribution if current_sku else "")
+        mc_dist_combo = ttk.Combobox(
+            form_frame,
+            textvariable=mc_distribution_var,
+            values=["", "empirical", "normal", "lognormal", "residuals"],
+            state="readonly",
+            width=37
+        )
+        mc_dist_combo.grid(row=18, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # MC N Simulations Override
+        ttk.Label(form_frame, text="MC N Simulazioni (0=globale):", font=("Helvetica", 10, "bold")).grid(
+            row=19, column=0, sticky="w", pady=5
+        )
+        mc_n_sims_var = tk.StringVar(value=str(current_sku.mc_n_simulations) if current_sku else "0")
+        ttk.Entry(form_frame, textvariable=mc_n_sims_var, width=40).grid(row=19, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # MC Random Seed Override
+        ttk.Label(form_frame, text="MC Random Seed (0=globale):", font=("Helvetica", 10, "bold")).grid(
+            row=20, column=0, sticky="w", pady=5
+        )
+        mc_seed_var = tk.StringVar(value=str(current_sku.mc_random_seed) if current_sku else "0")
+        ttk.Entry(form_frame, textvariable=mc_seed_var, width=40).grid(row=20, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # MC Output Stat Override
+        ttk.Label(form_frame, text="MC Stat Output (\"\"=globale):", font=("Helvetica", 10, "bold")).grid(
+            row=21, column=0, sticky="w", pady=5
+        )
+        mc_output_stat_var = tk.StringVar(value=current_sku.mc_output_stat if current_sku else "")
+        mc_stat_combo = ttk.Combobox(
+            form_frame,
+            textvariable=mc_output_stat_var,
+            values=["", "mean", "percentile"],
+            state="readonly",
+            width=37
+        )
+        mc_stat_combo.grid(row=21, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # MC Output Percentile Override
+        ttk.Label(form_frame, text="MC Percentile (0=globale):", font=("Helvetica", 10, "bold")).grid(
+            row=22, column=0, sticky="w", pady=5
+        )
+        mc_percentile_var = tk.StringVar(value=str(current_sku.mc_output_percentile) if current_sku else "0")
+        ttk.Entry(form_frame, textvariable=mc_percentile_var, width=40).grid(row=22, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # MC Horizon Mode Override
+        ttk.Label(form_frame, text="MC Orizzonte Mode (\"\"=globale):", font=("Helvetica", 10, "bold")).grid(
+            row=23, column=0, sticky="w", pady=5
+        )
+        mc_horizon_mode_var = tk.StringVar(value=current_sku.mc_horizon_mode if current_sku else "")
+        mc_horizon_combo = ttk.Combobox(
+            form_frame,
+            textvariable=mc_horizon_mode_var,
+            values=["", "auto", "custom"],
+            state="readonly",
+            width=37
+        )
+        mc_horizon_combo.grid(row=23, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
+        # MC Horizon Days Override
+        ttk.Label(form_frame, text="MC Orizzonte Giorni (0=globale):", font=("Helvetica", 10, "bold")).grid(
+            row=24, column=0, sticky="w", pady=5
+        )
+        mc_horizon_days_var = tk.StringVar(value=str(current_sku.mc_horizon_days) if current_sku else "0")
+        ttk.Entry(form_frame, textvariable=mc_horizon_days_var, width=40).grid(row=24, column=1, sticky="ew", pady=5, padx=(10, 0))
+        
         # Validate EAN button and status label
         ean_status_var = tk.StringVar(value="")
         ttk.Button(
             form_frame, 
             text="Valida EAN", 
             command=lambda: self._validate_ean_field(ean_var.get(), ean_status_var)
-        ).grid(row=17, column=1, sticky="w", pady=5, padx=(10, 0))
+        ).grid(row=25, column=1, sticky="w", pady=5, padx=(10, 0))
         
         ean_status_label = ttk.Label(form_frame, textvariable=ean_status_var, foreground="green")
-        ean_status_label.grid(row=18, column=1, sticky="w", padx=(10, 0))
+        ean_status_label.grid(row=26, column=1, sticky="w", padx=(10, 0))
         
         # Configure grid
         form_frame.columnconfigure(1, weight=1)
@@ -3299,7 +3384,11 @@ class DesktopOrderApp:
                 review_period_var.get(), safety_stock_var.get(), shelf_life_var.get(),
                 max_stock_var.get(), reorder_point_var.get(), supplier_var.get(), 
                 demand_var.get(), oos_boost_var.get(), oos_mode_var.get(), 
-                oos_popup_var.get(), current_sku
+                oos_popup_var.get(),
+                forecast_method_var.get(), mc_distribution_var.get(), mc_n_sims_var.get(),
+                mc_seed_var.get(), mc_output_stat_var.get(), mc_percentile_var.get(),
+                mc_horizon_mode_var.get(), mc_horizon_days_var.get(),
+                current_sku
             ),
         ).pack(side="right", padx=5)
         
@@ -3327,7 +3416,11 @@ class DesktopOrderApp:
                         moq_str, pack_size_str, lead_time_str, review_period_str, 
                         safety_stock_str, shelf_life_str, max_stock_str, reorder_point_str,
                         supplier, demand_variability_str, oos_boost_str, oos_mode_str, 
-                        oos_popup_pref, current_sku):
+                        oos_popup_pref,
+                        forecast_method_str, mc_distribution_str, mc_n_sims_str,
+                        mc_seed_str, mc_output_stat_str, mc_percentile_str,
+                        mc_horizon_mode_str, mc_horizon_days_str,
+                        current_sku):
         """Save SKU from form."""
         # Validate inputs
         if not sku_code or not sku_code.strip():
@@ -3408,6 +3501,50 @@ class DesktopOrderApp:
                 messagebox.showerror("EAN Non Valido", error, parent=popup)
                 return
         
+        # Parse Monte Carlo parameters
+        forecast_method = (forecast_method_str or "").strip()
+        mc_distribution = (mc_distribution_str or "").strip()
+        mc_output_stat = (mc_output_stat_str or "").strip()
+        mc_horizon_mode = (mc_horizon_mode_str or "").strip()
+        
+        try:
+            mc_n_simulations = int(mc_n_sims_str)
+            mc_random_seed = int(mc_seed_str)
+            mc_output_percentile = int(mc_percentile_str)
+            mc_horizon_days = int(mc_horizon_days_str)
+        except ValueError:
+            messagebox.showerror("Errore di Validazione", "Parametri Monte Carlo devono essere numeri validi.", parent=popup)
+            return
+        
+        # Validate MC parameters if non-default
+        if forecast_method not in ["", "simple", "monte_carlo"]:
+            messagebox.showerror("Errore di Validazione", "Metodo forecast non valido: usa '', 'simple', o 'monte_carlo'.", parent=popup)
+            return
+        
+        if mc_distribution and mc_distribution not in ["empirical", "normal", "lognormal", "residuals"]:
+            messagebox.showerror("Errore di Validazione", "Distribuzione MC non valida.", parent=popup)
+            return
+        
+        if mc_output_stat and mc_output_stat not in ["mean", "percentile"]:
+            messagebox.showerror("Errore di Validazione", "Statistica MC non valida: usa '' (globale), 'mean', o 'percentile'.", parent=popup)
+            return
+        
+        if mc_horizon_mode and mc_horizon_mode not in ["auto", "custom"]:
+            messagebox.showerror("Errore di Validazione", "Modalità orizzonte MC non valida: usa '' (globale), 'auto', o 'custom'.", parent=popup)
+            return
+        
+        if mc_n_simulations < 0 or mc_n_simulations > 10000:
+            messagebox.showerror("Errore di Validazione", "MC N Simulazioni deve essere 0 (globale) o 1-10000.", parent=popup)
+            return
+        
+        if mc_output_percentile != 0 and (mc_output_percentile < 50 or mc_output_percentile > 99):
+            messagebox.showerror("Errore di Validazione", "MC Percentile deve essere 0 (globale) o 50-99.", parent=popup)
+            return
+        
+        if mc_horizon_days < 0 or mc_horizon_days > 365:
+            messagebox.showerror("Errore di Validazione", "MC Orizzonte Giorni deve essere 0 (globale) o 1-365.", parent=popup)
+            return
+        
         # Check for duplicate SKU code (only for new or if code changed)
         if mode == "new" or (current_sku and sku_code != current_sku.sku):
             if self.csv_layer.sku_exists(sku_code):
@@ -3438,6 +3575,14 @@ class DesktopOrderApp:
                     oos_boost_percent=oos_boost_percent,
                     oos_detection_mode=oos_detection_mode,
                     oos_popup_preference=oos_popup_preference,
+                    forecast_method=forecast_method,
+                    mc_distribution=mc_distribution,
+                    mc_n_simulations=mc_n_simulations,
+                    mc_random_seed=mc_random_seed,
+                    mc_output_stat=mc_output_stat,
+                    mc_output_percentile=mc_output_percentile,
+                    mc_horizon_mode=mc_horizon_mode,
+                    mc_horizon_days=mc_horizon_days,
                 )
                 self.csv_layer.write_sku(new_sku)
                 
@@ -3458,7 +3603,9 @@ class DesktopOrderApp:
                     moq, pack_size, lead_time_days, review_period, 
                     safety_stock, shelf_life_days, max_stock, reorder_point,
                     supplier, demand_variability, oos_boost_percent, oos_detection_mode,
-                    oos_popup_preference
+                    oos_popup_preference,
+                    forecast_method, mc_distribution, mc_n_simulations, mc_random_seed,
+                    mc_output_stat, mc_output_percentile, mc_horizon_mode, mc_horizon_days
                 )
                 if success:
                     # Build change details
@@ -4200,6 +4347,75 @@ class DesktopOrderApp:
                 "choices": ["strict", "relaxed"],
                 "section": "reorder_engine"
             },
+            # Monte Carlo forecast parameters
+            {
+                "key": "forecast_method",
+                "label": "🎲 Metodo Forecast",
+                "description": "Metodo di previsione domanda: simple (livello + DOW) o monte_carlo (simulazione)",
+                "type": "choice",
+                "choices": ["simple", "monte_carlo"],
+                "section": "reorder_engine"
+            },
+            {
+                "key": "mc_distribution",
+                "label": "MC - Distribuzione",
+                "description": "Tipo distribuzione per campionamento Monte Carlo",
+                "type": "choice",
+                "choices": ["empirical", "normal", "lognormal", "residuals"],
+                "section": "monte_carlo"
+            },
+            {
+                "key": "mc_n_simulations",
+                "label": "MC - Numero Simulazioni",
+                "description": "Numero traiettorie simulate (default 1000, max 10000)",
+                "type": "int",
+                "min": 100,
+                "max": 10000,
+                "section": "monte_carlo"
+            },
+            {
+                "key": "mc_random_seed",
+                "label": "MC - Random Seed",
+                "description": "Seed RNG (0 = casuale, >0 = deterministico)",
+                "type": "int",
+                "min": 0,
+                "max": 999999,
+                "section": "monte_carlo"
+            },
+            {
+                "key": "mc_output_stat",
+                "label": "MC - Statistica Output",
+                "description": "Metodo aggregazione risultati: mean (media) o percentile",
+                "type": "choice",
+                "choices": ["mean", "percentile"],
+                "section": "monte_carlo"
+            },
+            {
+                "key": "mc_output_percentile",
+                "label": "MC - Output Percentile",
+                "description": "Percentile se output_stat = percentile (50-99, default 80)",
+                "type": "int",
+                "min": 50,
+                "max": 99,
+                "section": "monte_carlo"
+            },
+            {
+                "key": "mc_horizon_mode",
+                "label": "MC - Modalità Orizzonte",
+                "description": "auto = lead_time + review_period, custom = manuale",
+                "type": "choice",
+                "choices": ["auto", "custom"],
+                "section": "monte_carlo"
+            },
+            {
+                "key": "mc_horizon_days",
+                "label": "MC - Orizzonte Giorni (custom)",
+                "description": "Giorni orizzonte forecast se mc_horizon_mode = custom",
+                "type": "int",
+                "min": 1,
+                "max": 365,
+                "section": "monte_carlo"
+            },
             {
                 "key": "stock_unit_price",
                 "label": "Prezzo Unitario Stock (€)",
@@ -4358,6 +4574,14 @@ class DesktopOrderApp:
                 {"key": "auto_variability_seasonal_threshold", "section": "auto_variability", "settings_key": "seasonal_threshold"},
                 {"key": "auto_variability_fallback_category", "section": "auto_variability", "settings_key": "fallback_category"},
                 {"key": "oos_boost_percent", "section": "reorder_engine"},
+                {"key": "forecast_method", "section": "reorder_engine"},
+                {"key": "mc_distribution", "section": "monte_carlo"},
+                {"key": "mc_n_simulations", "section": "monte_carlo"},
+                {"key": "mc_random_seed", "section": "monte_carlo"},
+                {"key": "mc_output_stat", "section": "monte_carlo"},
+                {"key": "mc_output_percentile", "section": "monte_carlo"},
+                {"key": "mc_horizon_mode", "section": "monte_carlo"},
+                {"key": "mc_horizon_days", "section": "monte_carlo"},
                 {"key": "stock_unit_price", "section": "dashboard"},
             ]
             
@@ -4397,6 +4621,14 @@ class DesktopOrderApp:
                 {"key": "auto_variability_seasonal_threshold", "section": "auto_variability", "settings_key": "seasonal_threshold"},
                 {"key": "auto_variability_fallback_category", "section": "auto_variability", "settings_key": "fallback_category"},
                 {"key": "oos_boost_percent", "section": "reorder_engine"},
+                {"key": "forecast_method", "section": "reorder_engine"},
+                {"key": "mc_distribution", "section": "monte_carlo"},
+                {"key": "mc_n_simulations", "section": "monte_carlo"},
+                {"key": "mc_random_seed", "section": "monte_carlo"},
+                {"key": "mc_output_stat", "section": "monte_carlo"},
+                {"key": "mc_output_percentile", "section": "monte_carlo"},
+                {"key": "mc_horizon_mode", "section": "monte_carlo"},
+                {"key": "mc_horizon_days", "section": "monte_carlo"},
                 {"key": "stock_unit_price", "section": "dashboard"},
             ]
             

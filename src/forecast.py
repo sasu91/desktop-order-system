@@ -378,15 +378,272 @@ def quick_forecast(
     # Validate inputs
     is_valid, error = validate_forecast_inputs(history)
     if not is_valid:
-        raise ValueError(f"Invalid forecast input: {error}")
+        raise ValueError(f"Invalid forecast inputs: {error}")
     
     # Fit model
     model = fit_forecast_model(history)
     
-    # Generate forecast
-    forecast = predict(model, horizon)
+    # Predict
+    forecast_values = predict(model, horizon)
     
-    # Get stats
+    # Stats
+    stats = get_forecast_stats(model)
+    
+    return {
+        "forecast": forecast_values,
+        "model": model,
+        "stats": stats,
+    }
+
+
+# ======================================================================
+# MONTE CARLO FORECAST ENGINE
+# ======================================================================
+
+def monte_carlo_forecast(
+    history: List[Dict[str, Any]],
+    horizon_days: int,
+    distribution: str = "empirical",
+    n_simulations: int = 1000,
+    random_seed: int = 42,
+    output_stat: str = "mean",
+    output_percentile: int = 80,
+) -> List[float]:
+    """
+    Monte Carlo demand forecasting via simulation.
+    
+    Approach:
+    - Sample historical demand distribution (empirical, normal, lognormal, residuals)
+    - Simulate n_simulations demand trajectories over horizon_days
+    - Aggregate using mean or percentile
+    
+    Args:
+        history: List of dicts {"date": date, "qty_sold": float}
+        horizon_days: Forecast horizon (days)
+        distribution: Sampling method
+            - "empirical": Bootstrap from historical demand (default)
+            - "normal": N(μ, σ²) from history
+            - "lognormal": LogNormal(μ_log, σ_log²)
+            - "residuals": Bootstrap residuals from simple model
+        n_simulations: Number of simulation paths (default 1000)
+        random_seed: RNG seed (0 = random, >0 = deterministic)
+        output_stat: Aggregation method
+            - "mean": Average across simulations (default)
+            - "percentile": Use specified percentile
+        output_percentile: Percentile value if output_stat="percentile" (50-99)
+    
+    Returns:
+        List[float] of length horizon_days with forecasted demand
+    
+    Example:
+        >>> history = [{"date": date(2024, 1, i), "qty_sold": 10 + i % 3} for i in range(1, 31)]
+        >>> fc = monte_carlo_forecast(history, horizon_days=7, distribution="empirical")
+        >>> len(fc)
+        7
+    """
+    import random
+    import numpy as np
+    
+    # Set random seed for reproducibility
+    if random_seed > 0:
+        random.seed(random_seed)
+        np.random.seed(random_seed)
+    
+    # Extract quantities
+    if not history:
+        return [0.0] * horizon_days
+    
+    quantities = [float(rec["qty_sold"]) for rec in history]
+    
+    if len(quantities) < 3:
+        # Insufficient data: use simple mean
+        mean_qty = statistics.mean(quantities) if quantities else 0.0
+        return [max(0.0, mean_qty)] * horizon_days
+    
+    # Initialize simulation paths
+    simulations = []  # Shape: (n_simulations, horizon_days)
+    
+    for _ in range(n_simulations):
+        path = []
+        
+        for day in range(horizon_days):
+            if distribution == "empirical":
+                # Bootstrap: sample random historical day
+                sampled_qty = random.choice(quantities)
+            
+            elif distribution == "normal":
+                # Normal distribution N(μ, σ)
+                mean_qty = statistics.mean(quantities)
+                std_qty = statistics.stdev(quantities) if len(quantities) > 1 else 0.0
+                sampled_qty = np.random.normal(mean_qty, std_qty)
+            
+            elif distribution == "lognormal":
+                # LogNormal for non-negative demand
+                positive_quantities = [q for q in quantities if q > 0]
+                if not positive_quantities:
+                    sampled_qty = 0.0
+                else:
+                    log_quantities = np.log(positive_quantities)
+                    mu_log = np.mean(log_quantities)
+                    sigma_log = np.std(log_quantities) if len(log_quantities) > 1 else 0.1
+                    sampled_qty = np.random.lognormal(mu_log, sigma_log)
+            
+            elif distribution == "residuals":
+                # Bootstrap residuals from simple model
+                simple_model = fit_forecast_model(history, alpha=0.3)
+                level = simple_model["level"]
+                residuals = [q - level for q in quantities]
+                sampled_residual = random.choice(residuals)
+                sampled_qty = level + sampled_residual
+            
+            else:
+                raise ValueError(f"Unknown distribution: {distribution}")
+            
+            # Ensure non-negative
+            path.append(max(0.0, sampled_qty))
+        
+        simulations.append(path)
+    
+    # Aggregate across simulations
+    simulations_array = np.array(simulations)  # Shape: (n_simulations, horizon_days)
+    
+    if output_stat == "mean":
+        forecast_values = np.mean(simulations_array, axis=0).tolist()
+    
+    elif output_stat == "percentile":
+        if not (50 <= output_percentile <= 99):
+            raise ValueError(f"output_percentile must be 50-99, got {output_percentile}")
+        forecast_values = np.percentile(simulations_array, output_percentile, axis=0).tolist()
+    
+    else:
+        raise ValueError(f"Unknown output_stat: {output_stat}")
+    
+    return forecast_values
+
+
+def monte_carlo_forecast_with_stats(
+    history: List[Dict[str, Any]],
+    horizon_days: int,
+    distribution: str = "empirical",
+    n_simulations: int = 1000,
+    random_seed: int = 42,
+) -> Dict[str, Any]:
+    """
+    Monte Carlo forecast with full statistical summary.
+    
+    Returns mean, median, and multiple percentiles for each forecast day.
+    
+    Args:
+        Same as monte_carlo_forecast (without output_stat/percentile)
+    
+    Returns:
+        Dict with keys:
+            - "mean": List[float] (mean forecast per day)
+            - "median": List[float] (50th percentile per day)
+            - "p10": List[float] (10th percentile)
+            - "p25": List[float] (25th percentile)
+            - "p75": List[float] (75th percentile)
+            - "p90": List[float] (90th percentile)
+            - "p95": List[float] (95th percentile)
+            - "n_simulations": int
+            - "distribution": str
+    
+    Example:
+        >>> history = [{"date": date(2024, 1, i), "qty_sold": 10 + i % 3} for i in range(1, 31)]
+        >>> result = monte_carlo_forecast_with_stats(history, horizon_days=7)
+        >>> "mean" in result and "p90" in result
+        True
+    """
+    import random
+    import numpy as np
+    
+    # Set random seed
+    if random_seed > 0:
+        random.seed(random_seed)
+        np.random.seed(random_seed)
+    
+    # Extract quantities
+    if not history:
+        zeros = [0.0] * horizon_days
+        return {
+            "mean": zeros,
+            "median": zeros,
+            "p10": zeros,
+            "p25": zeros,
+            "p75": zeros,
+            "p90": zeros,
+            "p95": zeros,
+            "n_simulations": n_simulations,
+            "distribution": distribution,
+        }
+    
+    quantities = [float(rec["qty_sold"]) for rec in history]
+    
+    if len(quantities) < 3:
+        mean_qty = statistics.mean(quantities) if quantities else 0.0
+        fallback = [max(0.0, mean_qty)] * horizon_days
+        return {
+            "mean": fallback,
+            "median": fallback,
+            "p10": fallback,
+            "p25": fallback,
+            "p75": fallback,
+            "p90": fallback,
+            "p95": fallback,
+            "n_simulations": n_simulations,
+            "distribution": distribution,
+        }
+    
+    # Run simulations (same logic as monte_carlo_forecast)
+    simulations = []
+    
+    for _ in range(n_simulations):
+        path = []
+        
+        for day in range(horizon_days):
+            if distribution == "empirical":
+                sampled_qty = random.choice(quantities)
+            elif distribution == "normal":
+                mean_qty = statistics.mean(quantities)
+                std_qty = statistics.stdev(quantities) if len(quantities) > 1 else 0.0
+                sampled_qty = np.random.normal(mean_qty, std_qty)
+            elif distribution == "lognormal":
+                positive_quantities = [q for q in quantities if q > 0]
+                if not positive_quantities:
+                    sampled_qty = 0.0
+                else:
+                    log_quantities = np.log(positive_quantities)
+                    mu_log = np.mean(log_quantities)
+                    sigma_log = np.std(log_quantities) if len(log_quantities) > 1 else 0.1
+                    sampled_qty = np.random.lognormal(mu_log, sigma_log)
+            elif distribution == "residuals":
+                simple_model = fit_forecast_model(history, alpha=0.3)
+                level = simple_model["level"]
+                residuals = [q - level for q in quantities]
+                sampled_residual = random.choice(residuals)
+                sampled_qty = level + sampled_residual
+            else:
+                raise ValueError(f"Unknown distribution: {distribution}")
+            
+            path.append(max(0.0, sampled_qty))
+        
+        simulations.append(path)
+    
+    # Compute statistics
+    simulations_array = np.array(simulations)
+    
+    return {
+        "mean": np.mean(simulations_array, axis=0).tolist(),
+        "median": np.percentile(simulations_array, 50, axis=0).tolist(),
+        "p10": np.percentile(simulations_array, 10, axis=0).tolist(),
+        "p25": np.percentile(simulations_array, 25, axis=0).tolist(),
+        "p75": np.percentile(simulations_array, 75, axis=0).tolist(),
+        "p90": np.percentile(simulations_array, 90, axis=0).tolist(),
+        "p95": np.percentile(simulations_array, 95, axis=0).tolist(),
+        "n_simulations": n_simulations,
+        "distribution": distribution,
+    }
+
     stats = get_forecast_stats(model)
     
     return {
