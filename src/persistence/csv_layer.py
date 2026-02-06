@@ -817,6 +817,10 @@ class CSVLayer:
                 "horizon_days": {
                     "value": 14,
                     "auto_apply_to_new_sku": False
+                },
+                "show_comparison": {
+                    "value": False,
+                    "description": "Mostra risultati MC come colonna informativa nella proposta ordini"
                 }
             },
             "dashboard": {

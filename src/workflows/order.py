@@ -236,9 +236,13 @@ class OrderWorkflow:
         # Read global settings
         settings = self.csv_layer.read_settings()
         global_forecast_method = settings.get("reorder_engine", {}).get("forecast_method", {}).get("value", "simple")
+        mc_show_comparison = settings.get("monte_carlo", {}).get("show_comparison", {}).get("value", False)
         
         # Override with SKU-specific method if provided
         forecast_method = sku_obj.forecast_method if (sku_obj and sku_obj.forecast_method) else global_forecast_method
+        
+        # Variables for MC comparison
+        mc_comparison_qty = None
         
         # Execute forecast based on selected method
         if forecast_method == "monte_carlo":
@@ -299,6 +303,50 @@ class OrderWorkflow:
         # NEW IP formula: IP = on_hand + on_order - unfulfilled_qty
         inventory_position = current_stock.inventory_position()
         unfulfilled_qty = current_stock.unfulfilled_qty
+        
+        # === MONTE CARLO COMPARISON (se richiesto) ===
+        if mc_show_comparison and forecast_method != "monte_carlo":
+            # Calcola MC forecast come riferimento informativo
+            try:
+                mc_params = self._get_mc_parameters(sku_obj, settings)
+                mc_horizon = forecast_period if mc_params["horizon_mode"] == "auto" else mc_params["horizon_days"]
+                
+                sales_records = self.csv_layer.read_sales()
+                sku_sales_history = [
+                    {"date": rec.date, "qty_sold": rec.qty_sold}
+                    for rec in sales_records if rec.sku == sku
+                ]
+                
+                from ..forecast import monte_carlo_forecast
+                mc_forecast_values = monte_carlo_forecast(
+                    history=sku_sales_history,
+                    horizon_days=mc_horizon,
+                    distribution=mc_params["distribution"],
+                    n_simulations=mc_params["n_simulations"],
+                    random_seed=mc_params["random_seed"],
+                    output_stat=mc_params["output_stat"],
+                    output_percentile=mc_params["output_percentile"],
+                )
+                
+                mc_forecast_qty = int(sum(mc_forecast_values))
+                mc_S = mc_forecast_qty + safety_stock
+                mc_proposed_raw = max(0, mc_S - inventory_position)
+                
+                # Applica arrotondamenti come per proposta principale
+                if mc_proposed_raw > 0 and pack_size > 1:
+                    mc_comparison_qty = ((mc_proposed_raw + pack_size - 1) // pack_size) * pack_size
+                else:
+                    mc_comparison_qty = mc_proposed_raw
+                
+                if mc_comparison_qty > 0 and moq > 1:
+                    mc_comparison_qty = ((mc_comparison_qty + moq - 1) // moq) * moq
+                
+                # Cap at max_stock
+                if inventory_position + mc_comparison_qty > max_stock:
+                    mc_comparison_qty = max(0, max_stock - inventory_position)
+            except Exception as e:
+                logging.warning(f"MC comparison failed for SKU {sku}: {e}")
+                mc_comparison_qty = None
         
         # Use simulation for intermittent demand
         if use_simulation:
@@ -389,6 +437,7 @@ class OrderWorkflow:
             receipt_date=receipt_date,
             notes=notes,
             shelf_life_warning=shelf_life_warning,
+            mc_comparison_qty=mc_comparison_qty,
             # Calculation details
             forecast_period_days=forecast_period,
             forecast_qty=forecast_qty,

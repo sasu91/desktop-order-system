@@ -914,7 +914,7 @@ class DesktopOrderApp:
         
         self.proposal_treeview = ttk.Treeview(
             proposal_frame,
-            columns=("SKU", "Description", "Pack Size", "Colli Proposti", "Pezzi Proposti", "Receipt Date"),
+            columns=("SKU", "Description", "Pack Size", "Colli Proposti", "Pezzi Proposti", "MC Comparison", "Receipt Date"),
             height=10,
             yscrollcommand=scrollbar.set,
         )
@@ -922,10 +922,11 @@ class DesktopOrderApp:
         
         self.proposal_treeview.column("#0", width=0, stretch=tk.NO)
         self.proposal_treeview.column("SKU", anchor=tk.W, width=100)
-        self.proposal_treeview.column("Description", anchor=tk.W, width=250)
+        self.proposal_treeview.column("Description", anchor=tk.W, width=220)
         self.proposal_treeview.column("Pack Size", anchor=tk.CENTER, width=80)
-        self.proposal_treeview.column("Colli Proposti", anchor=tk.CENTER, width=120)
-        self.proposal_treeview.column("Pezzi Proposti", anchor=tk.CENTER, width=120)
+        self.proposal_treeview.column("Colli Proposti", anchor=tk.CENTER, width=110)
+        self.proposal_treeview.column("Pezzi Proposti", anchor=tk.CENTER, width=110)
+        self.proposal_treeview.column("MC Comparison", anchor=tk.CENTER, width=110)
         self.proposal_treeview.column("Receipt Date", anchor=tk.CENTER, width=120)
         
         self.proposal_treeview.heading("SKU", text="SKU", anchor=tk.W)
@@ -933,6 +934,7 @@ class DesktopOrderApp:
         self.proposal_treeview.heading("Pack Size", text="Pz/Collo", anchor=tk.CENTER)
         self.proposal_treeview.heading("Colli Proposti", text="Colli Proposti", anchor=tk.CENTER)
         self.proposal_treeview.heading("Pezzi Proposti", text="Pezzi Totali", anchor=tk.CENTER)
+        self.proposal_treeview.heading("MC Comparison", text="📊 MC Info", anchor=tk.CENTER)
         self.proposal_treeview.heading("Receipt Date", text="Data Ricevimento", anchor=tk.CENTER)
         
         self.proposal_treeview.pack(fill="both", expand=True)
@@ -1126,6 +1128,14 @@ class DesktopOrderApp:
                 details.append(f"(determinato via simulazione giornaliera)")
             else:
                 details.append(f"per raggiungere target S")
+        
+        # Monte Carlo Comparison (if available)
+        if proposal.mc_comparison_qty is not None:
+            details.append("")
+            details.append("═══ CONFRONTO MONTE CARLO ═══")
+            details.append(f"Qty proposta MC: {to_colli(proposal.mc_comparison_qty, pack_size)}")
+            details.append(f"Differenza: {to_colli(proposal.mc_comparison_qty - proposal.proposed_qty, pack_size)}")
+            details.append("(Dato informativo basato su simulazione MC)")
         
         if proposal.notes:
             details.append("")
@@ -1482,6 +1492,11 @@ class DesktopOrderApp:
             # Calculate colli from pezzi
             colli_proposti = proposal.proposed_qty // pack_size if pack_size > 0 else proposal.proposed_qty
             
+            # MC Comparison column (show if available)
+            mc_comparison_display = ""
+            if proposal.mc_comparison_qty is not None:
+                mc_comparison_display = f"{proposal.mc_comparison_qty} pz"
+            
             self.proposal_treeview.insert(
                 "",
                 "end",
@@ -1491,6 +1506,7 @@ class DesktopOrderApp:
                     pack_size,
                     colli_proposti,
                     proposal.proposed_qty,
+                    mc_comparison_display,
                     proposal.receipt_date.isoformat() if proposal.receipt_date else "",
                 ),
             )
@@ -4414,6 +4430,13 @@ class DesktopOrderApp:
                 "type": "int",
                 "min": 1,
                 "max": 365,
+                "section": "monte_carlo"
+            },
+            {
+                "key": "mc_show_comparison",
+                "label": "📊 Mostra Confronto MC",
+                "description": "Mostra risultati Monte Carlo come colonna informativa nella proposta ordini (anche se forecast_method=simple)",
+                "type": "bool",
                 "section": "monte_carlo"
             },
             {

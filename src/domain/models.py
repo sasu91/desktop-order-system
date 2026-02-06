@@ -185,6 +185,7 @@ class OrderProposal:
     receipt_date: Optional[Date] = None
     notes: Optional[str] = None
     shelf_life_warning: bool = False  # True if proposed qty exceeds shelf life capacity
+    mc_comparison_qty: Optional[int] = None  # Monte Carlo forecast qty (informativo)
     
     # Calculation details (for transparency in UI)
     forecast_period_days: int = 0  # lead_time + review_period
