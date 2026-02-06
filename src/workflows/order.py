@@ -156,9 +156,23 @@ class OrderWorkflow:
         moq = sku_obj.moq if sku_obj else 1
         lead_time = sku_obj.lead_time_days if sku_obj else self.lead_time_days
         review_period = sku_obj.review_period if sku_obj else 7
-        safety_stock = sku_obj.safety_stock if sku_obj else 0
+        safety_stock_base = sku_obj.safety_stock if sku_obj else 0
         shelf_life_days = sku_obj.shelf_life_days if sku_obj else 0
         max_stock = sku_obj.max_stock if sku_obj else 999
+        demand_variability = sku_obj.demand_variability if sku_obj else None
+        
+        # Apply demand variability multiplier to safety stock
+        # HIGH variability → increase safety stock by 50%
+        # STABLE → reduce by 20%
+        # SEASONAL/LOW → no adjustment (base value)
+        safety_stock = safety_stock_base
+        if demand_variability:
+            from ..domain.models import DemandVariability
+            if demand_variability == DemandVariability.HIGH:
+                safety_stock = int(safety_stock_base * 1.5)
+            elif demand_variability == DemandVariability.STABLE:
+                safety_stock = int(safety_stock_base * 0.8)
+            # SEASONAL and LOW keep base value
         
         # Use SKU-specific OOS boost if set (> 0), otherwise use global setting.
         # Note: SKU stores boost as percent points (0..100), while UI may pass a fraction (0..1).
