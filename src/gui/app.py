@@ -4266,7 +4266,7 @@ class DesktopOrderApp:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Enable mouse wheel scrolling
+        # Enable mouse wheel scrolling (bind to canvas, not globally)
         def _on_mousewheel(event):
             try:
                 if canvas.winfo_exists():
@@ -4274,15 +4274,9 @@ class DesktopOrderApp:
             except tk.TclError:
                 pass  # Widget destroyed, ignore
         
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        
-        # Unbind mousewheel when settings window is destroyed
-        def _on_settings_destroy():
-            try:
-                canvas.unbind_all("<MouseWheel>")
-            except:
-                pass
-        settings_window.bind("<Destroy>", lambda e: _on_settings_destroy())
+        # Bind mousewheel only when mouse is over the canvas
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
         
         # Storage for widgets
         self.settings_widgets = {}
