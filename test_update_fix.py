@@ -30,7 +30,7 @@ success = csv_layer.update_sku(
     shelf_life_days=0,
     max_stock=500,
     reorder_point=50,
-    supplier="Fornitore Caffè Srl",
+
     demand_variability=DemandVariability.STABLE
 )
 

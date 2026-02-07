@@ -206,7 +206,6 @@ def test_order_workflow_mc_integration():
             shelf_life_days=0,
             max_stock=500,
             reorder_point=50,
-            supplier="TestSupplier",
             demand_variability=DemandVariability.STABLE,
             forecast_method="",  # Use global
         )

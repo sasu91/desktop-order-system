@@ -23,7 +23,7 @@ def test_revert_fix():
         
         # Add a test SKU
         print("\n1. Adding test SKU...")
-        csv_layer.add_sku(SKU(
+        csv_layer.write_sku(SKU(
             sku="TEST001",
             description="Test Product",
             ean="",
@@ -31,7 +31,6 @@ def test_revert_fix():
             lead_time_days=7,
             max_stock=999,
             reorder_point=10,
-            supplier="TestSupplier",
             demand_variability=DemandVariability.STABLE,
         ))
         print("   ✓ SKU added")

@@ -47,7 +47,6 @@ class SKU:
     shelf_life_days: int = 0        # Shelf life in days (0 = no expiry/non-perishable)
     max_stock: int = 999            # Maximum stock level
     reorder_point: int = 10         # Reorder trigger point
-    supplier: str = ""              # Default supplier
     demand_variability: DemandVariability = DemandVariability.STABLE
     oos_boost_percent: float = 0.0  # OOS boost percentage (0-100, 0 = use global setting)
     oos_detection_mode: str = ""  # OOS detection mode: "strict", "relaxed", or "" (use global)

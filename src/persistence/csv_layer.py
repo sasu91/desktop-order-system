@@ -24,7 +24,7 @@ class CSVLayer:
     SCHEMAS = {
         "skus.csv": ["sku", "description", "ean", "moq", "pack_size", "lead_time_days", 
                      "review_period", "safety_stock", "shelf_life_days", "max_stock", 
-                     "reorder_point", "supplier", "demand_variability", "oos_boost_percent", 
+                     "reorder_point", "demand_variability", "oos_boost_percent", 
                      "oos_detection_mode", "oos_popup_preference", "forecast_method",
                      "mc_distribution", "mc_n_simulations", "mc_random_seed", "mc_output_stat",
                      "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days"],
@@ -118,7 +118,6 @@ class CSVLayer:
                     shelf_life_days=int(row.get("shelf_life_days", "0")),
                     max_stock=int(row.get("max_stock", "999")),
                     reorder_point=int(row.get("reorder_point", "10")),
-                    supplier=row.get("supplier", "").strip(),
                     demand_variability=demand_var,
                     oos_boost_percent=float(row.get("oos_boost_percent", "0")),
                     oos_detection_mode=row.get("oos_detection_mode", "").strip(),
@@ -187,7 +186,6 @@ class CSVLayer:
                     shelf_life_days=sku.shelf_life_days,
                     max_stock=sku.max_stock,
                     reorder_point=sku.reorder_point,
-                    supplier=sku.supplier,
                     demand_variability=classified_variability,  # Auto-classified
                     oos_boost_percent=sku.oos_boost_percent,
                     oos_detection_mode=sku.oos_detection_mode,
@@ -213,7 +211,6 @@ class CSVLayer:
             safety_stock=defaults.get("safety_stock", sku.safety_stock) if sku.safety_stock == 0 else sku.safety_stock,
             max_stock=defaults.get("max_stock", sku.max_stock) if sku.max_stock == 999 else sku.max_stock,
             reorder_point=defaults.get("reorder_point", sku.reorder_point) if sku.reorder_point == 10 else sku.reorder_point,
-            supplier=sku.supplier,
             demand_variability=DemandVariability[defaults.get("demand_variability", sku.demand_variability.value)] if sku.demand_variability == DemandVariability.STABLE else sku.demand_variability,
             shelf_life_days=sku.shelf_life_days,
             oos_boost_percent=sku.oos_boost_percent,
@@ -242,7 +239,6 @@ class CSVLayer:
             "shelf_life_days": str(final_sku.shelf_life_days),
             "max_stock": str(final_sku.max_stock),
             "reorder_point": str(final_sku.reorder_point),
-            "supplier": final_sku.supplier,
             "demand_variability": final_sku.demand_variability.value,
             "oos_boost_percent": str(final_sku.oos_boost_percent),
             "oos_detection_mode": final_sku.oos_detection_mode,
@@ -302,7 +298,6 @@ class CSVLayer:
         shelf_life_days: int = 0,
         max_stock: int = 999,
         reorder_point: int = 10,
-        supplier: str = "",
         demand_variability: DemandVariability = DemandVariability.STABLE,
         oos_boost_percent: float = 0.0,
         oos_detection_mode: str = "",
@@ -334,7 +329,6 @@ class CSVLayer:
             shelf_life_days: Shelf life in days (0 = no expiry)
             max_stock: Maximum stock level
             reorder_point: Reorder trigger point
-            supplier: Default supplier
             demand_variability: Demand variability enum
             
         Returns:
@@ -390,7 +384,6 @@ class CSVLayer:
                 "shelf_life_days": row.get("shelf_life_days", "0").strip() or "0",
                 "max_stock": row.get("max_stock", "999").strip() or "999",
                 "reorder_point": row.get("reorder_point", "10").strip() or "10",
-                "supplier": row.get("supplier", "").strip(),
                 "demand_variability": row.get("demand_variability", "STABLE").strip() or "STABLE",
                 "oos_boost_percent": row.get("oos_boost_percent", "0").strip() or "0",
                 "oos_detection_mode": row.get("oos_detection_mode", "").strip(),
@@ -418,7 +411,6 @@ class CSVLayer:
                 normalized_row["shelf_life_days"] = str(shelf_life_days)
                 normalized_row["max_stock"] = str(max_stock)
                 normalized_row["reorder_point"] = str(reorder_point)
-                normalized_row["supplier"] = supplier
                 normalized_row["demand_variability"] = demand_variability.value
                 normalized_row["oos_boost_percent"] = str(oos_boost_percent)
                 normalized_row["oos_detection_mode"] = oos_detection_mode

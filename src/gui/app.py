@@ -2260,37 +2260,6 @@ class DesktopOrderApp:
         all_skus = self.csv_layer.get_all_sku_ids()
         return [sku for sku in all_skus if search_text in sku.lower()]
     
-    def _filter_supplier_items(self, search_text: str) -> list:
-        """
-        Filtra fornitori per autocomplete (lista aperta: mostra esistenti + permette nuovi).
-        
-        Args:
-            search_text: Testo cercato dall'utente
-        
-        Returns:
-            Lista di fornitori unici filtrati + suggerimento se è nuovo
-        """
-        search_text = search_text.strip().lower()
-        
-        # Estrai fornitori unici da SKU esistenti
-        skus = self.csv_layer.read_skus()
-        unique_suppliers = sorted(set(
-            sku.supplier for sku in skus 
-            if sku.supplier and sku.supplier.strip()
-        ))
-        
-        if not search_text:
-            return unique_suppliers
-        
-        # Filtra fornitori che contengono il testo cercato
-        filtered = [s for s in unique_suppliers if search_text in s.lower()]
-        
-        # Se il testo non matcha nessun fornitore esistente, suggerisci come nuovo
-        if not filtered and search_text:
-            filtered.append(f"{search_text} (nuovo fornitore)")
-        
-        return filtered
-    
     def _build_exception_tab(self):
         """Build Exception tab (WASTE, ADJUST, UNFULFILLED)."""
         main_frame = ttk.Frame(self.exception_tab)
@@ -3317,24 +3286,7 @@ class DesktopOrderApp:
         demand_var = tk.StringVar(value=current_sku.demand_variability.value if current_sku else "STABLE")
         add_field_row(content_order, 8, "Variabilità Domanda:", "Livello variabilità vendite", demand_var, "combobox", choices=["STABLE", "LOW", "HIGH", "SEASONAL"])
         
-        # ===== SECTION 3: Fornitore =====
-        section_supplier = CollapsibleFrame(form_frame, title="🏭 Fornitore", expanded=False)
-        section_supplier.pack(fill="x", pady=5)
-        content_supplier = section_supplier.get_content_frame()
-        
-        supplier_var = tk.StringVar(value=current_sku.supplier if current_sku else "")
-        supplier_ac = AutocompleteEntry(
-            content_supplier,
-            textvariable=supplier_var,
-            items_callback=self._filter_supplier_items,
-            width=40
-        )
-        add_field_row(
-            content_supplier, 0, "Fornitore:", "Nome fornitore (autocomplete)",
-            supplier_var, "autocomplete", autocomplete_widget=supplier_ac
-        )
-        
-        # ===== SECTION 4: OOS (Out of Stock) =====
+        # ===== SECTION 3: OOS (Out of Stock) =====
         section_oos = CollapsibleFrame(form_frame, title="⚠️ Out of Stock (OOS)", expanded=False)
         section_oos.pack(fill="x", pady=5)
         content_oos = section_oos.get_content_frame()
@@ -3391,7 +3343,7 @@ class DesktopOrderApp:
                 popup, mode, sku_var.get(), desc_var.get(), ean_var.get(),
                 moq_var.get(), pack_size_var.get(), lead_time_var.get(), 
                 review_period_var.get(), safety_stock_var.get(), shelf_life_var.get(),
-                max_stock_var.get(), reorder_point_var.get(), supplier_var.get(), 
+                max_stock_var.get(), reorder_point_var.get(), 
                 demand_var.get(), oos_boost_var.get(), oos_mode_var.get(), 
                 oos_popup_var.get(),
                 forecast_method_var.get(), mc_distribution_var.get(), mc_n_sims_var.get(),
@@ -3424,7 +3376,7 @@ class DesktopOrderApp:
     def _save_sku_form(self, popup, mode, sku_code, description, ean,
                         moq_str, pack_size_str, lead_time_str, review_period_str, 
                         safety_stock_str, shelf_life_str, max_stock_str, reorder_point_str,
-                        supplier, demand_variability_str, oos_boost_str, oos_mode_str, 
+                        demand_variability_str, oos_boost_str, oos_mode_str, 
                         oos_popup_pref,
                         forecast_method_str, mc_distribution_str, mc_n_sims_str,
                         mc_seed_str, mc_output_stat_str, mc_percentile_str,
@@ -3579,7 +3531,6 @@ class DesktopOrderApp:
                     shelf_life_days=shelf_life_days,
                     max_stock=max_stock,
                     reorder_point=reorder_point,
-                    supplier=supplier,
                     demand_variability=demand_variability,
                     oos_boost_percent=oos_boost_percent,
                     oos_detection_mode=oos_detection_mode,
@@ -3611,7 +3562,7 @@ class DesktopOrderApp:
                     old_sku_code, sku_code, description, ean,
                     moq, pack_size, lead_time_days, review_period, 
                     safety_stock, shelf_life_days, max_stock, reorder_point,
-                    supplier, demand_variability, oos_boost_percent, oos_detection_mode,
+                    demand_variability, oos_boost_percent, oos_detection_mode,
                     oos_popup_preference,
                     forecast_method, mc_distribution, mc_n_simulations, mc_random_seed,
                     mc_output_stat, mc_output_percentile, mc_horizon_mode, mc_horizon_days
