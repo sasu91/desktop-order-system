@@ -3129,15 +3129,52 @@ class DesktopOrderApp:
         # Create popup window
         popup = tk.Toplevel(self.root)
         popup.title("Nuovo SKU" if mode == "new" else "Modifica SKU")
-        popup.geometry("600x1000")
-        popup.resizable(False, False)
+        popup.geometry("700x800")
+        popup.resizable(True, True)
         
         # Center popup
         popup.transient(self.root)
         popup.grab_set()
         
+        # Main container
+        main_container = ttk.Frame(popup, padding=10)
+        main_container.pack(fill="both", expand=True)
+        
+        # Search field
+        search_frame = ttk.Frame(main_container)
+        search_frame.pack(side="top", fill="x", pady=(0, 10))
+        ttk.Label(search_frame, text="🔍 Cerca campo:", font=("Helvetica", 10)).pack(side="left", padx=(0, 5))
+        search_var = tk.StringVar()
+        search_entry = ttk.Entry(search_frame, textvariable=search_var, width=40)
+        search_entry.pack(side="left", padx=5)
+        
+        # Scrollable container
+        scroll_container = ttk.Frame(main_container)
+        scroll_container.pack(fill="both", expand=True, pady=10)
+        
+        canvas = tk.Canvas(scroll_container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Enable mouse wheel scrolling
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
         # Form frame
-        form_frame = ttk.Frame(popup, padding=20)
+        form_frame = ttk.Frame(scrollable_frame, padding=10)
         form_frame.pack(fill="both", expand=True)
         
         # Load existing SKU data if editing
@@ -3150,246 +3187,201 @@ class DesktopOrderApp:
                 popup.destroy()
                 return
         
-        # SKU Code field
-        ttk.Label(form_frame, text="Codice SKU:", font=("Helvetica", 10, "bold")).grid(
-            row=0, column=0, sticky="w", pady=5
-        )
+        # Storage for field rows (for search filtering)
+        field_rows = []
+        
+        def add_field_row(parent, row_num, label, description, value_var, widget_type="entry", choices=None, **kwargs):
+            """Helper to add a field row with search support."""
+            row_frame = ttk.Frame(parent)
+            row_frame.grid(row=row_num, column=0, columnspan=2, sticky="ew", pady=5)
+            
+            # Configure grid
+            row_frame.columnconfigure(0, weight=1, minsize=200)
+            row_frame.columnconfigure(1, weight=2, minsize=300)
+            
+            # Label
+            ttk.Label(
+                row_frame,
+                text=label,
+                font=("Helvetica", 10, "bold")
+            ).grid(row=0, column=0, sticky="w", padx=(0, 10))
+            
+            # Description (if provided)
+            if description:
+                ttk.Label(
+                    row_frame,
+                    text=description,
+                    font=("Helvetica", 8),
+                    foreground="gray",
+                    wraplength=250
+                ).grid(row=1, column=0, sticky="w", padx=(0, 10))
+            
+            # Widget
+            if widget_type == "entry":
+                widget = ttk.Entry(row_frame, textvariable=value_var, width=40)
+                widget.grid(row=0, column=1, rowspan=2 if description else 1, sticky="ew", padx=(10, 0))
+            elif widget_type == "combobox":
+                widget = ttk.Combobox(row_frame, textvariable=value_var, values=choices, state="readonly", width=37)
+                widget.grid(row=0, column=1, rowspan=2 if description else 1, sticky="ew", padx=(10, 0))
+            elif widget_type == "autocomplete":
+                widget = kwargs.get("autocomplete_widget")
+                widget.entry.grid(row=0, column=1, rowspan=2 if description else 1, sticky="ew", padx=(10, 0))
+            
+            # Store for search
+            field_rows.append({
+                "frame": row_frame,
+                "label": label.lower(),
+                "description": description.lower() if description else ""
+            })
+            
+            return widget
+        
+        # Filter function for search
+        def filter_fields(*args):
+            query = search_var.get().lower()
+            for row_data in field_rows:
+                if query in row_data["label"] or query in row_data["description"]:
+                    row_data["frame"].grid()
+                else:
+                    row_data["frame"].grid_remove()
+        
+        search_var.trace_add("write", filter_fields)
+        
+        # ===== SECTION 1: Anagrafica (Basic Info) =====
+        section_basic = CollapsibleFrame(form_frame, title="📋 Anagrafica", expanded=True)
+        section_basic.pack(fill="x", pady=5)
+        content_basic = section_basic.get_content_frame()
+        
+        # SKU Code
         sku_var = tk.StringVar(value=current_sku.sku if current_sku else "")
-        sku_entry = ttk.Entry(form_frame, textvariable=sku_var, width=40)
-        sku_entry.grid(row=0, column=1, sticky="ew", pady=5, padx=(10, 0))
-        
-        # Description field
-        ttk.Label(form_frame, text="Descrizione:", font=("Helvetica", 10, "bold")).grid(
-            row=1, column=0, sticky="w", pady=5
+        sku_entry = add_field_row(
+            content_basic, 0, "Codice SKU:", "Identificativo univoco prodotto",
+            sku_var, "entry"
         )
+        
+        # Description
         desc_var = tk.StringVar(value=current_sku.description if current_sku else "")
-        desc_entry = ttk.Entry(form_frame, textvariable=desc_var, width=40)
-        desc_entry.grid(row=1, column=1, sticky="ew", pady=5, padx=(10, 0))
-        
-        # EAN field
-        ttk.Label(form_frame, text="EAN (opzionale):", font=("Helvetica", 10, "bold")).grid(
-            row=2, column=0, sticky="w", pady=5
+        desc_entry = add_field_row(
+            content_basic, 1, "Descrizione:", "Nome descrittivo prodotto",
+            desc_var, "entry"
         )
+        
+        # EAN
         ean_var = tk.StringVar(value=current_sku.ean if current_sku and current_sku.ean else "")
-        ean_entry = ttk.Entry(form_frame, textvariable=ean_var, width=40)
-        ean_entry.grid(row=2, column=1, sticky="ew", pady=5, padx=(10, 0))
-        
-        # MOQ field
-        ttk.Label(form_frame, text="Q.tà Minima Ordine (MOQ):", font=("Helvetica", 10, "bold")).grid(
-            row=3, column=0, sticky="w", pady=5
+        ean_entry = add_field_row(
+            content_basic, 2, "EAN (opzionale):", "Codice a barre EAN-8/EAN-13",
+            ean_var, "entry"
         )
+        
+        # EAN validation button
+        ean_status_var = tk.StringVar(value="")
+        ean_validate_frame = ttk.Frame(content_basic)
+        ean_validate_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=5)
+        ttk.Button(
+            ean_validate_frame,
+            text="Valida EAN",
+            command=lambda: self._validate_ean_field(ean_var.get(), ean_status_var)
+        ).pack(side="left", padx=(0, 10))
+        ean_status_label = ttk.Label(ean_validate_frame, textvariable=ean_status_var, foreground="green")
+        ean_status_label.pack(side="left")
+        
+        # ===== SECTION 2: Ordine & Stock =====
+        section_order = CollapsibleFrame(form_frame, title="📦 Ordine & Stock", expanded=False)
+        section_order.pack(fill="x", pady=5)
+        content_order = section_order.get_content_frame()
+        
         moq_var = tk.StringVar(value=str(current_sku.moq) if current_sku else "1")
-        ttk.Entry(form_frame, textvariable=moq_var, width=40).grid(row=3, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_order, 0, "Q.tà Minima Ordine (MOQ):", "Multiplo minimo per ordini", moq_var, "entry")
         
-        # Pack Size field
-        ttk.Label(form_frame, text="Confezione (Pack Size):", font=("Helvetica", 10, "bold")).grid(
-            row=4, column=0, sticky="w", pady=5
-        )
         pack_size_var = tk.StringVar(value=str(current_sku.pack_size) if current_sku else "1")
-        ttk.Entry(form_frame, textvariable=pack_size_var, width=40).grid(row=4, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_order, 1, "Confezione (Pack Size):", "Multiplo arrotondamento colli", pack_size_var, "entry")
         
-        # Lead Time field
-        ttk.Label(form_frame, text="Lead Time (giorni):", font=("Helvetica", 10, "bold")).grid(
-            row=5, column=0, sticky="w", pady=5
-        )
         lead_time_var = tk.StringVar(value=str(current_sku.lead_time_days) if current_sku else "7")
-        ttk.Entry(form_frame, textvariable=lead_time_var, width=40).grid(row=5, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_order, 2, "Lead Time (giorni):", "Tempo attesa ordine→ricezione", lead_time_var, "entry")
         
-        # Review Period field
-        ttk.Label(form_frame, text="Periodo Revisione (giorni):", font=("Helvetica", 10, "bold")).grid(
-            row=6, column=0, sticky="w", pady=5
-        )
         review_period_var = tk.StringVar(value=str(current_sku.review_period) if current_sku else "7")
-        ttk.Entry(form_frame, textvariable=review_period_var, width=40).grid(row=6, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_order, 3, "Periodo Revisione (giorni):", "Finestra revisione target S", review_period_var, "entry")
         
-        # Safety Stock field
-        ttk.Label(form_frame, text="Scorta Sicurezza:", font=("Helvetica", 10, "bold")).grid(
-            row=7, column=0, sticky="w", pady=5
-        )
         safety_stock_var = tk.StringVar(value=str(current_sku.safety_stock) if current_sku else "0")
-        ttk.Entry(form_frame, textvariable=safety_stock_var, width=40).grid(row=7, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_order, 4, "Scorta Sicurezza:", "Stock buffer aggiunto a target", safety_stock_var, "entry")
         
-        # Shelf Life field
-        ttk.Label(form_frame, text="Shelf Life (giorni, 0=no scadenza):", font=("Helvetica", 10, "bold")).grid(
-            row=8, column=0, sticky="w", pady=5
-        )
         shelf_life_var = tk.StringVar(value=str(current_sku.shelf_life_days) if current_sku else "0")
-        ttk.Entry(form_frame, textvariable=shelf_life_var, width=40).grid(row=8, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_order, 5, "Shelf Life (giorni):", "0 = nessuna scadenza", shelf_life_var, "entry")
         
-        # Max Stock field
-        ttk.Label(form_frame, text="Stock Massimo:", font=("Helvetica", 10, "bold")).grid(
-            row=9, column=0, sticky="w", pady=5
-        )
         max_stock_var = tk.StringVar(value=str(current_sku.max_stock) if current_sku else "999")
-        ttk.Entry(form_frame, textvariable=max_stock_var, width=40).grid(row=9, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_order, 6, "Stock Massimo:", "Limite massimo stock desiderato", max_stock_var, "entry")
         
-        # Reorder Point field
-        ttk.Label(form_frame, text="Punto di Riordino:", font=("Helvetica", 10, "bold")).grid(
-            row=10, column=0, sticky="w", pady=5
-        )
         reorder_point_var = tk.StringVar(value=str(current_sku.reorder_point) if current_sku else "10")
-        ttk.Entry(form_frame, textvariable=reorder_point_var, width=40).grid(row=10, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_order, 7, "Punto di Riordino:", "Livello attivazione riordino", reorder_point_var, "entry")
         
-        # Supplier field con autocomplete
-        ttk.Label(form_frame, text="Fornitore:", font=("Helvetica", 10, "bold")).grid(
-            row=11, column=0, sticky="w", pady=5
-        )
+        demand_var = tk.StringVar(value=current_sku.demand_variability.value if current_sku else "STABLE")
+        add_field_row(content_order, 8, "Variabilità Domanda:", "Livello variabilità vendite", demand_var, "combobox", choices=["STABLE", "LOW", "HIGH", "SEASONAL"])
+        
+        # ===== SECTION 3: Fornitore =====
+        section_supplier = CollapsibleFrame(form_frame, title="🏭 Fornitore", expanded=False)
+        section_supplier.pack(fill="x", pady=5)
+        content_supplier = section_supplier.get_content_frame()
+        
         supplier_var = tk.StringVar(value=current_sku.supplier if current_sku else "")
-        
         supplier_ac = AutocompleteEntry(
-            form_frame,
+            content_supplier,
             textvariable=supplier_var,
             items_callback=self._filter_supplier_items,
             width=40
         )
-        supplier_ac.entry.grid(row=11, column=1, sticky="ew", pady=5, padx=(10, 0))
-        
-        # Demand Variability field
-        ttk.Label(form_frame, text="Variabilità Domanda:", font=("Helvetica", 10, "bold")).grid(
-            row=12, column=0, sticky="w", pady=5
+        add_field_row(
+            content_supplier, 0, "Fornitore:", "Nome fornitore (autocomplete)",
+            supplier_var, "autocomplete", autocomplete_widget=supplier_ac
         )
-        demand_var = tk.StringVar(value=current_sku.demand_variability.value if current_sku else "STABLE")
-        demand_combo = ttk.Combobox(form_frame, textvariable=demand_var, values=["STABLE", "LOW", "HIGH", "SEASONAL"], state="readonly", width=37)
-        demand_combo.grid(row=12, column=1, sticky="ew", pady=5, padx=(10, 0))
         
-        # OOS Boost Percent field
-        ttk.Label(form_frame, text="OOS Boost % (0=usa globale):", font=("Helvetica", 10, "bold")).grid(
-            row=13, column=0, sticky="w", pady=5
-        )
+        # ===== SECTION 4: OOS (Out of Stock) =====
+        section_oos = CollapsibleFrame(form_frame, title="⚠️ Out of Stock (OOS)", expanded=False)
+        section_oos.pack(fill="x", pady=5)
+        content_oos = section_oos.get_content_frame()
+        
         oos_boost_var = tk.StringVar(value=str(current_sku.oos_boost_percent) if current_sku else "0")
-        ttk.Entry(form_frame, textvariable=oos_boost_var, width=40).grid(row=13, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_oos, 0, "OOS Boost %:", "0 = usa valore globale", oos_boost_var, "entry")
         
-        # OOS Detection Mode field
-        ttk.Label(form_frame, text="Modalità OOS (\"\"=usa globale):", font=("Helvetica", 10, "bold")).grid(
-            row=14, column=0, sticky="w", pady=5
-        )
         oos_mode_var = tk.StringVar(value=current_sku.oos_detection_mode if current_sku else "")
-        oos_mode_combo = ttk.Combobox(form_frame, textvariable=oos_mode_var, values=["", "strict", "relaxed"], state="readonly", width=37)
-        oos_mode_combo.grid(row=14, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_oos, 1, "Modalità OOS:", "strict/relaxed/vuoto=globale", oos_mode_var, "combobox", choices=["", "strict", "relaxed"])
         
-        # OOS Popup Preference field
-        ttk.Label(form_frame, text="Popup OOS:", font=("Helvetica", 10, "bold")).grid(
-            row=15, column=0, sticky="w", pady=5
-        )
         oos_popup_var = tk.StringVar(value=current_sku.oos_popup_preference if current_sku else "ask")
-        oos_popup_combo = ttk.Combobox(
-            form_frame, 
-            textvariable=oos_popup_var, 
-            values=["ask", "always_yes", "always_no"], 
-            state="readonly", 
-            width=37
-        )
-        oos_popup_combo.grid(row=15, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_oos, 2, "Popup OOS:", "ask/always_yes/always_no", oos_popup_var, "combobox", choices=["ask", "always_yes", "always_no"])
         
-        # Tooltip labels for OOS popup preference
-        ttk.Label(
-            form_frame, 
-            text="ask=chiedi, always_yes=applica sempre boost, always_no=mai boost", 
-            font=("Helvetica", 8), 
-            foreground="gray"
-        ).grid(row=16, column=1, sticky="w", padx=(10, 0))
+        # ===== SECTION 5: Monte Carlo =====
+        section_mc = CollapsibleFrame(form_frame, title="🎲 Forecast Monte Carlo", expanded=False)
+        section_mc.pack(fill="x", pady=5)
+        content_mc = section_mc.get_content_frame()
         
-        # ========== MONTE CARLO OVERRIDE SECTION ==========
-        # Forecast Method Override
-        ttk.Label(form_frame, text="🎲 Metodo Forecast (\"\"=globale):", font=("Helvetica", 10, "bold")).grid(
-            row=17, column=0, sticky="w", pady=5
-        )
         forecast_method_var = tk.StringVar(value=current_sku.forecast_method if current_sku else "")
-        forecast_method_combo = ttk.Combobox(
-            form_frame,
-            textvariable=forecast_method_var,
-            values=["", "simple", "monte_carlo"],
-            state="readonly",
-            width=37
-        )
-        forecast_method_combo.grid(row=17, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_mc, 0, "Metodo Forecast:", "simple/monte_carlo/vuoto=globale", forecast_method_var, "combobox", choices=["", "simple", "monte_carlo"])
         
-        # MC Distribution Override
-        ttk.Label(form_frame, text="MC Distribuzione (\"\"=globale):", font=("Helvetica", 10, "bold")).grid(
-            row=18, column=0, sticky="w", pady=5
-        )
         mc_distribution_var = tk.StringVar(value=current_sku.mc_distribution if current_sku else "")
-        mc_dist_combo = ttk.Combobox(
-            form_frame,
-            textvariable=mc_distribution_var,
-            values=["", "empirical", "normal", "lognormal", "residuals"],
-            state="readonly",
-            width=37
-        )
-        mc_dist_combo.grid(row=18, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_mc, 1, "MC Distribuzione:", "empirical/normal/lognormal/residuals/vuoto=globale", mc_distribution_var, "combobox", choices=["", "empirical", "normal", "lognormal", "residuals"])
         
-        # MC N Simulations Override
-        ttk.Label(form_frame, text="MC N Simulazioni (0=globale):", font=("Helvetica", 10, "bold")).grid(
-            row=19, column=0, sticky="w", pady=5
-        )
         mc_n_sims_var = tk.StringVar(value=str(current_sku.mc_n_simulations) if current_sku else "0")
-        ttk.Entry(form_frame, textvariable=mc_n_sims_var, width=40).grid(row=19, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_mc, 2, "MC N Simulazioni:", "100-10000, 0=globale", mc_n_sims_var, "entry")
         
-        # MC Random Seed Override
-        ttk.Label(form_frame, text="MC Random Seed (0=globale):", font=("Helvetica", 10, "bold")).grid(
-            row=20, column=0, sticky="w", pady=5
-        )
         mc_seed_var = tk.StringVar(value=str(current_sku.mc_random_seed) if current_sku else "0")
-        ttk.Entry(form_frame, textvariable=mc_seed_var, width=40).grid(row=20, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_mc, 3, "MC Random Seed:", "0=globale/casuale", mc_seed_var, "entry")
         
-        # MC Output Stat Override
-        ttk.Label(form_frame, text="MC Stat Output (\"\"=globale):", font=("Helvetica", 10, "bold")).grid(
-            row=21, column=0, sticky="w", pady=5
-        )
         mc_output_stat_var = tk.StringVar(value=current_sku.mc_output_stat if current_sku else "")
-        mc_stat_combo = ttk.Combobox(
-            form_frame,
-            textvariable=mc_output_stat_var,
-            values=["", "mean", "percentile"],
-            state="readonly",
-            width=37
-        )
-        mc_stat_combo.grid(row=21, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_mc, 4, "MC Stat Output:", "mean/percentile/vuoto=globale", mc_output_stat_var, "combobox", choices=["", "mean", "percentile"])
         
-        # MC Output Percentile Override
-        ttk.Label(form_frame, text="MC Percentile (0=globale):", font=("Helvetica", 10, "bold")).grid(
-            row=22, column=0, sticky="w", pady=5
-        )
         mc_percentile_var = tk.StringVar(value=str(current_sku.mc_output_percentile) if current_sku else "0")
-        ttk.Entry(form_frame, textvariable=mc_percentile_var, width=40).grid(row=22, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_mc, 5, "MC Percentile:", "50-99, 0=globale", mc_percentile_var, "entry")
         
-        # MC Horizon Mode Override
-        ttk.Label(form_frame, text="MC Orizzonte Mode (\"\"=globale):", font=("Helvetica", 10, "bold")).grid(
-            row=23, column=0, sticky="w", pady=5
-        )
         mc_horizon_mode_var = tk.StringVar(value=current_sku.mc_horizon_mode if current_sku else "")
-        mc_horizon_combo = ttk.Combobox(
-            form_frame,
-            textvariable=mc_horizon_mode_var,
-            values=["", "auto", "custom"],
-            state="readonly",
-            width=37
-        )
-        mc_horizon_combo.grid(row=23, column=1, sticky="ew", pady=5, padx=(10, 0))
+        add_field_row(content_mc, 6, "MC Orizzonte Mode:", "auto/custom/vuoto=globale", mc_horizon_mode_var, "combobox", choices=["", "auto", "custom"])
         
-        # MC Horizon Days Override
-        ttk.Label(form_frame, text="MC Orizzonte Giorni (0=globale):", font=("Helvetica", 10, "bold")).grid(
-            row=24, column=0, sticky="w", pady=5
-        )
         mc_horizon_days_var = tk.StringVar(value=str(current_sku.mc_horizon_days) if current_sku else "0")
-        ttk.Entry(form_frame, textvariable=mc_horizon_days_var, width=40).grid(row=24, column=1, sticky="ew", pady=5, padx=(10, 0))
-        
-        # Validate EAN button and status label
-        ean_status_var = tk.StringVar(value="")
-        ttk.Button(
-            form_frame, 
-            text="Valida EAN", 
-            command=lambda: self._validate_ean_field(ean_var.get(), ean_status_var)
-        ).grid(row=25, column=1, sticky="w", pady=5, padx=(10, 0))
-        
-        ean_status_label = ttk.Label(form_frame, textvariable=ean_status_var, foreground="green")
-        ean_status_label.grid(row=26, column=1, sticky="w", padx=(10, 0))
+        add_field_row(content_mc, 7, "MC Orizzonte Giorni:", "1-365, 0=globale", mc_horizon_days_var, "entry")
         
         # Configure grid
-        form_frame.columnconfigure(1, weight=1)
+        form_frame.columnconfigure(0, weight=1)
         
         # Button frame
-        button_frame = ttk.Frame(popup, padding=10)
+        button_frame = ttk.Frame(main_container, padding=10)
         button_frame.pack(side="bottom", fill="x")
         
         ttk.Button(
