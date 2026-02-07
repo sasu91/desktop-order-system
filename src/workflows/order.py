@@ -241,8 +241,17 @@ class OrderWorkflow:
         # Override with SKU-specific method if provided
         forecast_method = sku_obj.forecast_method if (sku_obj and sku_obj.forecast_method) else global_forecast_method
         
-        # Variables for MC comparison
+        # Variables for MC comparison and details
         mc_comparison_qty = None
+        mc_method_used = ""
+        mc_distribution_used = ""
+        mc_n_simulations_used = 0
+        mc_random_seed_used = 0
+        mc_output_stat_used = ""
+        mc_output_percentile_used = 0
+        mc_horizon_mode_used = ""
+        mc_horizon_days_used = 0
+        mc_forecast_values_summary = ""
         
         # Execute forecast based on selected method
         if forecast_method == "monte_carlo":
@@ -250,11 +259,22 @@ class OrderWorkflow:
             # Get MC parameters (SKU override → global fallback)
             mc_params = self._get_mc_parameters(sku_obj, settings)
             
+            # Store MC parameters for proposal details
+            mc_method_used = "monte_carlo"
+            mc_distribution_used = mc_params["distribution"]
+            mc_n_simulations_used = mc_params["n_simulations"]
+            mc_random_seed_used = mc_params["random_seed"]
+            mc_output_stat_used = mc_params["output_stat"]
+            mc_output_percentile_used = mc_params["output_percentile"]
+            mc_horizon_mode_used = mc_params["horizon_mode"]
+            
             # Determine horizon
             if mc_params["horizon_mode"] == "auto":
                 horizon_days = forecast_period
             else:  # custom
                 horizon_days = mc_params["horizon_days"]
+            
+            mc_horizon_days_used = horizon_days
             
             # Fetch historical sales data for SKU
             sales_records = self.csv_layer.read_sales()
@@ -276,6 +296,13 @@ class OrderWorkflow:
                     output_percentile=mc_params["output_percentile"],
                 )
                 
+                # Build summary of forecast values
+                if mc_forecast_values:
+                    mc_min = int(min(mc_forecast_values))
+                    mc_max = int(max(mc_forecast_values))
+                    mc_avg = int(sum(mc_forecast_values) / len(mc_forecast_values))
+                    mc_forecast_values_summary = f"min={mc_min}, max={mc_max}, avg={mc_avg}"
+                
                 # Use sum of forecast over horizon as total demand
                 forecast_qty = int(sum(mc_forecast_values))
                 lead_time_demand = int(sum(mc_forecast_values[:lead_time])) if len(mc_forecast_values) >= lead_time else forecast_qty
@@ -284,6 +311,7 @@ class OrderWorkflow:
                 logging.warning(f"Monte Carlo forecast failed for SKU {sku}: {e}. Falling back to simple forecast.")
                 forecast_qty = int(daily_sales_avg * forecast_period)
                 lead_time_demand = int(daily_sales_avg * lead_time)
+                mc_method_used = ""  # Reset since MC failed
         
         else:
             # === SIMPLE FORECAST (level × period) ===
@@ -311,6 +339,15 @@ class OrderWorkflow:
                 mc_params = self._get_mc_parameters(sku_obj, settings)
                 mc_horizon = forecast_period if mc_params["horizon_mode"] == "auto" else mc_params["horizon_days"]
                 
+                # Store MC parameters for comparison details
+                mc_distribution_used = mc_params["distribution"]
+                mc_n_simulations_used = mc_params["n_simulations"]
+                mc_random_seed_used = mc_params["random_seed"]
+                mc_output_stat_used = mc_params["output_stat"]
+                mc_output_percentile_used = mc_params["output_percentile"]
+                mc_horizon_mode_used = mc_params["horizon_mode"]
+                mc_horizon_days_used = mc_horizon
+                
                 sales_records = self.csv_layer.read_sales()
                 sku_sales_history = [
                     {"date": rec.date, "qty_sold": rec.qty_sold}
@@ -327,6 +364,13 @@ class OrderWorkflow:
                     output_stat=mc_params["output_stat"],
                     output_percentile=mc_params["output_percentile"],
                 )
+                
+                # Build summary of forecast values
+                if mc_forecast_values:
+                    mc_min = int(min(mc_forecast_values))
+                    mc_max = int(max(mc_forecast_values))
+                    mc_avg = int(sum(mc_forecast_values) / len(mc_forecast_values))
+                    mc_forecast_values_summary = f"min={mc_min}, max={mc_max}, avg={mc_avg}"
                 
                 mc_forecast_qty = int(sum(mc_forecast_values))
                 mc_S = mc_forecast_qty + safety_stock
@@ -438,6 +482,16 @@ class OrderWorkflow:
             notes=notes,
             shelf_life_warning=shelf_life_warning,
             mc_comparison_qty=mc_comparison_qty,
+            # Monte Carlo calculation details
+            mc_method_used=mc_method_used,
+            mc_distribution=mc_distribution_used,
+            mc_n_simulations=mc_n_simulations_used,
+            mc_random_seed=mc_random_seed_used,
+            mc_output_stat=mc_output_stat_used,
+            mc_output_percentile=mc_output_percentile_used,
+            mc_horizon_mode=mc_horizon_mode_used,
+            mc_horizon_days=mc_horizon_days_used,
+            mc_forecast_values_summary=mc_forecast_values_summary,
             # Calculation details
             forecast_period_days=forecast_period,
             forecast_qty=forecast_qty,

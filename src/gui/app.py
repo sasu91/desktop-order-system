@@ -1130,13 +1130,57 @@ class DesktopOrderApp:
             else:
                 details.append(f"per raggiungere target S")
         
-        # Monte Carlo Comparison (if available)
-        if proposal.mc_comparison_qty is not None:
+        # Monte Carlo Details (if MC was used as main method or for comparison)
+        if proposal.mc_method_used or proposal.mc_comparison_qty is not None:
             details.append("")
-            details.append("═══ CONFRONTO MONTE CARLO ═══")
-            details.append(f"Qty proposta MC: {to_colli(proposal.mc_comparison_qty, pack_size)}")
-            details.append(f"Differenza: {to_colli(proposal.mc_comparison_qty - proposal.proposed_qty, pack_size)}")
-            details.append("(Dato informativo basato su simulazione MC)")
+            if proposal.mc_method_used == "monte_carlo":
+                details.append("═══ METODO MONTE CARLO (PRINCIPALE) ═══")
+            else:
+                details.append("═══ CONFRONTO MONTE CARLO ═══")
+            
+            # Distribution and parameters
+            if proposal.mc_distribution:
+                dist_labels = {
+                    "empirical": "Empirica (storico)",
+                    "normal": "Normale",
+                    "lognormal": "Log-Normale",
+                    "residuals": "Residui"
+                }
+                dist_name = dist_labels.get(proposal.mc_distribution, proposal.mc_distribution)
+                details.append(f"Distribuzione: {dist_name}")
+            
+            if proposal.mc_n_simulations > 0:
+                details.append(f"Simulazioni: {proposal.mc_n_simulations:,}")
+            
+            # Output statistic
+            if proposal.mc_output_stat:
+                if proposal.mc_output_stat == "percentile" and proposal.mc_output_percentile > 0:
+                    details.append(f"Statistica: P{proposal.mc_output_percentile} (Percentile)")
+                elif proposal.mc_output_stat == "mean":
+                    details.append(f"Statistica: Media")
+                else:
+                    details.append(f"Statistica: {proposal.mc_output_stat}")
+            
+            # Horizon
+            if proposal.mc_horizon_days > 0:
+                horizon_mode_label = "auto (lead+review)" if proposal.mc_horizon_mode == "auto" else "custom"
+                details.append(f"Orizzonte: {proposal.mc_horizon_days} giorni ({horizon_mode_label})")
+            
+            # Forecast summary
+            if proposal.mc_forecast_values_summary:
+                details.append(f"Forecast: {proposal.mc_forecast_values_summary}")
+            
+            # Seed (for reproducibility)
+            if proposal.mc_random_seed > 0:
+                details.append(f"Seed: {proposal.mc_random_seed}")
+            
+            # Comparison quantity (if this is a comparison, not main method)
+            if proposal.mc_method_used != "monte_carlo" and proposal.mc_comparison_qty is not None:
+                details.append("")
+                details.append(f"Qty proposta MC: {to_colli(proposal.mc_comparison_qty, pack_size)}")
+                diff = proposal.mc_comparison_qty - proposal.proposed_qty
+                sign = "+" if diff > 0 else ""
+                details.append(f"Differenza: {sign}{to_colli(diff, pack_size)}")
         
         if proposal.notes:
             details.append("")
@@ -1493,10 +1537,16 @@ class DesktopOrderApp:
             # Calculate colli from pezzi
             colli_proposti = proposal.proposed_qty // pack_size if pack_size > 0 else proposal.proposed_qty
             
-            # MC Comparison column (show if available)
+            # MC Info column: show method/statistic with qty
             mc_comparison_display = ""
-            if proposal.mc_comparison_qty is not None:
-                mc_comparison_display = f"{proposal.mc_comparison_qty} pz"
+            if proposal.mc_method_used == "monte_carlo":
+                # MC is main forecast method
+                stat_label = f"P{proposal.mc_output_percentile}" if proposal.mc_output_stat == "percentile" else "Media"
+                mc_comparison_display = f"MC: {stat_label}"
+            elif proposal.mc_comparison_qty is not None:
+                # MC is comparison (simple is main method)
+                stat_label = f"P{proposal.mc_output_percentile}" if proposal.mc_output_stat == "percentile" else "Media"
+                mc_comparison_display = f"Confronto: {stat_label} ({proposal.mc_comparison_qty} pz)"
             
             self.proposal_treeview.insert(
                 "",

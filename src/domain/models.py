@@ -186,6 +186,17 @@ class OrderProposal:
     shelf_life_warning: bool = False  # True if proposed qty exceeds shelf life capacity
     mc_comparison_qty: Optional[int] = None  # Monte Carlo forecast qty (informativo)
     
+    # Monte Carlo calculation details
+    mc_method_used: str = ""  # "monte_carlo" se MC è il metodo principale, "" altrimenti
+    mc_distribution: str = ""  # empirical, normal, lognormal, residuals
+    mc_n_simulations: int = 0  # Numero simulazioni MC
+    mc_random_seed: int = 0  # Seed per riproducibilità
+    mc_output_stat: str = ""  # mean, percentile
+    mc_output_percentile: int = 0  # es. 90 per P90
+    mc_horizon_mode: str = ""  # auto (lead+review) o custom
+    mc_horizon_days: int = 0  # Orizzonte forecast MC (giorni)
+    mc_forecast_values_summary: str = ""  # Sintesi valori forecast (es. "min=5, max=25, avg=12")
+    
     # Calculation details (for transparency in UI)
     forecast_period_days: int = 0  # lead_time + review_period
     forecast_qty: int = 0  # daily_sales_avg × forecast_period

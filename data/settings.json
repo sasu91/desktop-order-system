@@ -38,7 +38,7 @@
     },
     "oos_detection_mode": {
       "value": "strict",
-      "description": "Modalità rilevamento OOS: strict (on_hand=0) o relaxed (on_hand+on_order=0)"
+      "description": "Modalit\u00e0 rilevamento OOS: strict (on_hand=0) o relaxed (on_hand+on_order=0)"
     },
     "forecast_method": {
       "value": "simple",
@@ -60,7 +60,7 @@
     "random_seed": {
       "value": 42,
       "auto_apply_to_new_sku": true,
-      "description": "Seed deterministico per riproducibilità (0 = random)"
+      "description": "Seed deterministico per riproducibilit\u00e0 (0 = random)"
     },
     "output_stat": {
       "value": "mean",
@@ -81,12 +81,17 @@
       "value": 14,
       "auto_apply_to_new_sku": true,
       "description": "Orizzonte fisso (giorni) se horizon_mode=custom"
+    },
+    "show_comparison": {
+      "value": true,
+      "auto_apply_to_new_sku": false,
+      "description": "Mostra confronto MC anche quando forecast_method=simple"
     }
   },
   "auto_variability": {
     "enabled": {
       "value": true,
-      "description": "Abilita classificazione automatica variabilità domanda"
+      "description": "Abilita classificazione automatica variabilit\u00e0 domanda"
     },
     "min_observations": {
       "value": 30,
