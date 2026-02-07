@@ -224,7 +224,7 @@ class TestCalculateForecastResiduals:
         def perfect_forecast(hist, horizon):
             return [10.0] * horizon
         
-        residuals = calculate_forecast_residuals(
+        residuals, _ = calculate_forecast_residuals(
             history, perfect_forecast, window_weeks=4
         )
         
@@ -244,7 +244,7 @@ class TestCalculateForecastResiduals:
         def biased_forecast(hist, horizon):
             return [8.0] * horizon
         
-        residuals = calculate_forecast_residuals(
+        residuals, _ = calculate_forecast_residuals(
             history, biased_forecast, window_weeks=4
         )
         
@@ -264,11 +264,13 @@ class TestCalculateForecastResiduals:
         def dummy_forecast(hist, horizon):
             return [10.0] * horizon
         
-        residuals = calculate_forecast_residuals(
+        residuals, n_censored = calculate_forecast_residuals(
             history, dummy_forecast, window_weeks=8
         )
         
         assert residuals == []
+        assert n_censored == 0
+        assert n_censored == 0
     
     def test_forecast_function_integration(self):
         """Integration with actual forecast module."""
@@ -292,7 +294,7 @@ class TestCalculateForecastResiduals:
             model = fit_forecast_model(hist)
             return predict(model, horizon)
         
-        residuals = calculate_forecast_residuals(
+        residuals, _ = calculate_forecast_residuals(
             history, forecast_one_step, window_weeks=8
         )
         

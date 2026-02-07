@@ -72,9 +72,9 @@ class TestAuditTrail:
         
         # Log entries with slight delay to ensure different timestamps
         temp_csv_layer.log_audit("OP1", "First operation")
-        time.sleep(0.1)
+        time.sleep(0.01)  # Small delay (timestamp has microsecond precision)
         temp_csv_layer.log_audit("OP2", "Second operation")
-        time.sleep(0.1)
+        time.sleep(0.01)
         temp_csv_layer.log_audit("OP3", "Third operation")
         
         # Retrieve logs
@@ -87,9 +87,13 @@ class TestAuditTrail:
     
     def test_log_audit_limit(self, temp_csv_layer):
         """Test limiting number of audit log entries returned."""
-        # Log 10 entries
+        import time
+        
+        # Log 10 entries with small delay to ensure different timestamps
         for i in range(10):
             temp_csv_layer.log_audit(f"OP{i}", f"Operation {i}")
+            if i < 9:  # No need to sleep after last entry
+                time.sleep(0.01)  # Timestamp has microsecond precision
         
         # Get only last 5
         logs = temp_csv_layer.read_audit_log(limit=5)

@@ -678,7 +678,8 @@ class CSVLayer:
         """
         from datetime import datetime
         
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Use microsecond precision for sorting accuracy in tests
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
         
         row = {
             "timestamp": timestamp,

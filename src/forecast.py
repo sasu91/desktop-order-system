@@ -85,6 +85,18 @@ def fit_forecast_model(
     else:
         filtered_history = history
     
+    # Handle case where all days are censored
+    if not filtered_history:
+        return {
+            "level": 0.0,
+            "dow_factors": [1.0] * 7,
+            "last_date": history[-1]["date"] if history else None,
+            "n_samples": 0,
+            "n_censored": n_censored,
+            "alpha_eff": alpha,
+            "method": "fallback",
+        }
+    
     # Calculate effective alpha (boost if censored days present)
     has_censored = n_censored > 0
     alpha_eff = min(0.99, alpha + (alpha_boost_for_censored if has_censored else 0.0))

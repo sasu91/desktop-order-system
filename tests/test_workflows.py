@@ -34,23 +34,28 @@ class TestOrderWorkflow:
     """Test order proposal and confirmation."""
     
     def test_generate_proposal_basic(self, csv_layer):
-        """Generate basic order proposal."""
+        """Generate basic order proposal using new formula."""
         workflow = OrderWorkflow(csv_layer, lead_time_days=7)
         
-        current_stock = Stock(sku="SKU001", on_hand=50, on_order=30)
+        # Test scenario: low stock, need to reorder
+        current_stock = Stock(sku="SKU001", on_hand=20, on_order=0)
         proposal = workflow.generate_proposal(
             sku="SKU001",
             description="Test Product",
             current_stock=current_stock,
             daily_sales_avg=5.0,
             min_stock=20,
-            days_cover=30,
+            days_cover=30,  # DEPRECATED, formula now uses lead_time + review_period
         )
         
-        # target = 20 + (5 * 30) = 170
-        # available = 50 + 30 = 80
-        # proposed = max(0, 170 - 80) = 90
-        assert proposal.proposed_qty == 90
+        # NEW FORMULA: S = forecast × (lead_time + review_period) + safety_stock
+        # forecast_period = 7 + 7 = 14 days
+        # forecast_qty = 5.0 × 14 = 70
+        # safety_stock = 0 (default)
+        # S = 70 + 0 = 70
+        # IP = 20 + 0 = 20
+        # proposed = max(0, 70 - 20) = 50
+        assert proposal.proposed_qty == 50
         assert proposal.sku == "SKU001"
         assert proposal.receipt_date == date.today() + timedelta(days=7)
     
@@ -252,16 +257,19 @@ class TestDailySalesAverage:
     """Test calculation of daily sales average."""
     
     def test_daily_sales_avg_basic(self):
-        """Calculate basic daily sales average."""
+        """Calculate basic daily sales average using calendar-based approach."""
+        # Create sales for 3 consecutive days
+        today = date.today()
         sales = [
-            SalesRecord(date=date(2026, 1, 1), sku="SKU001", qty_sold=10),
-            SalesRecord(date=date(2026, 1, 2), sku="SKU001", qty_sold=15),
-            SalesRecord(date=date(2026, 1, 3), sku="SKU001", qty_sold=20),
+            SalesRecord(date=today - timedelta(days=2), sku="SKU001", qty_sold=10),
+            SalesRecord(date=today - timedelta(days=1), sku="SKU001", qty_sold=15),
+            SalesRecord(date=today, sku="SKU001", qty_sold=20),
         ]
         
+        # Calendar-based: 45 total sales over 30 days → avg = 45/30 = 1.5
         avg, oos_count = calculate_daily_sales_average(sales, "SKU001", days_lookback=30)
-        assert avg == 15.0  # (10 + 15 + 20) / 3
-        assert oos_count == 0  # No OOS days
+        assert avg == 1.5  # (10 + 15 + 20) / 30 calendar days
+        assert oos_count == 0  # No OOS days (transactions not provided)
     
     def test_daily_sales_avg_no_data(self):
         """Daily sales avg with no data should be 0.0."""
@@ -277,7 +285,7 @@ class TestDailyCloseWorkflow:
         """Process basic EOD stock entry with sales calculation."""
         # Setup: Add a SKU
         from src.domain.models import SKU, DemandVariability
-        csv_layer.add_sku(SKU(
+        csv_layer.write_sku(SKU(
             sku="SKU001",
             description="Test Product",
             ean="",
@@ -285,12 +293,11 @@ class TestDailyCloseWorkflow:
             lead_time_days=7,
             max_stock=999,
             reorder_point=10,
-            supplier="TestSupplier",
             demand_variability=DemandVariability.STABLE,
         ))
         
         # Add initial snapshot
-        csv_layer.append_transaction(Transaction(
+        csv_layer.write_transaction(Transaction(
             date=date(2026, 1, 1),
             sku="SKU001",
             event=EventType.SNAPSHOT,
@@ -322,7 +329,7 @@ class TestDailyCloseWorkflow:
     def test_process_eod_stock_with_adjustment(self, csv_layer):
         """Process EOD with stock discrepancy (shrinkage)."""
         from src.domain.models import SKU, DemandVariability
-        csv_layer.add_sku(SKU(
+        csv_layer.write_sku(SKU(
             sku="SKU001",
             description="Test Product",
             ean="",
@@ -330,12 +337,11 @@ class TestDailyCloseWorkflow:
             lead_time_days=7,
             max_stock=999,
             reorder_point=10,
-            supplier="TestSupplier",
             demand_variability=DemandVariability.STABLE,
         ))
         
         # Initial stock: 100
-        csv_layer.append_transaction(Transaction(
+        csv_layer.write_transaction(Transaction(
             date=date(2026, 1, 1),
             sku="SKU001",
             event=EventType.SNAPSHOT,
@@ -362,7 +368,7 @@ class TestDailyCloseWorkflow:
     def test_process_eod_stock_idempotency(self, csv_layer):
         """Process same EOD twice should update, not duplicate."""
         from src.domain.models import SKU, DemandVariability
-        csv_layer.add_sku(SKU(
+        csv_layer.write_sku(SKU(
             sku="SKU001",
             description="Test Product",
             ean="",
@@ -370,11 +376,10 @@ class TestDailyCloseWorkflow:
             lead_time_days=7,
             max_stock=999,
             reorder_point=10,
-            supplier="TestSupplier",
             demand_variability=DemandVariability.STABLE,
         ))
         
-        csv_layer.append_transaction(Transaction(
+        csv_layer.write_transaction(Transaction(
             date=date(2026, 1, 1),
             sku="SKU001",
             event=EventType.SNAPSHOT,
@@ -402,7 +407,7 @@ class TestDailyCloseWorkflow:
         
         # Add multiple SKUs
         for i in range(3):
-            csv_layer.add_sku(SKU(
+            csv_layer.write_sku(SKU(
                 sku=f"SKU00{i+1}",
                 description=f"Product {i+1}",
                 ean="",
@@ -410,10 +415,9 @@ class TestDailyCloseWorkflow:
                 lead_time_days=7,
                 max_stock=999,
                 reorder_point=10,
-                supplier="TestSupplier",
                 demand_variability=DemandVariability.STABLE,
             ))
-            csv_layer.append_transaction(Transaction(
+            csv_layer.write_transaction(Transaction(
                 date=date(2026, 1, 1),
                 sku=f"SKU00{i+1}",
                 event=EventType.SNAPSHOT,
@@ -449,7 +453,7 @@ class TestDailyCloseWorkflow:
     def test_process_eod_negative_stock(self, csv_layer):
         """Process EOD with negative stock should raise error."""
         from src.domain.models import SKU, DemandVariability
-        csv_layer.add_sku(SKU(
+        csv_layer.write_sku(SKU(
             sku="SKU001",
             description="Test",
             ean="",
@@ -457,7 +461,6 @@ class TestDailyCloseWorkflow:
             lead_time_days=7,
             max_stock=999,
             reorder_point=10,
-            supplier="Test",
             demand_variability=DemandVariability.STABLE,
         ))
         

@@ -151,7 +151,6 @@ def test_sku_mc_override_persistence():
             shelf_life_days=0,
             max_stock=500,
             reorder_point=100,
-            supplier="TestSupplier",
             demand_variability=DemandVariability.HIGH,
             oos_boost_percent=0.0,
             oos_detection_mode="",
