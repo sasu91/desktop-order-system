@@ -12,6 +12,7 @@ from src.domain.models import SKU, DemandVariability
 from src.persistence.csv_layer import CSVLayer
 import tempfile
 import os
+import csv
 from pathlib import Path
 
 def test_oos_popup_preference():
@@ -131,7 +132,6 @@ def test_oos_popup_preference():
         # Test 8: Backward compatibility (missing field defaults to "ask")
         print("8. Test backward compatibility (CSV without oos_popup_preference)...")
         # Manually write CSV without the new field
-        import csv
         csv_path = os.path.join(tmpdir, "skus.csv")
         with open(csv_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=['sku', 'description', 'ean'])
@@ -144,6 +144,34 @@ def test_oos_popup_preference():
         assert old_sku is not None, "Old SKU not found"
         assert old_sku.oos_popup_preference == "ask", f"Expected default 'ask', got '{old_sku.oos_popup_preference}'"
         print("   ✓ Backward compatibility OK (defaults to 'ask')\n")
+        
+        # Test 9: Empty string defaults to "ask"
+        print("9. Test empty string defaults to 'ask'...")
+        csv_path = os.path.join(tmpdir, "skus.csv")
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=['sku', 'description', 'ean', 'oos_popup_preference'])
+            writer.writeheader()
+            writer.writerow({'sku': 'EMPTY_SKU', 'description': 'Empty Preference', 'ean': '', 'oos_popup_preference': ''})
+        
+        skus = csv_layer.read_skus()
+        empty_sku = next((s for s in skus if s.sku == "EMPTY_SKU"), None)
+        assert empty_sku is not None, "Empty SKU not found"
+        assert empty_sku.oos_popup_preference == "ask", f"Expected default 'ask', got '{empty_sku.oos_popup_preference}'"
+        print("   ✓ Empty string defaults to 'ask'\n")
+        
+        # Test 10: Case sensitivity (should be case-sensitive)
+        print("10. Test case sensitivity...")
+        try:
+            # "ASK" (uppercase) should be invalid
+            invalid_case_sku = SKU(
+                sku="TEST_CASE",
+                description="Test Case",
+                oos_popup_preference="ASK"
+            )
+            assert False, "Should have raised ValueError for uppercase 'ASK'"
+        except ValueError as e:
+            assert "OOS popup preference" in str(e), f"Unexpected error: {e}"
+            print("   ✓ Case-sensitive validation OK (uppercase rejected)\n")
         
         print("="*50)
         print("✅ ALL TESTS PASSED")

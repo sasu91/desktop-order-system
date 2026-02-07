@@ -122,7 +122,7 @@ class CSVLayer:
                     demand_variability=demand_var,
                     oos_boost_percent=float(row.get("oos_boost_percent", "0")),
                     oos_detection_mode=row.get("oos_detection_mode", "").strip(),
-                    oos_popup_preference=row.get("oos_popup_preference", "ask").strip(),
+                    oos_popup_preference=row.get("oos_popup_preference", "ask").strip() or "ask",
                     # Monte Carlo forecast parameters
                     forecast_method=row.get("forecast_method", "").strip(),
                     mc_distribution=row.get("mc_distribution", "").strip(),
@@ -395,6 +395,14 @@ class CSVLayer:
                 "oos_boost_percent": row.get("oos_boost_percent", "0").strip() or "0",
                 "oos_detection_mode": row.get("oos_detection_mode", "").strip(),
                 "oos_popup_preference": row.get("oos_popup_preference", "ask").strip() or "ask",
+                "forecast_method": row.get("forecast_method", "").strip(),
+                "mc_distribution": row.get("mc_distribution", "").strip(),
+                "mc_n_simulations": row.get("mc_n_simulations", "0").strip() or "0",
+                "mc_random_seed": row.get("mc_random_seed", "0").strip() or "0",
+                "mc_output_stat": row.get("mc_output_stat", "").strip(),
+                "mc_output_percentile": row.get("mc_output_percentile", "0").strip() or "0",
+                "mc_horizon_mode": row.get("mc_horizon_mode", "").strip(),
+                "mc_horizon_days": row.get("mc_horizon_days", "0").strip() or "0",
             }
             
             # Update the target row with new values
