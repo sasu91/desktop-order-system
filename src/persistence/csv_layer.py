@@ -9,7 +9,7 @@ import os
 import json
 from datetime import date
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 from ..domain.models import Transaction, EventType, SKU, SalesRecord, AuditLog, DemandVariability
 
@@ -859,7 +859,7 @@ class CSVLayer:
         with open(settings_file, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=2, ensure_ascii=False)
     
-    def get_default_sku_params(self) -> Dict[str, any]:
+    def get_default_sku_params(self) -> Dict[str, Any]:
         """
         Get default SKU parameters from settings (for auto-apply to new SKUs).
         
