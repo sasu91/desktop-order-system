@@ -48,6 +48,7 @@ from ..workflows.order import OrderWorkflow, calculate_daily_sales_average
 from ..workflows.receiving import ReceivingWorkflow, ExceptionWorkflow
 from ..workflows.daily_close import DailyCloseWorkflow
 from .widgets import AutocompleteEntry
+from .collapsible_frame import CollapsibleFrame
 from ..utils.logging_config import setup_logging, get_logger
 
 # Initialize logging
@@ -4151,6 +4152,111 @@ class DesktopOrderApp:
         except Exception as e:
             messagebox.showerror("Errore Esportazione", f"Impossibile esportare log ricevimenti: {str(e)}")
     
+    def _filter_settings(self, *args):
+        """Filter visible settings rows based on search query."""
+        query = self.settings_search_var.get().lower()
+        
+        for row_data in self.settings_rows:
+            row_frame = row_data["frame"]
+            label = row_data["label"].lower()
+            description = row_data["description"].lower()
+            
+            # Show/hide based on match
+            if query in label or query in description:
+                row_frame.pack(fill="x", pady=8)
+            else:
+                row_frame.pack_forget()
+    
+    def _create_param_rows(self, parent_frame, parameters, section_key):
+        """
+        Create parameter rows with grid layout.
+        
+        Args:
+            parent_frame: Parent frame to place rows in
+            parameters: List of parameter dicts
+            section_key: Section key for settings storage
+        """
+        for param in parameters:
+            row_frame = ttk.Frame(parent_frame)
+            row_frame.pack(fill="x", pady=8)
+            
+            # Configure grid columns: [label: 25%, description: 45%, input: 30%]
+            row_frame.columnconfigure(0, weight=25, minsize=200)
+            row_frame.columnconfigure(1, weight=45, minsize=350)
+            row_frame.columnconfigure(2, weight=30, minsize=250)
+            
+            # Label (bold)
+            ttk.Label(
+                row_frame,
+                text=param["label"],
+                font=("Helvetica", 10, "bold")
+            ).grid(row=0, column=0, sticky="w", padx=(0, 10))
+            
+            # Description (gray, wrapped)
+            desc_label = ttk.Label(
+                row_frame,
+                text=param["description"],
+                font=("Helvetica", 9),
+                foreground="gray",
+                wraplength=300
+            )
+            desc_label.grid(row=0, column=1, sticky="w", padx=(0, 10))
+            
+            # Value input based on type
+            if param["type"] == "bool":
+                value_var = tk.BooleanVar()
+                value_check = ttk.Checkbutton(
+                    row_frame,
+                    text="Abilitato",
+                    variable=value_var
+                )
+                value_check.grid(row=0, column=2, sticky="w")
+            elif param["type"] == "int":
+                value_var = tk.IntVar()
+                value_entry = ttk.Spinbox(
+                    row_frame,
+                    from_=param["min"],
+                    to=param["max"],
+                    textvariable=value_var,
+                    width=10
+                )
+                value_entry.grid(row=0, column=2, sticky="w")
+            elif param["type"] == "float":
+                value_var = tk.DoubleVar()
+                value_entry = ttk.Spinbox(
+                    row_frame,
+                    from_=param["min"],
+                    to=param["max"],
+                    increment=0.1,
+                    textvariable=value_var,
+                    width=10,
+                    format="%.2f"
+                )
+                value_entry.grid(row=0, column=2, sticky="w")
+            elif param["type"] == "choice":
+                value_var = tk.StringVar()
+                value_entry = ttk.Combobox(
+                    row_frame,
+                    textvariable=value_var,
+                    values=param["choices"],
+                    state="readonly",
+                    width=15
+                )
+                value_entry.grid(row=0, column=2, sticky="w")
+            
+            # Store widget
+            self.settings_widgets[param["key"]] = {
+                "value_var": value_var,
+                "section": section_key
+            }
+            
+            # Store for search
+            self.settings_rows.append({
+                "frame": row_frame,
+                "label": param["label"],
+                "description": param["description"]
+            })
+    
     def _refresh_all(self):
         """Refresh all tabs."""
         self._refresh_dashboard()
@@ -4168,7 +4274,7 @@ class DesktopOrderApp:
         
         # Title
         title_frame = ttk.Frame(main_frame)
-        title_frame.pack(side="top", fill="x", pady=(0, 20))
+        title_frame.pack(side="top", fill="x", pady=(0, 10))
         ttk.Label(
             title_frame,
             text="⚙️ Impostazioni Motore di Riordino",
@@ -4176,16 +4282,15 @@ class DesktopOrderApp:
         ).pack(side="left")
         ttk.Label(title_frame, text="(Parametri globali per ordini automatici)", font=("Helvetica", 9, "italic"), foreground="gray").pack(side="left", padx=(10, 0))
         
-        # Info label
-        info_frame = ttk.Frame(main_frame)
-        info_frame.pack(side="top", fill="x", pady=(0, 10))
-        ttk.Label(
-            info_frame,
-            text="Configura i parametri globali del motore di riordino automatico. I parametri con 'Auto-applica' vengono applicati automaticamente ai nuovi SKU.",
-            font=("Helvetica", 10),
-            foreground="gray",
-            wraplength=800
-        ).pack(side="left")
+        # Search field
+        search_frame = ttk.Frame(main_frame)
+        search_frame.pack(side="top", fill="x", pady=(0, 10))
+        ttk.Label(search_frame, text="🔍 Cerca parametro:", font=("Helvetica", 10)).pack(side="left", padx=(0, 5))
+        self.settings_search_var = tk.StringVar()
+        self.settings_search_var.trace_add("write", self._filter_settings)
+        search_entry = ttk.Entry(search_frame, textvariable=self.settings_search_var, width=40)
+        search_entry.pack(side="left", padx=5)
+        
         
         # Scrollable container for settings form
         scroll_container = ttk.Frame(main_frame)
@@ -4213,15 +4318,24 @@ class DesktopOrderApp:
         
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
         
-        # Settings form inside scrollable frame
-        settings_container = ttk.LabelFrame(scrollable_frame, text="Parametri Globali", padding=20)
-        settings_container.pack(fill="both", expand=True)
-        
         # Storage for widgets
         self.settings_widgets = {}
+        self.settings_section_widgets = {}  # For section auto-apply checkboxes
+        self.settings_rows = []  # For search filtering
         
-        # Parameters configuration
-        parameters = [
+        # ===== SECTION 1: Reorder Engine Base Parameters =====
+        section_reorder = CollapsibleFrame(scrollable_frame, title="⚙️ Parametri Base Motore Riordino", expanded=True)
+        section_reorder.pack(fill="x", pady=5)
+        
+        # Section auto-apply checkbox
+        reorder_auto_frame = ttk.Frame(section_reorder.get_content_frame())
+        reorder_auto_frame.pack(fill="x", pady=(0, 10))
+        reorder_auto_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(reorder_auto_frame, text="✓ Auto-applica tutti i parametri di questa sezione ai nuovi SKU", variable=reorder_auto_var).pack(anchor="w")
+        self.settings_section_widgets["reorder_engine"] = reorder_auto_var
+        
+        # Parameters for Reorder Engine section
+        reorder_params = [
             {
                 "key": "lead_time_days",
                 "label": "Lead Time (giorni)",
@@ -4285,57 +4399,12 @@ class DesktopOrderApp:
                 "type": "choice",
                 "choices": ["STABLE", "MODERATE", "HIGH"]
             },
-            # Auto-classification parameters
             {
-                "key": "auto_variability_enabled",
-                "label": "⚡ Auto-classificazione Variabilità",
-                "description": "Abilita classificazione automatica variabilità domanda al salvataggio SKU",
-                "type": "bool",
-                "section": "auto_variability"
-            },
-            {
-                "key": "auto_variability_min_observations",
-                "label": "Min. Osservazioni (giorni)",
-                "description": "Minimo giorni vendita richiesti per auto-classificazione",
-                "type": "int",
-                "min": 7,
-                "max": 365,
-                "section": "auto_variability"
-            },
-            {
-                "key": "auto_variability_stable_percentile",
-                "label": "Percentile STABLE (Q)",
-                "description": "Percentile per soglia STABLE (es. 25 = primo quartile)",
-                "type": "int",
-                "min": 1,
-                "max": 50,
-                "section": "auto_variability"
-            },
-            {
-                "key": "auto_variability_high_percentile",
-                "label": "Percentile HIGH (Q)",
-                "description": "Percentile per soglia HIGH (es. 75 = terzo quartile)",
-                "type": "int",
-                "min": 50,
-                "max": 99,
-                "section": "auto_variability"
-            },
-            {
-                "key": "auto_variability_seasonal_threshold",
-                "label": "Soglia Autocorrelazione SEASONAL",
-                "description": "Soglia autocorrelazione settimanale per rilevare pattern stagionali (0-1)",
-                "type": "float",
-                "min": 0.0,
-                "max": 1.0,
-                "section": "auto_variability"
-            },
-            {
-                "key": "auto_variability_fallback_category",
-                "label": "Categoria Fallback",
-                "description": "Categoria assegnata se dati insufficienti",
+                "key": "forecast_method",
+                "label": "🎲 Metodo Forecast",
+                "description": "Metodo di previsione domanda: simple (livello + DOW) o monte_carlo (simulazione)",
                 "type": "choice",
-                "choices": ["LOW", "STABLE", "SEASONAL", "HIGH"],
-                "section": "auto_variability"
+                "choices": ["simple", "monte_carlo"]
             },
             {
                 "key": "oos_boost_percent",
@@ -4343,212 +4412,183 @@ class DesktopOrderApp:
                 "description": "Percentuale di incremento ordine per SKU con giorni OOS",
                 "type": "int",
                 "min": 0,
-                "max": 100,
-                "section": "reorder_engine"
+                "max": 100
             },
             {
                 "key": "oos_lookback_days",
                 "label": "Giorni Storico OOS",
-                "description": "Numero giorni passati da analizzare per rilevare OOS (es. 30 = ultimi 30 giorni)",
+                "description": "Numero giorni passati da analizzare per rilevare OOS",
                 "type": "int",
                 "min": 7,
-                "max": 90,
-                "section": "reorder_engine"
+                "max": 90
             },
             {
                 "key": "oos_detection_mode",
                 "label": "Modalità Rilevamento OOS",
                 "description": "strict = on_hand=0 (più conservativo), relaxed = on_hand+on_order=0",
                 "type": "choice",
-                "choices": ["strict", "relaxed"],
-                "section": "reorder_engine"
+                "choices": ["strict", "relaxed"]
             },
-            # Monte Carlo forecast parameters
+        ]
+        
+        self._create_param_rows(section_reorder.get_content_frame(), reorder_params, "reorder_engine")
+        
+        # ===== SECTION 2: Auto-Variabilità =====
+        section_auto_var = CollapsibleFrame(scrollable_frame, title="⚡ Auto-classificazione Variabilità", expanded=False)
+        section_auto_var.pack(fill="x", pady=5)
+        
+        auto_var_auto_frame = ttk.Frame(section_auto_var.get_content_frame())
+        auto_var_auto_frame.pack(fill="x", pady=(0, 10))
+        auto_var_auto_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(auto_var_auto_frame, text="✓ Auto-applica tutti i parametri di questa sezione ai nuovi SKU", variable=auto_var_auto_var).pack(anchor="w")
+        self.settings_section_widgets["auto_variability"] = auto_var_auto_var
+        
+        auto_var_params = [
             {
-                "key": "forecast_method",
-                "label": "🎲 Metodo Forecast",
-                "description": "Metodo di previsione domanda: simple (livello + DOW) o monte_carlo (simulazione)",
-                "type": "choice",
-                "choices": ["simple", "monte_carlo"],
-                "section": "reorder_engine"
+                "key": "auto_variability_enabled",
+                "label": "⚡ Auto-classificazione Abilitata",
+                "description": "Abilita classificazione automatica variabilità domanda al salvataggio SKU",
+                "type": "bool"
             },
+            {
+                "key": "auto_variability_min_observations",
+                "label": "Min. Osservazioni (giorni)",
+                "description": "Minimo giorni vendita richiesti per auto-classificazione",
+                "type": "int",
+                "min": 7,
+                "max": 365
+            },
+            {
+                "key": "auto_variability_stable_percentile",
+                "label": "Percentile STABLE (Q)",
+                "description": "Percentile per soglia STABLE (es. 25 = primo quartile)",
+                "type": "int",
+                "min": 1,
+                "max": 50
+            },
+            {
+                "key": "auto_variability_high_percentile",
+                "label": "Percentile HIGH (Q)",
+                "description": "Percentile per soglia HIGH (es. 75 = terzo quartile)",
+                "type": "int",
+                "min": 50,
+                "max": 99
+            },
+            {
+                "key": "auto_variability_seasonal_threshold",
+                "label": "Soglia Autocorrelazione SEASONAL",
+                "description": "Soglia autocorrelazione settimanale per rilevare pattern stagionali (0-1)",
+                "type": "float",
+                "min": 0.0,
+                "max": 1.0
+            },
+            {
+                "key": "auto_variability_fallback_category",
+                "label": "Categoria Fallback",
+                "description": "Categoria assegnata se dati insufficienti",
+                "type": "choice",
+                "choices": ["LOW", "STABLE", "SEASONAL", "HIGH"]
+            },
+        ]
+        
+        self._create_param_rows(section_auto_var.get_content_frame(), auto_var_params, "auto_variability")
+        
+        # ===== SECTION 3: Monte Carlo =====
+        section_mc = CollapsibleFrame(scrollable_frame, title="🎲 Simulazione Monte Carlo", expanded=False)
+        section_mc.pack(fill="x", pady=5)
+        
+        mc_auto_frame = ttk.Frame(section_mc.get_content_frame())
+        mc_auto_frame.pack(fill="x", pady=(0, 10))
+        mc_auto_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(mc_auto_frame, text="✓ Auto-applica tutti i parametri di questa sezione ai nuovi SKU", variable=mc_auto_var).pack(anchor="w")
+        self.settings_section_widgets["monte_carlo"] = mc_auto_var
+        
+        mc_params = [
             {
                 "key": "mc_distribution",
-                "label": "MC - Distribuzione",
+                "label": "Distribuzione",
                 "description": "Tipo distribuzione per campionamento Monte Carlo",
                 "type": "choice",
-                "choices": ["empirical", "normal", "lognormal", "residuals"],
-                "section": "monte_carlo"
+                "choices": ["empirical", "normal", "lognormal", "residuals"]
             },
             {
                 "key": "mc_n_simulations",
-                "label": "MC - Numero Simulazioni",
+                "label": "Numero Simulazioni",
                 "description": "Numero traiettorie simulate (default 1000, max 10000)",
                 "type": "int",
                 "min": 100,
-                "max": 10000,
-                "section": "monte_carlo"
+                "max": 10000
             },
             {
                 "key": "mc_random_seed",
-                "label": "MC - Random Seed",
+                "label": "Random Seed",
                 "description": "Seed RNG (0 = casuale, >0 = deterministico)",
                 "type": "int",
                 "min": 0,
-                "max": 999999,
-                "section": "monte_carlo"
+                "max": 999999
             },
             {
                 "key": "mc_output_stat",
-                "label": "MC - Statistica Output",
+                "label": "Statistica Output",
                 "description": "Metodo aggregazione risultati: mean (media) o percentile",
                 "type": "choice",
-                "choices": ["mean", "percentile"],
-                "section": "monte_carlo"
+                "choices": ["mean", "percentile"]
             },
             {
                 "key": "mc_output_percentile",
-                "label": "MC - Output Percentile",
+                "label": "Output Percentile",
                 "description": "Percentile se output_stat = percentile (50-99, default 80)",
                 "type": "int",
                 "min": 50,
-                "max": 99,
-                "section": "monte_carlo"
+                "max": 99
             },
             {
                 "key": "mc_horizon_mode",
-                "label": "MC - Modalità Orizzonte",
+                "label": "Modalità Orizzonte",
                 "description": "auto = lead_time + review_period, custom = manuale",
                 "type": "choice",
-                "choices": ["auto", "custom"],
-                "section": "monte_carlo"
+                "choices": ["auto", "custom"]
             },
             {
                 "key": "mc_horizon_days",
-                "label": "MC - Orizzonte Giorni (custom)",
+                "label": "Orizzonte Giorni (custom)",
                 "description": "Giorni orizzonte forecast se mc_horizon_mode = custom",
                 "type": "int",
                 "min": 1,
-                "max": 365,
-                "section": "monte_carlo"
+                "max": 365
             },
             {
                 "key": "mc_show_comparison",
                 "label": "📊 Mostra Confronto MC",
                 "description": "Mostra risultati Monte Carlo come colonna informativa nella proposta ordini (anche se forecast_method=simple)",
-                "type": "bool",
-                "section": "monte_carlo"
+                "type": "bool"
             },
+        ]
+        
+        self._create_param_rows(section_mc.get_content_frame(), mc_params, "monte_carlo")
+        
+        # ===== SECTION 4: Dashboard =====
+        section_dashboard = CollapsibleFrame(scrollable_frame, title="📊 Dashboard", expanded=False)
+        section_dashboard.pack(fill="x", pady=5)
+        
+        dashboard_auto_frame = ttk.Frame(section_dashboard.get_content_frame())
+        dashboard_auto_frame.pack(fill="x", pady=(0, 10))
+        dashboard_auto_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(dashboard_auto_frame, text="✓ Auto-applica tutti i parametri di questa sezione ai nuovi SKU", variable=dashboard_auto_var).pack(anchor="w")
+        self.settings_section_widgets["dashboard"] = dashboard_auto_var
+        
+        dashboard_params = [
             {
                 "key": "stock_unit_price",
                 "label": "Prezzo Unitario Stock (€)",
                 "description": "Prezzo medio unitario per calcolo valore stock in Dashboard",
                 "type": "int",
                 "min": 1,
-                "max": 10000,
-                "section": "dashboard"
+                "max": 10000
             }
         ]
         
-        # Create form rows
-        for i, param in enumerate(parameters):
-            row_frame = ttk.Frame(settings_container)
-            row_frame.pack(fill="x", pady=8)
-            
-            # Left: Label and description
-            left_frame = ttk.Frame(row_frame)
-            left_frame.pack(side="left", fill="x", expand=True)
-            
-            ttk.Label(
-                left_frame,
-                text=param["label"],
-                font=("Helvetica", 10, "bold")
-            ).pack(anchor="w")
-            
-            ttk.Label(
-                left_frame,
-                text=param["description"],
-                font=("Helvetica", 9),
-                foreground="gray"
-            ).pack(anchor="w")
-            
-            # Right: Value input and checkbox
-            right_frame = ttk.Frame(row_frame)
-            right_frame.pack(side="right")
-            
-            # Value input based on type
-            if param["type"] == "bool":
-                # Boolean checkbox (no separate auto-apply for bool)
-                value_var = tk.BooleanVar()
-                value_check = ttk.Checkbutton(
-                    right_frame,
-                    text="Abilitato",
-                    variable=value_var
-                )
-                value_check.pack(side="left", padx=5)
-                auto_apply_var = None  # No auto-apply for bool
-            elif param["type"] == "int":
-                value_var = tk.IntVar()
-                value_entry = ttk.Spinbox(
-                    right_frame,
-                    from_=param["min"],
-                    to=param["max"],
-                    textvariable=value_var,
-                    width=10
-                )
-                value_entry.pack(side="left", padx=5)
-                # Auto-apply checkbox
-                auto_apply_var = tk.BooleanVar()
-                auto_apply_check = ttk.Checkbutton(
-                    right_frame,
-                    text="Auto-applica ai nuovi SKU",
-                    variable=auto_apply_var
-                )
-                auto_apply_check.pack(side="left", padx=10)
-            elif param["type"] == "float":
-                value_var = tk.DoubleVar()
-                value_entry = ttk.Spinbox(
-                    right_frame,
-                    from_=param["min"],
-                    to=param["max"],
-                    increment=0.1,
-                    textvariable=value_var,
-                    width=10,
-                    format="%.2f"
-                )
-                value_entry.pack(side="left", padx=5)
-                # Auto-apply checkbox
-                auto_apply_var = tk.BooleanVar()
-                auto_apply_check = ttk.Checkbutton(
-                    right_frame,
-                    text="Auto-applica ai nuovi SKU",
-                    variable=auto_apply_var
-                )
-                auto_apply_check.pack(side="left", padx=10)
-            elif param["type"] == "choice":
-                value_var = tk.StringVar()
-                value_entry = ttk.Combobox(
-                    right_frame,
-                    textvariable=value_var,
-                    values=param["choices"],
-                    state="readonly",
-                    width=12
-                )
-                value_entry.pack(side="left", padx=5)
-                # Auto-apply checkbox
-                auto_apply_var = tk.BooleanVar()
-                auto_apply_check = ttk.Checkbutton(
-                    right_frame,
-                    text="Auto-applica ai nuovi SKU",
-                    variable=auto_apply_var
-                )
-                auto_apply_check.pack(side="left", padx=10)
-            
-            # Store widgets
-            self.settings_widgets[param["key"]] = {
-                "value_var": value_var,
-                "auto_apply_var": auto_apply_var
-            }
+        self._create_param_rows(section_dashboard.get_content_frame(), dashboard_params, "dashboard")
         
         # Buttons
         button_frame = ttk.Frame(main_frame)
@@ -4580,44 +4620,54 @@ class DesktopOrderApp:
         try:
             settings = self.csv_layer.read_settings()
             
-            # Read parameters list to determine section
-            parameters = [
-                {"key": "lead_time_days", "section": "reorder_engine"},
-                {"key": "moq", "section": "reorder_engine"},
-                {"key": "pack_size", "section": "reorder_engine"},
-                {"key": "review_period", "section": "reorder_engine"},
-                {"key": "safety_stock", "section": "reorder_engine"},
-                {"key": "max_stock", "section": "reorder_engine"},
-                {"key": "reorder_point", "section": "reorder_engine"},
-                {"key": "demand_variability", "section": "reorder_engine"},
-                {"key": "auto_variability_enabled", "section": "auto_variability", "settings_key": "enabled"},
-                {"key": "auto_variability_min_observations", "section": "auto_variability", "settings_key": "min_observations"},
-                {"key": "auto_variability_stable_percentile", "section": "auto_variability", "settings_key": "stable_percentile"},
-                {"key": "auto_variability_high_percentile", "section": "auto_variability", "settings_key": "high_percentile"},
-                {"key": "auto_variability_seasonal_threshold", "section": "auto_variability", "settings_key": "seasonal_threshold"},
-                {"key": "auto_variability_fallback_category", "section": "auto_variability", "settings_key": "fallback_category"},
-                {"key": "oos_boost_percent", "section": "reorder_engine"},
-                {"key": "forecast_method", "section": "reorder_engine"},
-                {"key": "mc_distribution", "section": "monte_carlo"},
-                {"key": "mc_n_simulations", "section": "monte_carlo"},
-                {"key": "mc_random_seed", "section": "monte_carlo"},
-                {"key": "mc_output_stat", "section": "monte_carlo"},
-                {"key": "mc_output_percentile", "section": "monte_carlo"},
-                {"key": "mc_horizon_mode", "section": "monte_carlo"},
-                {"key": "mc_horizon_days", "section": "monte_carlo"},
-                {"key": "stock_unit_price", "section": "dashboard"},
-            ]
+            # Parameter mapping
+            param_map = {
+                "lead_time_days": ("reorder_engine", "lead_time_days"),
+                "moq": ("reorder_engine", "moq"),
+                "pack_size": ("reorder_engine", "pack_size"),
+                "review_period": ("reorder_engine", "review_period"),
+                "safety_stock": ("reorder_engine", "safety_stock"),
+                "max_stock": ("reorder_engine", "max_stock"),
+                "reorder_point": ("reorder_engine", "reorder_point"),
+                "demand_variability": ("reorder_engine", "demand_variability"),
+                "forecast_method": ("reorder_engine", "forecast_method"),
+                "oos_boost_percent": ("reorder_engine", "oos_boost_percent"),
+                "oos_lookback_days": ("reorder_engine", "oos_lookback_days"),
+                "oos_detection_mode": ("reorder_engine", "oos_detection_mode"),
+                "auto_variability_enabled": ("auto_variability", "enabled"),
+                "auto_variability_min_observations": ("auto_variability", "min_observations"),
+                "auto_variability_stable_percentile": ("auto_variability", "stable_percentile"),
+                "auto_variability_high_percentile": ("auto_variability", "high_percentile"),
+                "auto_variability_seasonal_threshold": ("auto_variability", "seasonal_threshold"),
+                "auto_variability_fallback_category": ("auto_variability", "fallback_category"),
+                "mc_distribution": ("monte_carlo", "distribution"),
+                "mc_n_simulations": ("monte_carlo", "n_simulations"),
+                "mc_random_seed": ("monte_carlo", "random_seed"),
+                "mc_output_stat": ("monte_carlo", "output_stat"),
+                "mc_output_percentile": ("monte_carlo", "output_percentile"),
+                "mc_horizon_mode": ("monte_carlo", "horizon_mode"),
+                "mc_horizon_days": ("monte_carlo", "horizon_days"),
+                "mc_show_comparison": ("monte_carlo", "show_comparison"),
+                "stock_unit_price": ("dashboard", "stock_unit_price"),
+            }
             
-            param_map = {p["key"]: (p.get("section", "reorder_engine"), p.get("settings_key", p["key"])) for p in parameters}
-            
-            for param_key, widgets in self.settings_widgets.items():
+            # Load widget values
+            for param_key, widget_data in self.settings_widgets.items():
                 if param_key not in param_map:
                     continue
                 section, settings_key = param_map[param_key]
                 param_config = settings.get(section, {}).get(settings_key, {})
-                widgets["value_var"].set(param_config.get("value", 0))
-                if widgets["auto_apply_var"]:
-                    widgets["auto_apply_var"].set(param_config.get("auto_apply_to_new_sku", True))
+                widget_data["value_var"].set(param_config.get("value", 0))
+            
+            # Load section auto-apply checkboxes
+            for section_key, section_var in self.settings_section_widgets.items():
+                # Check if any parameter in this section has auto_apply_to_new_sku = True
+                section_params = [k for k, v in param_map.items() if v[0] == section_key]
+                if section_params:
+                    first_param = section_params[0]
+                    section, settings_key = param_map[first_param]
+                    param_config = settings.get(section, {}).get(settings_key, {})
+                    section_var.set(param_config.get("auto_apply_to_new_sku", True))
         
         except Exception as e:
             messagebox.showerror("Errore", f"Impossibile caricare impostazioni: {str(e)}")
@@ -4627,38 +4677,39 @@ class DesktopOrderApp:
         try:
             settings = self.csv_layer.read_settings()
             
-            # Parameters with sections
-            parameters = [
-                {"key": "lead_time_days", "section": "reorder_engine"},
-                {"key": "moq", "section": "reorder_engine"},
-                {"key": "pack_size", "section": "reorder_engine"},
-                {"key": "review_period", "section": "reorder_engine"},
-                {"key": "safety_stock", "section": "reorder_engine"},
-                {"key": "max_stock", "section": "reorder_engine"},
-                {"key": "reorder_point", "section": "reorder_engine"},
-                {"key": "demand_variability", "section": "reorder_engine"},
-                {"key": "auto_variability_enabled", "section": "auto_variability", "settings_key": "enabled"},
-                {"key": "auto_variability_min_observations", "section": "auto_variability", "settings_key": "min_observations"},
-                {"key": "auto_variability_stable_percentile", "section": "auto_variability", "settings_key": "stable_percentile"},
-                {"key": "auto_variability_high_percentile", "section": "auto_variability", "settings_key": "high_percentile"},
-                {"key": "auto_variability_seasonal_threshold", "section": "auto_variability", "settings_key": "seasonal_threshold"},
-                {"key": "auto_variability_fallback_category", "section": "auto_variability", "settings_key": "fallback_category"},
-                {"key": "oos_boost_percent", "section": "reorder_engine"},
-                {"key": "forecast_method", "section": "reorder_engine"},
-                {"key": "mc_distribution", "section": "monte_carlo"},
-                {"key": "mc_n_simulations", "section": "monte_carlo"},
-                {"key": "mc_random_seed", "section": "monte_carlo"},
-                {"key": "mc_output_stat", "section": "monte_carlo"},
-                {"key": "mc_output_percentile", "section": "monte_carlo"},
-                {"key": "mc_horizon_mode", "section": "monte_carlo"},
-                {"key": "mc_horizon_days", "section": "monte_carlo"},
-                {"key": "stock_unit_price", "section": "dashboard"},
-            ]
+            # Parameter mapping (same as _refresh)
+            param_map = {
+                "lead_time_days": ("reorder_engine", "lead_time_days"),
+                "moq": ("reorder_engine", "moq"),
+                "pack_size": ("reorder_engine", "pack_size"),
+                "review_period": ("reorder_engine", "review_period"),
+                "safety_stock": ("reorder_engine", "safety_stock"),
+                "max_stock": ("reorder_engine", "max_stock"),
+                "reorder_point": ("reorder_engine", "reorder_point"),
+                "demand_variability": ("reorder_engine", "demand_variability"),
+                "forecast_method": ("reorder_engine", "forecast_method"),
+                "oos_boost_percent": ("reorder_engine", "oos_boost_percent"),
+                "oos_lookback_days": ("reorder_engine", "oos_lookback_days"),
+                "oos_detection_mode": ("reorder_engine", "oos_detection_mode"),
+                "auto_variability_enabled": ("auto_variability", "enabled"),
+                "auto_variability_min_observations": ("auto_variability", "min_observations"),
+                "auto_variability_stable_percentile": ("auto_variability", "stable_percentile"),
+                "auto_variability_high_percentile": ("auto_variability", "high_percentile"),
+                "auto_variability_seasonal_threshold": ("auto_variability", "seasonal_threshold"),
+                "auto_variability_fallback_category": ("auto_variability", "fallback_category"),
+                "mc_distribution": ("monte_carlo", "distribution"),
+                "mc_n_simulations": ("monte_carlo", "n_simulations"),
+                "mc_random_seed": ("monte_carlo", "random_seed"),
+                "mc_output_stat": ("monte_carlo", "output_stat"),
+                "mc_output_percentile": ("monte_carlo", "output_percentile"),
+                "mc_horizon_mode": ("monte_carlo", "horizon_mode"),
+                "mc_horizon_days": ("monte_carlo", "horizon_days"),
+                "mc_show_comparison": ("monte_carlo", "show_comparison"),
+                "stock_unit_price": ("dashboard", "stock_unit_price"),
+            }
             
-            param_map = {p["key"]: (p.get("section", "reorder_engine"), p.get("settings_key", p["key"])) for p in parameters}
-            
-            # Update settings by section
-            for param_key, widgets in self.settings_widgets.items():
+            # Update settings from widgets
+            for param_key, widget_data in self.settings_widgets.items():
                 if param_key not in param_map:
                     continue
                 section, settings_key = param_map[param_key]
@@ -4667,13 +4718,13 @@ class DesktopOrderApp:
                 if section not in settings:
                     settings[section] = {}
                 
-                settings[section][settings_key] = {
-                    "value": widgets["value_var"].get()
-                }
+                # Get auto-apply from section checkbox
+                auto_apply = self.settings_section_widgets.get(section, tk.BooleanVar(value=True)).get()
                 
-                # Add auto_apply only if widget has it (bool params don't)
-                if widgets["auto_apply_var"]:
-                    settings[section][settings_key]["auto_apply_to_new_sku"] = widgets["auto_apply_var"].get()
+                settings[section][settings_key] = {
+                    "value": widget_data["value_var"].get(),
+                    "auto_apply_to_new_sku": auto_apply
+                }
             
             # Write to file
             self.csv_layer.write_settings(settings)
