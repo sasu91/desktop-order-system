@@ -1297,7 +1297,7 @@ class DesktopOrderApp:
                                 sku_obj.sku, sku_obj.sku, sku_obj.description, sku_obj.ean,
                                 sku_obj.moq, sku_obj.pack_size, sku_obj.lead_time_days, 
                                 sku_obj.review_period, sku_obj.safety_stock, sku_obj.shelf_life_days,
-                                sku_obj.max_stock, sku_obj.reorder_point, sku_obj.supplier, 
+                                sku_obj.max_stock, sku_obj.reorder_point,
                                 sku_obj.demand_variability, sku_obj.oos_boost_percent, 
                                 sku_obj.oos_detection_mode, "always_yes"
                             )
@@ -1310,7 +1310,7 @@ class DesktopOrderApp:
                                 sku_obj.sku, sku_obj.sku, sku_obj.description, sku_obj.ean,
                                 sku_obj.moq, sku_obj.pack_size, sku_obj.lead_time_days, 
                                 sku_obj.review_period, sku_obj.safety_stock, sku_obj.shelf_life_days,
-                                sku_obj.max_stock, sku_obj.reorder_point, sku_obj.supplier, 
+                                sku_obj.max_stock, sku_obj.reorder_point,
                                 sku_obj.demand_variability, sku_obj.oos_boost_percent, 
                                 sku_obj.oos_detection_mode, "always_no"
                             )
@@ -3395,7 +3395,6 @@ class DesktopOrderApp:
         sku_code = sku_code.strip()
         description = description.strip()
         ean = ean.strip() if ean else None
-        supplier = supplier.strip()
         
         # Parse and validate numeric fields
         try:
