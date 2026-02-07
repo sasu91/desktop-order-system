@@ -3138,9 +3138,21 @@ class DesktopOrderApp:
         
         # Enable mouse wheel scrolling
         def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass  # Widget destroyed, ignore
         
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        # Unbind mousewheel when popup is destroyed
+        def _on_popup_destroy():
+            try:
+                canvas.unbind_all("<MouseWheel>")
+            except:
+                pass
+        popup.bind("<Destroy>", lambda e: _on_popup_destroy())
         
         # Form frame
         form_frame = ttk.Frame(scrollable_frame, padding=10)
@@ -4256,9 +4268,21 @@ class DesktopOrderApp:
         
         # Enable mouse wheel scrolling
         def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass  # Widget destroyed, ignore
         
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        # Unbind mousewheel when settings window is destroyed
+        def _on_settings_destroy():
+            try:
+                canvas.unbind_all("<MouseWheel>")
+            except:
+                pass
+        settings_window.bind("<Destroy>", lambda e: _on_settings_destroy())
         
         # Storage for widgets
         self.settings_widgets = {}
