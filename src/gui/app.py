@@ -1775,34 +1775,85 @@ class DesktopOrderApp:
                 sku_obj = skus_by_id.get(confirmation.sku)
                 description = sku_obj.description if sku_obj else "N/A"
                 ean = sku_obj.ean if sku_obj else None
+                pack_size = sku_obj.pack_size if sku_obj else 1
                 
-                ttk.Label(item_frame, text=f"Descrizione: {description}").pack(anchor="w")
-                ttk.Label(item_frame, text=f"Quantità Ordinata: {confirmation.qty_ordered}").pack(anchor="w")
-                ttk.Label(item_frame, text=f"Data Ricevimento: {confirmation.receipt_date.isoformat()}").pack(anchor="w")
-                ttk.Label(item_frame, text=f"ID Ordine: {confirmation.order_id}", font=("Courier", 9)).pack(anchor="w")
+                # Layout a 2 colonne: sinistra = info, destra = barcode
+                columns_frame = ttk.Frame(item_frame)
+                columns_frame.pack(fill="x", expand=True)
                 
-                # EAN and barcode
+                # COLONNA SINISTRA: Info prodotto
+                left_frame = ttk.Frame(columns_frame)
+                left_frame.pack(side="left", fill="both", expand=True, padx=(0, 10))
+                
+                ttk.Label(left_frame, text=f"Descrizione: {description}").pack(anchor="w")
+                
+                # QUANTITÀ IN COLLI - EVIDENZIATA
+                colli = confirmation.qty_ordered // pack_size if pack_size > 0 else confirmation.qty_ordered
+                resto_pz = confirmation.qty_ordered % pack_size if pack_size > 0 else 0
+                
+                qty_frame = ttk.Frame(left_frame)
+                qty_frame.pack(anchor="w", pady=(5, 5))
+                
+                ttk.Label(
+                    qty_frame, 
+                    text="QUANTITÀ:", 
+                    font=("Helvetica", 10, "bold")
+                ).pack(side="left", padx=(0, 5))
+                
+                ttk.Label(
+                    qty_frame,
+                    text=f"{colli} colli",
+                    font=("Helvetica", 14, "bold"),
+                    foreground="darkblue"
+                ).pack(side="left", padx=(0, 5))
+                
+                if resto_pz > 0:
+                    ttk.Label(
+                        qty_frame,
+                        text=f"+ {resto_pz} pz",
+                        font=("Helvetica", 11, "bold"),
+                        foreground="darkblue"
+                    ).pack(side="left")
+                
+                ttk.Label(
+                    left_frame,
+                    text=f"({confirmation.qty_ordered} pz totali)",
+                    font=("Helvetica", 9),
+                    foreground="gray"
+                ).pack(anchor="w")
+                
+                ttk.Label(left_frame, text=f"Data Ricevimento: {confirmation.receipt_date.isoformat()}").pack(anchor="w", pady=(5, 0))
+                ttk.Label(left_frame, text=f"ID Ordine: {confirmation.order_id}", font=("Courier", 9)).pack(anchor="w")
+                
+                # COLONNA DESTRA: Barcode
+                right_frame = ttk.Frame(columns_frame)
+                right_frame.pack(side="right", padx=5)
+                
                 if ean:
                     is_valid, error = validate_ean(ean)
                     if is_valid:
-                        ttk.Label(item_frame, text=f"EAN: {ean}").pack(anchor="w", pady=(5, 0))
+                        ttk.Label(
+                            right_frame,
+                            text=f"EAN: {ean}",
+                            font=("Courier", 10, "bold")
+                        ).pack(anchor="center", pady=(0, 5))
                         
                         # Render barcode
                         if BARCODE_AVAILABLE:
                             try:
                                 barcode_img = self._generate_barcode_image(ean)
                                 if barcode_img:
-                                    barcode_label = ttk.Label(item_frame, image=barcode_img)
+                                    barcode_label = ttk.Label(right_frame, image=barcode_img)
                                     barcode_label.image = barcode_img  # Keep reference
-                                    barcode_label.pack(anchor="w", pady=5)
+                                    barcode_label.pack(anchor="center")
                             except Exception as e:
-                                ttk.Label(item_frame, text=f"Errore barcode: {str(e)}", foreground="red").pack(anchor="w")
+                                ttk.Label(right_frame, text=f"Errore barcode: {str(e)}", foreground="red").pack(anchor="center")
                         else:
-                            ttk.Label(item_frame, text="(Rendering barcode disabilitato)", foreground="gray").pack(anchor="w")
+                            ttk.Label(right_frame, text="(Rendering barcode\ndisabilitato)", foreground="gray", justify="center").pack(anchor="center")
                     else:
-                        ttk.Label(item_frame, text=f"EAN: {ean} (Non valido - {error})", foreground="red").pack(anchor="w")
+                        ttk.Label(right_frame, text=f"EAN: {ean}\n(Non valido - {error})", foreground="red", justify="center").pack(anchor="center")
                 else:
-                    ttk.Label(item_frame, text="EAN: (vuoto - nessun barcode)", foreground="gray").pack(anchor="w")
+                    ttk.Label(right_frame, text="EAN non disponibile\n(nessun barcode)", foreground="gray", justify="center").pack(anchor="center")
             
             canvas.pack(side="left", fill="both", expand=True)
             scrollbar.pack(side="right", fill="y")
