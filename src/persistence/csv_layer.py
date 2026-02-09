@@ -30,8 +30,8 @@ class CSVLayer:
                      "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days"],
         "transactions.csv": ["date", "sku", "event", "qty", "receipt_date", "note"],
         "sales.csv": ["date", "sku", "qty_sold"],
-        "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "status", "receipt_date"],
-        "receiving_logs.csv": ["receipt_id", "date", "sku", "qty_received", "receipt_date"],
+        "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "qty_received", "status", "receipt_date"],
+        "receiving_logs.csv": ["document_id", "receipt_id", "date", "sku", "qty_received", "receipt_date", "order_ids"],
         "audit_log.csv": ["timestamp", "operation", "sku", "details", "user"],
     }
     
@@ -602,10 +602,10 @@ class CSVLayer:
                 "receipt_date": txn.receipt_date.isoformat() if txn.receipt_date else "",
                 "note": txn.note or "",
             })
-        self._write_csv("transactions.csv", rows)
+        self._write_csv_atomic("transactions.csv", rows)
     
     def overwrite_transactions(self, txns: List[Transaction]):
-        """Overwrite entire transactions.csv with given list (for deletions/filtering)."""
+        """Overwrite entire transactions.csv with given list (atomic write with backup)."""
         rows = []
         for txn in txns:
             rows.append({
@@ -616,7 +616,7 @@ class CSVLayer:
                 "receipt_date": txn.receipt_date.isoformat() if txn.receipt_date else "",
                 "note": txn.note or "",
             })
-        self._write_csv("transactions.csv", rows)
+        self._write_csv_atomic("transactions.csv", rows)
     
     # ============ Sales Operations ============
     
@@ -663,16 +663,94 @@ class CSVLayer:
         """Read order logs."""
         return self._read_csv("order_logs.csv")
     
-    def write_order_log(self, order_id: str, date_str: str, sku: str, qty: int, status: str, receipt_date: Optional[str] = None):
-        """Write order log entry with expected receipt date."""
+    def write_order_log(self, order_id: str, date_str: str, sku: str, qty: int, status: str, receipt_date: Optional[str] = None, qty_received: int = 0):
+        """
+        Write order log entry with expected receipt date and received quantity.
+        
+        Args:
+            order_id: Unique order identifier
+            date_str: Order date (ISO format)
+            sku: SKU identifier
+            qty: Quantity ordered
+            status: Order status (PENDING, PARTIAL, RECEIVED)
+            receipt_date: Expected receipt date (ISO format, optional)
+            qty_received: Quantity already received (default 0)
+        """
         self._append_csv("order_logs.csv", {
             "order_id": order_id,
             "date": date_str,
             "sku": sku,
             "qty_ordered": str(qty),
+            "qty_received": str(qty_received),
             "status": status,
             "receipt_date": receipt_date or "",
         })
+    
+    def update_order_received_qty(self, order_id: str, qty_received: int, status: str):
+        """
+        Update qty_received and status for an existing order (atomic write with backup).
+        
+        Args:
+            order_id: Order identifier to update
+            qty_received: New total quantity received
+            status: New status (PENDING, PARTIAL, RECEIVED)
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        orders = self.read_order_logs()
+        updated = False
+        
+        for order in orders:
+            if order.get("order_id") == order_id:
+                order["qty_received"] = str(qty_received)
+                order["status"] = status
+                updated = True
+                logger.info(f"Updated order {order_id}: qty_received={qty_received}, status={status}")
+                break
+        
+        if not updated:
+            logger.warning(f"Order {order_id} not found for update")
+            return
+        
+        # Rewrite file with updated data (atomic)
+        self._write_csv_atomic("order_logs.csv", orders)
+    
+    def get_unfulfilled_orders(self, sku: Optional[str] = None) -> List[Dict]:
+        """
+        Get orders with qty_received < qty_ordered.
+        
+        Args:
+            sku: Optional SKU filter
+        
+        Returns:
+            List of dicts with keys:
+            - order_id, sku, date, qty_ordered, qty_received, qty_unfulfilled, status, receipt_date
+        """
+        orders = self.read_order_logs()
+        unfulfilled = []
+        
+        for order in orders:
+            order_sku = order.get("sku", "")
+            if sku and order_sku != sku:
+                continue
+            
+            qty_ordered = int(order.get("qty_ordered", 0))
+            qty_received = int(order.get("qty_received", 0))
+            
+            if qty_received < qty_ordered:
+                unfulfilled.append({
+                    "order_id": order.get("order_id", ""),
+                    "sku": order_sku,
+                    "date": order.get("date", ""),
+                    "qty_ordered": qty_ordered,
+                    "qty_received": qty_received,
+                    "qty_unfulfilled": qty_ordered - qty_received,
+                    "status": order.get("status", ""),
+                    "receipt_date": order.get("receipt_date", ""),
+                })
+        
+        return unfulfilled
     
     # ============ Receiving Log Operations ============
     
@@ -680,14 +758,27 @@ class CSVLayer:
         """Read receiving logs."""
         return self._read_csv("receiving_logs.csv")
     
-    def write_receiving_log(self, receipt_id: str, date_str: str, sku: str, qty: int, receipt_date: str):
-        """Write receiving log entry."""
+    def write_receiving_log(self, document_id: str, date_str: str, sku: str, qty: int, receipt_date: str, order_ids: str = "", receipt_id: Optional[str] = None):
+        """
+        Write receiving log entry with document and order traceability.
+        
+        Args:
+            document_id: Document identifier (DDT/Invoice number)
+            date_str: Processing date (ISO format)
+            sku: SKU identifier
+            qty: Quantity received
+            receipt_date: Receipt date (ISO format)
+            order_ids: Comma-separated list of order_ids fulfilled by this receipt
+            receipt_id: Legacy receipt_id (for backward compatibility)
+        """
         self._append_csv("receiving_logs.csv", {
-            "receipt_id": receipt_id,
+            "document_id": document_id,
+            "receipt_id": receipt_id or document_id,  # Backward compat
             "date": date_str,
             "sku": sku,
             "qty_received": str(qty),
             "receipt_date": receipt_date,
+            "order_ids": order_ids,
         })
     
     # ============ Audit Log Operations ============
@@ -904,3 +995,89 @@ class CSVLayer:
                 defaults[param_name] = param_config.get("value")
         
         return defaults
+    
+    # ============ Atomic Write & Backup Operations ============
+    
+    def _backup_file(self, filename: str, max_backups: int = 5):
+        """
+        Create timestamped backup of file before modification.
+        
+        Args:
+            filename: CSV filename to backup
+            max_backups: Maximum number of backups to keep (oldest deleted)
+        """
+        import shutil
+        import glob
+        from datetime import datetime
+        
+        filepath = self.data_dir / filename
+        if not filepath.exists():
+            return
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = self.data_dir / f"{filename}.backup.{timestamp}"
+        
+        try:
+            shutil.copy2(filepath, backup_path)
+            
+            # Cleanup old backups
+            backup_pattern = str(self.data_dir / f"{filename}.backup.*")
+            backups = sorted(glob.glob(backup_pattern))
+            
+            if len(backups) > max_backups:
+                for old_backup in backups[:-max_backups]:
+                    try:
+                        os.remove(old_backup)
+                    except OSError:
+                        pass  # Ignore errors on cleanup
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Backup failed for {filename}: {e}")
+    
+    def _write_csv_atomic(self, filename: str, rows: List[Dict[str, str]]):
+        """
+        Write CSV file atomically with auto-backup.
+        
+        Steps:
+        1. Backup existing file
+        2. Write to temporary file
+        3. Atomic rename (replaces original)
+        
+        Args:
+            filename: CSV filename
+            rows: List of dicts to write
+        """
+        import tempfile
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not self.SCHEMAS.get(filename):
+            raise ValueError(f"Unknown CSV file: {filename}")
+        
+        # 1. Backup existing
+        self._backup_file(filename)
+        
+        columns = self.SCHEMAS[filename]
+        filepath = self.data_dir / filename
+        
+        # 2. Write to temporary file
+        temp_fd, temp_path = tempfile.mkstemp(dir=self.data_dir, suffix=".tmp", text=True)
+        
+        try:
+            with os.fdopen(temp_fd, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=columns)
+                writer.writeheader()
+                writer.writerows(rows)
+            
+            # 3. Atomic rename (replaces original)
+            os.replace(temp_path, filepath)
+            logger.debug(f"Atomic write completed for {filename}")
+        except Exception as e:
+            # Cleanup temp file on error
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+            logger.error(f"Atomic write failed for {filename}: {e}")
+            raise
