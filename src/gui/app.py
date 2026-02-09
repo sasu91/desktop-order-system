@@ -45,7 +45,8 @@ from ..persistence.csv_layer import CSVLayer
 from ..domain.ledger import StockCalculator, validate_ean
 from ..domain.models import SKU, EventType, OrderProposal, Stock, Transaction
 from ..workflows.order import OrderWorkflow, calculate_daily_sales_average
-from ..workflows.receiving import ReceivingWorkflow, ExceptionWorkflow
+from ..workflows.receiving import ExceptionWorkflow
+from ..workflows.receiving_v2 import ReceivingWorkflow
 from ..workflows.daily_close import DailyCloseWorkflow
 from .widgets import AutocompleteEntry
 from .collapsible_frame import CollapsibleFrame
@@ -2038,26 +2039,28 @@ class DesktopOrderApp:
         
         self.receiving_history_treeview = ttk.Treeview(
             history_frame,
-            columns=("Receipt ID", "Date", "SKU", "Qty Received", "Receipt Date", "Notes"),
+            columns=("Document ID", "Receipt ID", "Date", "SKU", "Qty Received", "Receipt Date", "Order IDs"),
             height=8,
             yscrollcommand=history_scroll.set,
         )
         history_scroll.config(command=self.receiving_history_treeview.yview)
         
         self.receiving_history_treeview.column("#0", width=0, stretch=tk.NO)
-        self.receiving_history_treeview.column("Receipt ID", anchor=tk.W, width=150)
-        self.receiving_history_treeview.column("Date", anchor=tk.CENTER, width=100)
+        self.receiving_history_treeview.column("Document ID", anchor=tk.W, width=120)
+        self.receiving_history_treeview.column("Receipt ID", anchor=tk.W, width=120)
+        self.receiving_history_treeview.column("Date", anchor=tk.CENTER, width=90)
         self.receiving_history_treeview.column("SKU", anchor=tk.W, width=80)
-        self.receiving_history_treeview.column("Qty Received", anchor=tk.CENTER, width=110)
+        self.receiving_history_treeview.column("Qty Received", anchor=tk.CENTER, width=90)
         self.receiving_history_treeview.column("Receipt Date", anchor=tk.CENTER, width=100)
-        self.receiving_history_treeview.column("Notes", anchor=tk.W, width=250)
+        self.receiving_history_treeview.column("Order IDs", anchor=tk.W, width=200)
         
+        self.receiving_history_treeview.heading("Document ID", text="Documento", anchor=tk.W)
         self.receiving_history_treeview.heading("Receipt ID", text="ID Ricevimento", anchor=tk.W)
-        self.receiving_history_treeview.heading("Date", text="Data Registrazione", anchor=tk.CENTER)
+        self.receiving_history_treeview.heading("Date", text="Data Reg.", anchor=tk.CENTER)
         self.receiving_history_treeview.heading("SKU", text="SKU", anchor=tk.W)
-        self.receiving_history_treeview.heading("Qty Received", text="Q.tà Ricevuta", anchor=tk.CENTER)
-        self.receiving_history_treeview.heading("Receipt Date", text="Data Ricevimento", anchor=tk.CENTER)
-        self.receiving_history_treeview.heading("Notes", text="Note", anchor=tk.W)
+        self.receiving_history_treeview.heading("Qty Received", text="Q.tà", anchor=tk.CENTER)
+        self.receiving_history_treeview.heading("Receipt Date", text="Data Ric.", anchor=tk.CENTER)
+        self.receiving_history_treeview.heading("Order IDs", text="Ordini Collegati", anchor=tk.W)
         
         self.receiving_history_treeview.pack(fill="both", expand=True)
         
@@ -2081,34 +2084,21 @@ class DesktopOrderApp:
                 self.pending_treeview.detach(item_id)
     
     def _refresh_pending_orders(self):
-        """Calculate and display pending orders using ledger on_order as source of truth."""
+        """Calculate and display pending orders with qty_received from order_logs."""
         # Reset edits
         self.pending_qty_edits = {}
         
         # Read order logs
         order_logs = self.csv_layer.read_order_logs()
         
-        # Calculate current on_order from ledger (source of truth)
-        today = date.today()
-        all_skus = self.csv_layer.get_all_sku_ids()
-        transactions = self.csv_layer.read_transactions()
-        sales = self.csv_layer.read_sales()
-        
-        stock_by_sku = StockCalculator.calculate_all_skus(
-            all_skus=all_skus,
-            asof_date=today,
-            transactions=transactions,
-            sales_records=sales,
-        )
-        
         # Get SKU descriptions
         skus_by_id = {sku.sku: sku for sku in self.csv_layer.read_skus()}
         
-        # Display pending orders using ledger on_order as source of truth
+        # Display pending orders - now using qty_received from order_logs
         self.pending_treeview.delete(*self.pending_treeview.get_children())
         
         # Group order logs by (SKU, receipt_date) for display purposes
-        order_groups = {}  # {(sku, receipt_date): {order_ids: [], qty_ordered_total: int}}
+        order_groups = {}  # {(sku, receipt_date): {order_ids: [], qty_ordered_total: int, qty_received_total: int}}
         
         for log in order_logs:
             sku = log.get("sku")
@@ -2120,30 +2110,34 @@ class DesktopOrderApp:
             
             order_id = log.get("order_id")
             qty_ordered = int(log.get("qty_ordered", 0))
+            qty_received = int(log.get("qty_received", 0))  # NEW: read from order_logs
             receipt_date_str = log.get("receipt_date", "")
             
             key = (sku, receipt_date_str)
             if key not in order_groups:
-                order_groups[key] = {"order_ids": [], "qty_ordered_total": 0}
+                order_groups[key] = {"order_ids": [], "qty_ordered_total": 0, "qty_received_total": 0}
             
             order_groups[key]["order_ids"].append(order_id)
             order_groups[key]["qty_ordered_total"] += qty_ordered
+            order_groups[key]["qty_received_total"] += qty_received  # NEW: aggregate qty_received
         
-        # Display rows: one per (SKU, receipt_date) with ledger on_order as pending qty
+        # Display rows: one per (SKU, receipt_date) with actual qty_received from logs
         for (sku, receipt_date_str), group_data in order_groups.items():
             sku_obj = skus_by_id.get(sku)
             description = sku_obj.description if sku_obj else "N/A"
+            pack_size = getattr(sku_obj, "pack_size", 1) if sku_obj else 1
+            
             qty_ordered_total = group_data["qty_ordered_total"]
+            qty_received_total = group_data["qty_received_total"]  # NEW: actual received
+            qty_pending = max(0, qty_ordered_total - qty_received_total)
             order_ids_str = ", ".join(group_data["order_ids"])
             
-            # Get current on_order from ledger (source of truth)
-            stock = stock_by_sku.get(sku, Stock(sku=sku, on_hand=0, on_order=0, asof_date=today))
-            ledger_on_order = stock.on_order
-            
-            # Only show if ledger reports on_order > 0
-            if ledger_on_order > 0:
-                # Estimate received: total ordered - current on_order
-                qty_received_est = max(0, qty_ordered_total - ledger_on_order)
+            # Only show if there's pending quantity
+            if qty_pending > 0:
+                # Convert to colli (packs)
+                colli_ordinati = qty_ordered_total // pack_size
+                colli_ricevuti = qty_received_total // pack_size
+                colli_sospesi = qty_pending // pack_size
                 
                 self.pending_treeview.insert(
                     "",
@@ -2152,15 +2146,16 @@ class DesktopOrderApp:
                         order_ids_str,
                         sku,
                         description,
-                        qty_ordered_total,
-                        qty_received_est,
-                        ledger_on_order,
+                        pack_size,
+                        colli_ordinati,
+                        colli_ricevuti,
+                        colli_sospesi,
                         receipt_date_str,
                     ),
                 )
     
     def _on_pending_qty_double_click(self, event):
-        """Edita quantità ricevuta con doppio click."""
+        """Edita quantità ricevuta con doppio click (gestisce colli)."""
         region = self.pending_treeview.identify("region", event.x, event.y)
         if region != "cell":
             return
@@ -2174,36 +2169,42 @@ class DesktopOrderApp:
         item_id = selected[0]
         values = self.pending_treeview.item(item_id)["values"]
         
-        # Solo colonna "Qty Received" (indice #4 = colonna 5)
-        if column != "#5":
+        # Solo colonna "Colli Ricevuti" (indice #5 = colonna 6)
+        if column != "#6":
             return
         
-        current_qty_received = values[4]
-        pending_qty = values[5]
+        sku = values[1]
+        pack_size = int(values[3])
+        colli_ricevuti_current = int(values[5])
+        colli_sospesi = int(values[6])
         
-        # Dialog per inserire nuova quantità
-        new_qty = simpledialog.askinteger(
-            "Modifica Quantità Ricevuta",
-            f"SKU: {values[1]}\nInserisci quantità ricevuta:",
-            initialvalue=int(current_qty_received) if current_qty_received else 0,
+        # Dialog per inserire nuovi colli ricevuti
+        new_colli = simpledialog.askinteger(
+            "Modifica Colli Ricevuti",
+            f"SKU: {sku}\nPz/Collo: {pack_size}\nInserisci colli ricevuti:",
+            initialvalue=colli_ricevuti_current,
             minvalue=0,
             parent=self.root,
         )
         
-        if new_qty is None:
+        if new_colli is None:
             return
+        
+        # Converti in pezzi
+        qty_received_pz = new_colli * pack_size
         
         # Aggiorna valore nel treeview
         new_values = list(values)
-        new_values[4] = str(new_qty)
-        new_values[5] = str(max(0, int(values[3]) - new_qty))  # Ricalcola pending
+        colli_ordinati = int(values[4])
+        new_values[5] = str(new_colli)  # Colli ricevuti
+        new_values[6] = str(max(0, colli_ordinati - new_colli))  # Colli sospesi
         self.pending_treeview.item(item_id, values=new_values, tags=("edited",))
         
-        # Salva in memoria
-        self.pending_qty_edits[item_id] = new_qty
+        # Salva in memoria (in pezzi per compatibilità con backend)
+        self.pending_qty_edits[item_id] = qty_received_pz
     
     def _close_receipt_bulk(self):
-        """Chiudi ricevimento per tutte le quantità modificate."""
+        """Chiudi ricevimento per tutte le quantità modificate con tracciabilità documento."""
         if not self.pending_qty_edits:
             messagebox.showwarning(
                 "Nessuna Modifica",
@@ -2211,20 +2212,32 @@ class DesktopOrderApp:
             )
             return
         
+        # Richiedi numero documento (DDT/fattura)
+        from tkinter import simpledialog
+        document_id = simpledialog.askstring(
+            "Numero Documento",
+            "Inserisci numero documento (es. DDT-2026-001, INV-12345):",
+            initialvalue=f"DDT-{date.today().strftime('%Y%m%d')}",
+        )
+        
+        if not document_id:
+            return  # Utente ha annullato
+        
         # Conferma
         confirm = messagebox.askyesno(
             "Conferma Ricevimento",
-            f"Confermare ricevimento per {len(self.pending_qty_edits)} SKU modificati?\n\nQuesta azione creerà eventi RECEIPT nel ledger.",
+            f"Confermare ricevimento per {len(self.pending_qty_edits)} SKU modificati?\n"
+            f"Documento: {document_id}\n\n"
+            f"Questa azione creerà eventi RECEIPT nel ledger.",
         )
         
         if not confirm:
             return
         
         receipt_date_obj = date.today()
-        total_receipts = 0
-        errors = []
         
-        # Per ogni SKU modificato, crea un receipt
+        # Prepara items per il nuovo metodo
+        items = []
         for item_id, new_qty_received in self.pending_qty_edits.items():
             if new_qty_received <= 0:
                 continue  # Skip se qty = 0
@@ -2232,44 +2245,65 @@ class DesktopOrderApp:
             values = self.pending_treeview.item(item_id)["values"]
             sku = values[1]
             
-            # Genera receipt_id univoco per questo SKU
-            receipt_id = ReceivingWorkflow.generate_receipt_id(
+            items.append({
+                "sku": sku,
+                "qty_received": new_qty_received,
+                "order_ids": [],  # FIFO allocation automatica
+            })
+        
+        if not items:
+            messagebox.showwarning("Nessun Articolo", "Nessun articolo da ricevere (tutte le quantità sono 0).")
+            return
+        
+        try:
+            # Usa il nuovo metodo con tracciabilità documento
+            transactions, already_processed, order_updates = self.receiving_workflow.close_receipt_by_document(
+                document_id=document_id,
                 receipt_date=receipt_date_obj,
-                origin="MANUAL",
-                sku=sku,
+                items=items,
+                notes="Bulk receiving via GUI",
             )
             
-            try:
-                transactions, already_processed = self.receiving_workflow.close_receipt(
-                    receipt_id=receipt_id,
-                    receipt_date=receipt_date_obj,
-                    sku_quantities={sku: new_qty_received},
-                    notes="Bulk receiving",
+            if already_processed:
+                messagebox.showwarning(
+                    "Documento Già Processato",
+                    f"Il documento '{document_id}' è già stato ricevuto.\n\n"
+                    f"Nessuna modifica apportata (idempotenza).",
                 )
+            else:
+                # Mostra riepilogo
+                summary = f"✅ Ricevimento completato con successo!\n\n"
+                summary += f"📄 Documento: {document_id}\n"
+                summary += f"📦 Articoli ricevuti: {len(items)}\n"
+                summary += f"📝 Transazioni create: {len(transactions)}\n"
+                summary += f"📋 Ordini aggiornati: {len(order_updates)}\n\n"
                 
-                if not already_processed:
-                    total_receipts += 1
-            except Exception as e:
-                errors.append(f"SKU {sku}: {str(e)}")
+                if order_updates:
+                    summary += "Stato ordini:\n"
+                    for order_id, update in list(order_updates.items())[:5]:  # Max 5
+                        summary += f"  • {order_id}: {update['qty_received_total']}/{update['qty_ordered']} pz → {update['new_status']}\n"
+                    
+                    if len(order_updates) > 5:
+                        summary += f"  ... e altri {len(order_updates) - 5} ordini\n"
+                
+                messagebox.showinfo("Successo", summary)
+                
+                logger.info(f"Bulk receiving completed: document_id={document_id}, items={len(items)}, orders_updated={len(order_updates)}")
         
-        # Mostra risultato
-        if errors:
+        except Exception as e:
+            logger.error(f"Bulk receiving failed: {str(e)}", exc_info=True)
             messagebox.showerror(
-                "Errori durante ricevimento",
-                f"Completati {total_receipts} ricevimenti.\n\nErrori:\n" + "\n".join(errors),
+                "Errore durante ricevimento",
+                f"Errore durante l'elaborazione del documento '{document_id}':\n\n{str(e)}",
             )
-        else:
-            messagebox.showinfo(
-                "Successo",
-                f"Ricevimento completato per {total_receipts} SKU!",
-            )
+            return
         
         # Refresh views
         self._refresh_pending_orders()
         self._refresh_receiving_history()
     
     def _refresh_receiving_history(self):
-        """Refresh receiving history table."""
+        """Refresh receiving history table with document traceability."""
         logs = self.csv_layer.read_receiving_logs()
         
         # Apply filter
@@ -2280,35 +2314,25 @@ class DesktopOrderApp:
         # Populate table
         self.receiving_history_treeview.delete(*self.receiving_history_treeview.get_children())
         
-        # Read transactions for notes (RECEIPT events)
-        transactions = self.csv_layer.read_transactions()
-        notes_by_receipt = {}
-        for txn in transactions:
-            if txn.event == EventType.RECEIPT and txn.note and "Receipt" in txn.note:
-                # Extract receipt_id from note
-                parts = txn.note.split(";")
-                if len(parts) >= 1 and "Receipt" in parts[0]:
-                    receipt_id = parts[0].replace("Receipt", "").strip()
-                    if receipt_id not in notes_by_receipt:
-                        notes_by_receipt[receipt_id] = txn.note
-        
         for log in logs:
+            document_id = log.get("document_id", "")
             receipt_id = log.get("receipt_id", "")
             date_str = log.get("date", "")
             sku = log.get("sku", "")
             qty_received = log.get("qty_received", "")
             receipt_date_str = log.get("receipt_date", "")
+            order_ids_str = log.get("order_ids", "")
             
-            # Get notes from transactions
-            notes = notes_by_receipt.get(receipt_id, "")
-            # Clean up notes (remove "Receipt {id};" prefix)
-            if notes and ";" in notes:
-                notes = notes.split(";", 1)[1].strip()
+            # Format order_ids for display (limit length)
+            if order_ids_str and len(order_ids_str) > 50:
+                order_ids_display = order_ids_str[:47] + "..."
+            else:
+                order_ids_display = order_ids_str
             
             self.receiving_history_treeview.insert(
                 "",
                 "end",
-                values=(receipt_id, date_str, sku, qty_received, receipt_date_str, notes),
+                values=(document_id, receipt_id, date_str, sku, qty_received, receipt_date_str, order_ids_display),
             )
     
     def _clear_history_filter(self):
