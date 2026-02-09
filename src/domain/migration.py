@@ -1,8 +1,8 @@
 """
 Legacy inventory migration: convert old snapshot CSV to ledger events.
 """
-from datetime import date
-from typing import List, Dict
+from datetime import date, timedelta
+from typing import List, Dict, Any
 from pathlib import Path
 
 from ..domain.models import SKU, Transaction, EventType
@@ -18,7 +18,7 @@ class LegacyMigration:
         csv_layer: CSVLayer,
         snapshot_date: date,
         force: bool = False,
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """
         Migrate from legacy inventory CSV to ledger.
         
@@ -146,7 +146,7 @@ def validate_legacy_migration(
     for sku in skus:
         stock = StockCalculator.calculate_asof(
             sku,
-            snapshot_date + date.fromisoformat("0001-01-01").year,  # Day after migration
+            snapshot_date + timedelta(days=1),  # Day after migration
             transactions,
         )
         # Expect stock > 0 for migrated SKUs

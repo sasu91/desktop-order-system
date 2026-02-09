@@ -8,7 +8,7 @@ Key improvements:
 - Atomic writes with auto-backup
 """
 from datetime import date
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 import hashlib
 import logging
 
@@ -54,7 +54,7 @@ class ReceivingWorkflow:
         self,
         document_id: str,
         receipt_date: date,
-        items: List[Dict[str, any]],  # [{sku, qty_received, order_ids: Optional[List[str]]}]
+        items: List[Dict[str, Any]],  # [{sku, qty_received, order_ids: Optional[List[str]]}]
         notes: str = "",
     ) -> Tuple[List[Transaction], bool, Dict[str, Dict]]:
         """
@@ -335,7 +335,7 @@ class ExceptionWorkflow:
         event_type: EventType,
         sku: str,
         qty: int,
-        event_date: date = None,
+        event_date: Optional[date] = None,
         notes: str = "",
     ) -> Tuple[Transaction, bool]:
         """
