@@ -14,18 +14,18 @@ from collections import defaultdict
 import logging
 
 try:
-    from tkcalendar import DateEntry
+    from tkcalendar import DateEntry  # type: ignore[import-untyped]
     TKCALENDAR_AVAILABLE = True
 except ImportError:
     DateEntry = None
     TKCALENDAR_AVAILABLE = False
 
 try:
-    import matplotlib
+    import matplotlib  # type: ignore[import-not-found]
     matplotlib.use('TkAgg')
-    from matplotlib.figure import Figure
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure  # type: ignore[import-not-found]
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg  # type: ignore[import-not-found]
+    import matplotlib.pyplot as plt  # type: ignore[import-not-found]
     import numpy as np
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
@@ -33,9 +33,9 @@ except ImportError:
     print("Warning: matplotlib not installed. Dashboard charts disabled.")
 
 try:
-    from PIL import Image, ImageTk
-    import barcode
-    from barcode.writer import ImageWriter
+    from PIL import Image, ImageTk  # type: ignore[import-untyped]
+    import barcode  # type: ignore[import-untyped]
+    from barcode.writer import ImageWriter  # type: ignore[import-untyped]
     BARCODE_AVAILABLE = True
 except ImportError:
     BARCODE_AVAILABLE = False
@@ -59,7 +59,7 @@ logger = get_logger()
 class DesktopOrderApp:
     """Main application window."""
     
-    def __init__(self, root: tk.Tk, data_dir: Path = None):
+    def __init__(self, root: tk.Tk, data_dir: Path | None = None):
         """
         Initialize the application.
         
@@ -214,7 +214,7 @@ class DesktopOrderApp:
         ttk.Label(date_frame, text="Data AsOf:").pack(side="left", padx=5)
         self.asof_date_var = tk.StringVar(value=self.asof_date.isoformat())
         if TKCALENDAR_AVAILABLE:
-            DateEntry(
+            DateEntry(  # type: ignore[misc]
                 date_frame,
                 textvariable=self.asof_date_var,
                 width=12,
@@ -670,7 +670,7 @@ class DesktopOrderApp:
             weekly_totals.append(total_sold)
         
         # Create bar chart with color gradient
-        colors = plt.cm.viridis(np.linspace(0.3, 0.9, len(weekly_totals)))
+        colors = plt.cm.viridis(np.linspace(0.3, 0.9, len(weekly_totals)))  # type: ignore[attr-defined]
         bars = self.weekly_sales_ax.bar(range(len(weekly_labels)), weekly_totals, color=colors, width=0.7)
         self.weekly_sales_ax.set_xticks(range(len(weekly_labels)))
         self.weekly_sales_ax.set_xticklabels(weekly_labels, rotation=0)
@@ -1297,14 +1297,14 @@ class DesktopOrderApp:
                             
                             if not existing_override:
                                 # Write sales record for estimated lost sales
-                                self.csv_layer.write_sales(
-                                    date_str=estimate_date.isoformat(),
+                                from ..domain.models import SalesRecord
+                                new_sale = SalesRecord(
+                                    date=estimate_date,
                                     sku=sku_id,
-                                    qty=estimate_pz,
+                                    qty_sold=estimate_pz
                                 )
-                                sales_records.append(
-                                    type('SalesRecord', (), {'sku': sku_id, 'date': estimate_date, 'qty_sold': estimate_pz})()
-                                )
+                                self.csv_layer.write_sales([new_sale])
+                                sales_records.append(new_sale)
                                 
                                 # Write WASTE event with special note to mark this day as non-OOS
                                 # WASTE qty=0 is just a marker, doesn't change stock
@@ -1463,7 +1463,7 @@ class DesktopOrderApp:
         date_row.pack(fill="x", pady=(0, 5))
         ttk.Label(date_row, text="Data:", width=15).pack(side="left")
         if TKCALENDAR_AVAILABLE:
-            DateEntry(
+            DateEntry(  # type: ignore[misc]
                 date_row,
                 textvariable=estimate_date_var,
                 width=12,
@@ -1847,7 +1847,7 @@ class DesktopOrderApp:
                                 barcode_img = self._generate_barcode_image(ean)
                                 if barcode_img:
                                     barcode_label = ttk.Label(right_frame, image=barcode_img)
-                                    barcode_label.image = barcode_img  # Keep reference
+                                    barcode_label.image = barcode_img  # type: ignore[attr-defined] # Keep reference
                                     barcode_label.pack(anchor="center")
                             except Exception as e:
                                 ttk.Label(right_frame, text=f"Errore barcode: {str(e)}", foreground="red").pack(anchor="center")
@@ -2131,7 +2131,8 @@ class DesktopOrderApp:
         
         # Display rows: one per (SKU, receipt_date) with ledger on_order as pending qty
         for (sku, receipt_date_str), group_data in order_groups.items():
-            description = skus_by_id.get(sku).description if sku in skus_by_id else "N/A"
+            sku_obj = skus_by_id.get(sku)
+            description = sku_obj.description if sku_obj else "N/A"
             qty_ordered_total = group_data["qty_ordered_total"]
             order_ids_str = ", ".join(group_data["order_ids"])
             
@@ -2181,10 +2182,10 @@ class DesktopOrderApp:
         pending_qty = values[5]
         
         # Dialog per inserire nuova quantità
-        new_qty = tk.simpledialog.askinteger(
+        new_qty = simpledialog.askinteger(
             "Modifica Quantità Ricevuta",
             f"SKU: {values[1]}\nInserisci quantità ricevuta:",
-            initialvalue=current_qty_received,
+            initialvalue=int(current_qty_received) if current_qty_received else 0,
             minvalue=0,
             parent=self.root,
         )
@@ -2194,8 +2195,8 @@ class DesktopOrderApp:
         
         # Aggiorna valore nel treeview
         new_values = list(values)
-        new_values[4] = new_qty
-        new_values[5] = max(0, values[3] - new_qty)  # Ricalcola pending
+        new_values[4] = str(new_qty)
+        new_values[5] = str(max(0, int(values[3]) - new_qty))  # Ricalcola pending
         self.pending_treeview.item(item_id, values=new_values, tags=("edited",))
         
         # Salva in memoria
@@ -2283,7 +2284,7 @@ class DesktopOrderApp:
         transactions = self.csv_layer.read_transactions()
         notes_by_receipt = {}
         for txn in transactions:
-            if txn.event == EventType.RECEIPT and "Receipt" in txn.note:
+            if txn.event == EventType.RECEIPT and txn.note and "Receipt" in txn.note:
                 # Extract receipt_id from note
                 parts = txn.note.split(";")
                 if len(parts) >= 1 and "Receipt" in parts[0]:
@@ -2446,7 +2447,7 @@ class DesktopOrderApp:
         ttk.Label(form_frame, text="Data: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=1, column=2, sticky="e", padx=(20, 8), pady=8)
         self.exception_date_var = tk.StringVar(value=self.exception_date.isoformat())
         if TKCALENDAR_AVAILABLE:
-            DateEntry(
+            DateEntry(  # type: ignore[misc]
                 form_frame,
                 textvariable=self.exception_date_var,
                 width=12,
@@ -2484,7 +2485,7 @@ class DesktopOrderApp:
         ttk.Label(toolbar_frame, text="Visualizza Data:", font=("Helvetica", 9)).pack(side="left", padx=(0, 5))
         self.exception_view_date_var = tk.StringVar(value=self.exception_date.isoformat())
         if TKCALENDAR_AVAILABLE:
-            DateEntry(
+            DateEntry(  # type: ignore[misc]
                 toolbar_frame,
                 textvariable=self.exception_view_date_var,
                 width=12,
@@ -2595,15 +2596,15 @@ class DesktopOrderApp:
             self.exception_sku_listbox.bind('<Return>', self._on_sku_select)
         
         # Aggiorna items
-        self.exception_sku_listbox.delete(0, tk.END)
+        self.exception_sku_listbox.delete(0, tk.END)  # type: ignore[union-attr]
         for item in items:
-            self.exception_sku_listbox.insert(tk.END, item)
+            self.exception_sku_listbox.insert(tk.END, item)  # type: ignore[union-attr]
         
         # Seleziona primo item
         if items:
-            self.exception_sku_listbox.selection_clear(0, tk.END)
-            self.exception_sku_listbox.selection_set(0)
-            self.exception_sku_listbox.activate(0)
+            self.exception_sku_listbox.selection_clear(0, tk.END)  # type: ignore[union-attr]
+            self.exception_sku_listbox.selection_set(0)  # type: ignore[union-attr]
+            self.exception_sku_listbox.activate(0)  # type: ignore[union-attr]
         
         # Posiziona popup sotto l'entry
         x = self.exception_sku_entry.winfo_rootx()
@@ -2670,9 +2671,9 @@ class DesktopOrderApp:
     def _on_sku_listbox_click(self, event):
         """Gestisci click sulla listbox."""
         # Trova item cliccato
-        index = self.exception_sku_listbox.nearest(event.y)
+        index = self.exception_sku_listbox.nearest(event.y)  # type: ignore[union-attr]
         if index >= 0:
-            selected_text = self.exception_sku_listbox.get(index)
+            selected_text = self.exception_sku_listbox.get(index)  # type: ignore[union-attr]
             self.exception_sku_var.set(selected_text)
             self._hide_sku_popup()
             self.exception_sku_entry.focus_set()
@@ -2907,7 +2908,7 @@ class DesktopOrderApp:
             reverted_count = self.exception_workflow.revert_exception_day(
                 event_date=event_date,
                 sku=sku,
-                event_type=event_type,
+                event_type=event_type,  # type: ignore
             )
             
             if reverted_count > 0:
@@ -2964,7 +2965,7 @@ class DesktopOrderApp:
         ttk.Label(form_frame, text="Date:", font=("Helvetica", 10)).pack(anchor="w", pady=(0, 5))
         bulk_date_var = tk.StringVar(value=self.exception_view_date_var.get())
         if TKCALENDAR_AVAILABLE:
-            DateEntry(
+            DateEntry(  # type: ignore[misc]
                 form_frame,
                 textvariable=bulk_date_var,
                 width=28,
@@ -3013,7 +3014,7 @@ class DesktopOrderApp:
                 reverted_count = self.exception_workflow.revert_exception_day(
                     event_date=event_date,
                     sku=sku,
-                    event_type=event_type,
+                    event_type=event_type,  # type: ignore[arg-type]
                 )
                 
                 messagebox.showinfo(
@@ -3331,11 +3332,11 @@ class DesktopOrderApp:
                 widget = ttk.Entry(row_frame, textvariable=value_var, width=40)
                 widget.grid(row=0, column=1, rowspan=2 if description else 1, sticky="ew", padx=(10, 0))
             elif widget_type == "combobox":
-                widget = ttk.Combobox(row_frame, textvariable=value_var, values=choices, state="readonly", width=37)
+                widget = ttk.Combobox(row_frame, textvariable=value_var, values=choices, state="readonly", width=37)  # type: ignore[arg-type]
                 widget.grid(row=0, column=1, rowspan=2 if description else 1, sticky="ew", padx=(10, 0))
             elif widget_type == "autocomplete":
                 widget = kwargs.get("autocomplete_widget")
-                widget.entry.grid(row=0, column=1, rowspan=2 if description else 1, sticky="ew", padx=(10, 0))
+                widget.entry.grid(row=0, column=1, rowspan=2 if description else 1, sticky="ew", padx=(10, 0))  # type: ignore[union-attr]
             
             # Store for search
             field_rows.append({
@@ -3509,9 +3510,9 @@ class DesktopOrderApp:
         
         # Focus on first field
         if mode == "new":
-            sku_entry.focus()
+            sku_entry.focus()  # type: ignore[union-attr]
         else:
-            desc_entry.focus()
+            desc_entry.focus()  # type: ignore[union-attr]
     
     def _validate_ean_field(self, ean: str, status_var: tk.StringVar):
         """Validate EAN and update status label."""
@@ -3942,7 +3943,7 @@ class DesktopOrderApp:
             "Inserisci Stock EOD",
             f"SKU: {sku}\nDisponibile corrente: {on_hand}\n\nInserisci stock a fine giornata:",
             minvalue=0,
-            initialvalue=on_hand if on_hand else 0,
+            initialvalue=int(on_hand) if on_hand else 0,
         )
         
         if new_eod_stock is None:
@@ -4891,7 +4892,7 @@ class DesktopOrderApp:
         """Handle mouse press on tab for drag-and-drop reordering."""
         # Check if click is on a tab
         try:
-            clicked = self.notebook.tk.call(self.notebook._w, "identify", "tab", event.x, event.y)
+            clicked = self.notebook.tk.call(self.notebook._w, "identify", "tab", event.x, event.y)  # type: ignore[attr-defined]
             if clicked != "":
                 self.drag_tab_index = int(clicked)
                 self.drag_start_x = event.x
@@ -4913,7 +4914,7 @@ class DesktopOrderApp:
         
         # Find which tab position the mouse is over
         try:
-            target = self.notebook.tk.call(self.notebook._w, "identify", "tab", event.x, event.y)
+            target = self.notebook.tk.call(self.notebook._w, "identify", "tab", event.x, event.y)  # type: ignore[attr-defined]
             if target != "":
                 target_index = int(target)
                 
