@@ -606,17 +606,22 @@ def calculate_daily_sales_average(
     - OOS_ESTIMATE_OVERRIDE markers: Days with WASTE(qty=0) + note "OOS_ESTIMATE_OVERRIDE:{date}"
       are excluded from OOS detection (allows manual lost sales entry for OOS days)
     
+    NEW BEHAVIOR (2026-02-09):
+    - Excludes periods when SKU was OUT OF ASSORTMENT from average calculation
+    - Uses ASSORTMENT_OUT/ASSORTMENT_IN events in ledger to identify excluded periods
+    - Prevents "contamination" of forecast when SKU sells residual stock while discontinued
+    
     Args:
         sales_records: List of SalesRecord objects
         sku: SKU identifier
         days_lookback: Number of calendar days to look back (default: 30)
-        transactions: List of Transaction objects (for OOS detection + override markers)
+        transactions: List of Transaction objects (for OOS detection + override markers + assortment tracking)
         asof_date: As-of date for calculation (defaults to today)
         oos_detection_mode: "strict" (on_hand==0) or "relaxed" (on_hand+on_order==0)
     
     Returns:
         Tuple (avg_daily_sales, oos_days_count):
-        - avg_daily_sales: Average daily sales qty (excluding OOS days)
+        - avg_daily_sales: Average daily sales qty (excluding OOS days + out-of-assortment periods)
         - oos_days_count: Number of OOS days detected (after override exclusions)
     
     Example:
@@ -626,6 +631,7 @@ def calculate_daily_sales_average(
         # oos_count = 2  (only non-override OOS days)
     """
     from ..domain.ledger import StockCalculator
+    from ..domain.models import EventType
     
     if asof_date is None:
         asof_date = date.today()
@@ -639,6 +645,51 @@ def calculate_daily_sales_average(
     # Generate calendar days range
     start_date = asof_date - timedelta(days=days_lookback - 1)
     calendar_days = [start_date + timedelta(days=i) for i in range(days_lookback)]
+    
+    # Build map of out-of-assortment periods from ledger
+    out_of_assortment_days = set()
+    
+    if transactions:
+        # Find all assortment transitions for this SKU
+        assortment_events = [
+            txn for txn in transactions 
+            if txn.sku == sku and txn.event in (EventType.ASSORTMENT_OUT, EventType.ASSORTMENT_IN)
+        ]
+        
+        # Sort by date
+        assortment_events.sort(key=lambda t: t.date)
+        
+        # Build periods: assume SKU starts IN assortment unless first event is ASSORTMENT_IN
+        currently_out = False
+        out_start = None
+        
+        # If first event in history is ASSORTMENT_IN, SKU was initially OUT
+        if assortment_events and assortment_events[0].event == EventType.ASSORTMENT_IN:
+            currently_out = True
+            out_start = start_date  # Entire lookback period starts as OUT
+        
+        for event in assortment_events:
+            if event.event == EventType.ASSORTMENT_OUT:
+                currently_out = True
+                out_start = event.date
+            elif event.event == EventType.ASSORTMENT_IN:
+                if currently_out and out_start:
+                    # Mark all days from out_start to event.date-1 as out of assortment
+                    current = out_start
+                    while current < event.date:
+                        if current in calendar_days:
+                            out_of_assortment_days.add(current)
+                        current += timedelta(days=1)
+                currently_out = False
+                out_start = None
+        
+        # If still out at end of period
+        if currently_out and out_start:
+            current = out_start
+            while current <= asof_date:
+                if current in calendar_days:
+                    out_of_assortment_days.add(current)
+                current += timedelta(days=1)
     
     # Detect OOS days (if transactions provided)
     oos_days = set()
@@ -666,13 +717,15 @@ def calculate_daily_sales_average(
                 if stock.on_hand + stock.on_order == 0:
                     oos_days.add(day)
     
-    # Calculate average excluding OOS days
+    # Calculate average excluding OOS days AND out-of-assortment days
     total_sales = 0
     valid_days = 0
     
     for day in calendar_days:
         if day in oos_days:
             continue  # Skip OOS days
+        if day in out_of_assortment_days:
+            continue  # Skip out-of-assortment days
         
         # Include day with sales qty (or zero if no sales)
         total_sales += sku_sales_map.get(day, 0)

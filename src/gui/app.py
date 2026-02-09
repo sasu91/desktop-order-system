@@ -1214,6 +1214,9 @@ class DesktopOrderApp:
         sku_ids = self.csv_layer.get_all_sku_ids()
         skus_by_id = {sku.sku: sku for sku in self.csv_layer.read_skus()}
         
+        # Filter: only SKUs in assortment
+        sku_ids = [sku_id for sku_id in sku_ids if skus_by_id.get(sku_id, SKU(sku="", description="")).in_assortment]
+        
         # Read transactions and sales
         transactions = self.csv_layer.read_transactions()
         sales_records = self.csv_layer.read_sales()
@@ -3069,6 +3072,15 @@ class DesktopOrderApp:
         ttk.Button(toolbar_frame, text="🗑️ Elimina SKU", command=self._delete_sku).pack(side="left", padx=5)
         ttk.Button(toolbar_frame, text="🔄 Aggiorna", command=self._refresh_admin_tab).pack(side="left", padx=5)
         
+        # Toggle for showing out-of-assortment SKUs
+        self.show_out_of_assortment_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            toolbar_frame, 
+            text="Mostra fuori assortimento", 
+            variable=self.show_out_of_assortment_var,
+            command=self._refresh_admin_tab
+        ).pack(side="left", padx=20)
+        
         # SKU table
         table_frame = ttk.Frame(main_frame)
         table_frame.pack(fill="both", expand=True)
@@ -3079,7 +3091,7 @@ class DesktopOrderApp:
         
         self.admin_treeview = ttk.Treeview(
             table_frame,
-            columns=("SKU", "Description", "EAN"),
+            columns=("SKU", "Description", "EAN", "Status"),
             height=20,
             yscrollcommand=scrollbar.set,
         )
@@ -3087,12 +3099,14 @@ class DesktopOrderApp:
         
         self.admin_treeview.column("#0", width=0, stretch=tk.NO)
         self.admin_treeview.column("SKU", anchor=tk.W, width=120)
-        self.admin_treeview.column("Description", anchor=tk.W, width=400)
-        self.admin_treeview.column("EAN", anchor=tk.W, width=150)
+        self.admin_treeview.column("Description", anchor=tk.W, width=350)
+        self.admin_treeview.column("EAN", anchor=tk.W, width=130)
+        self.admin_treeview.column("Status", anchor=tk.CENTER, width=120)
         
         self.admin_treeview.heading("SKU", text="Codice SKU", anchor=tk.W)
         self.admin_treeview.heading("Description", text="Descrizione", anchor=tk.W)
         self.admin_treeview.heading("EAN", text="EAN", anchor=tk.W)
+        self.admin_treeview.heading("Status", text="Stato", anchor=tk.CENTER)
         
         self.admin_treeview.pack(fill="both", expand=True)
         
@@ -3100,28 +3114,42 @@ class DesktopOrderApp:
         self.admin_treeview.bind("<Double-1>", lambda e: self._edit_sku())
     
     def _refresh_admin_tab(self):
-        """Refresh SKU table with all SKUs."""
+        """Refresh SKU table with all SKUs (filtered by assortment toggle)."""
         self.admin_treeview.delete(*self.admin_treeview.get_children())
         
         skus = self.csv_layer.read_skus()
+        show_out = self.show_out_of_assortment_var.get()
+        
         for sku in skus:
+            # Filter by assortment status
+            if not show_out and not sku.in_assortment:
+                continue
+            
+            status = "In assortimento" if sku.in_assortment else "Fuori assortimento"
             self.admin_treeview.insert(
                 "",
                 "end",
-                values=(sku.sku, sku.description, sku.ean or ""),
+                values=(sku.sku, sku.description, sku.ean or "", status),
             )
     
     def _search_skus(self):
-        """Search SKUs by code or description."""
+        """Search SKUs by code or description (respects assortment filter)."""
         query = self.search_var.get()
         self.admin_treeview.delete(*self.admin_treeview.get_children())
         
         skus = self.csv_layer.search_skus(query)
+        show_out = self.show_out_of_assortment_var.get()
+        
         for sku in skus:
+            # Filter by assortment status
+            if not show_out and not sku.in_assortment:
+                continue
+            
+            status = "In assortimento" if sku.in_assortment else "Fuori assortimento"
             self.admin_treeview.insert(
                 "",
                 "end",
-                values=(sku.sku, sku.description, sku.ean or ""),
+                values=(sku.sku, sku.description, sku.ean or "", status),
             )
     
     def _clear_search(self):
@@ -3367,6 +3395,16 @@ class DesktopOrderApp:
         ean_status_label = ttk.Label(ean_validate_frame, textvariable=ean_status_var, foreground="green")
         ean_status_label.pack(side="left")
         
+        # In Assortment checkbox
+        in_assortment_var = tk.BooleanVar(value=current_sku.in_assortment if current_sku else True)
+        assortment_frame = ttk.Frame(content_basic)
+        assortment_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=5)
+        ttk.Checkbutton(
+            assortment_frame,
+            text="In assortimento (attivo per proposte d'ordine)",
+            variable=in_assortment_var
+        ).pack(side="left", padx=(0, 10))
+        
         # ===== SECTION 2: Ordine & Stock =====
         section_order = CollapsibleFrame(form_frame, title="📦 Ordine & Stock", expanded=False)
         section_order.pack(fill="x", pady=5)
@@ -3462,6 +3500,7 @@ class DesktopOrderApp:
                 forecast_method_var.get(), mc_distribution_var.get(), mc_n_sims_var.get(),
                 mc_seed_var.get(), mc_output_stat_var.get(), mc_percentile_var.get(),
                 mc_horizon_mode_var.get(), mc_horizon_days_var.get(),
+                in_assortment_var.get(),
                 current_sku
             ),
         ).pack(side="right", padx=5)
@@ -3494,6 +3533,7 @@ class DesktopOrderApp:
                         forecast_method_str, mc_distribution_str, mc_n_sims_str,
                         mc_seed_str, mc_output_stat_str, mc_percentile_str,
                         mc_horizon_mode_str, mc_horizon_days_str,
+                        in_assortment,
                         current_sku):
         """Save SKU from form."""
         # Validate inputs
@@ -3655,6 +3695,7 @@ class DesktopOrderApp:
                     mc_output_percentile=mc_output_percentile,
                     mc_horizon_mode=mc_horizon_mode,
                     mc_horizon_days=mc_horizon_days,
+                    in_assortment=in_assortment,
                 )
                 self.csv_layer.write_sku(new_sku)
                 
@@ -3677,7 +3718,8 @@ class DesktopOrderApp:
                     demand_variability, oos_boost_percent, oos_detection_mode,
                     oos_popup_preference,
                     forecast_method, mc_distribution, mc_n_simulations, mc_random_seed,
-                    mc_output_stat, mc_output_percentile, mc_horizon_mode, mc_horizon_days
+                    mc_output_stat, mc_output_percentile, mc_horizon_mode, mc_horizon_days,
+                    in_assortment
                 )
                 if success:
                     # Build change details

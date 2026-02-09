@@ -21,6 +21,8 @@ class EventType(Enum):
     UNFULFILLED = "UNFULFILLED"  # Tracking only (no impact on stock)
     SKU_EDIT = "SKU_EDIT"      # SKU metadata change (description/EAN) - no stock impact
     EXPORT_LOG = "EXPORT_LOG"  # Export operation log - no stock impact
+    ASSORTMENT_IN = "ASSORTMENT_IN"    # SKU back in assortment - no stock impact, affects forecast
+    ASSORTMENT_OUT = "ASSORTMENT_OUT"  # SKU out of assortment - no stock impact, affects forecast
 
 
 class DemandVariability(Enum):
@@ -63,6 +65,9 @@ class SKU:
     mc_output_percentile: int = 0  # Percentile value 50-99 (0 = use global)
     mc_horizon_mode: str = ""  # "auto", "custom", or "" (use global)
     mc_horizon_days: int = 0  # Custom horizon days (0 = use global)
+    
+    # Assortment status
+    in_assortment: bool = True  # True = in assortment (active), False = out of assortment (discontinued)
     
     def __post_init__(self):
         if not self.sku or not self.sku.strip():

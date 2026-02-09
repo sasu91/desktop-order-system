@@ -131,6 +131,8 @@ class CSVLayer:
                     mc_output_percentile=int(row.get("mc_output_percentile", "0")),
                     mc_horizon_mode=row.get("mc_horizon_mode", "").strip(),
                     mc_horizon_days=int(row.get("mc_horizon_days", "0")),
+                    # Assortment status (backward-compatible: missing → True)
+                    in_assortment=row.get("in_assortment", "true").strip().lower() in ("true", "1", "yes", "t"),
                 )
                 skus.append(sku)
             except (ValueError, KeyError) as e:
@@ -251,6 +253,7 @@ class CSVLayer:
             "mc_output_percentile": str(final_sku.mc_output_percentile),
             "mc_horizon_mode": final_sku.mc_horizon_mode,
             "mc_horizon_days": str(final_sku.mc_horizon_days),
+            "in_assortment": "true" if final_sku.in_assortment else "false",
         })
         self._write_csv("skus.csv", rows)
     
@@ -309,7 +312,8 @@ class CSVLayer:
         mc_output_stat: str = "",
         mc_output_percentile: int = 0,
         mc_horizon_mode: str = "",
-        mc_horizon_days: int = 0
+        mc_horizon_days: int = 0,
+        in_assortment: bool = True
     ) -> bool:
         """
         Update SKU (code, description, EAN, and parameters).
@@ -367,6 +371,7 @@ class CSVLayer:
         
         rows = self._read_csv("skus.csv")
         updated = False
+        old_in_assortment = None  # Track if assortment status changed
         
         # Normalize all rows to ensure they have all required fields with defaults
         normalized_rows = []
@@ -396,10 +401,14 @@ class CSVLayer:
                 "mc_output_percentile": row.get("mc_output_percentile", "0").strip() or "0",
                 "mc_horizon_mode": row.get("mc_horizon_mode", "").strip(),
                 "mc_horizon_days": row.get("mc_horizon_days", "0").strip() or "0",
+                "in_assortment": row.get("in_assortment", "true").strip() or "true",
             }
             
             # Update the target row with new values
             if normalized_row["sku"] == old_sku_id:
+                # Capture old assortment status before update
+                old_in_assortment = normalized_row["in_assortment"].lower() in ("true", "1", "yes", "t")
+                
                 normalized_row["sku"] = new_sku_id
                 normalized_row["description"] = new_description
                 normalized_row["ean"] = new_ean or ""
@@ -423,6 +432,7 @@ class CSVLayer:
                 normalized_row["mc_output_percentile"] = str(mc_output_percentile)
                 normalized_row["mc_horizon_mode"] = mc_horizon_mode
                 normalized_row["mc_horizon_days"] = str(mc_horizon_days)
+                normalized_row["in_assortment"] = "true" if in_assortment else "false"
                 updated = True
             
             normalized_rows.append(normalized_row)
@@ -431,6 +441,22 @@ class CSVLayer:
             return False
         
         self._write_csv("skus.csv", normalized_rows)
+        
+        # Log assortment status change in ledger
+        if old_in_assortment is not None and old_in_assortment != in_assortment:
+            from datetime import date as dt_date
+            from ..domain.models import Transaction, EventType
+            
+            event = EventType.ASSORTMENT_IN if in_assortment else EventType.ASSORTMENT_OUT
+            txn = Transaction(
+                date=dt_date.today(),
+                sku=new_sku_id,  # Use new SKU code if changed
+                event=event,
+                qty=0,  # No stock impact
+                receipt_date=None,
+                note=f"Assortment status changed: {'IN' if in_assortment else 'OUT'}"
+            )
+            self.write_transaction(txn)
         
         # If SKU code changed, update all ledger references
         if old_sku_id != new_sku_id:
