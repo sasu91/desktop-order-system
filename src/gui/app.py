@@ -1216,7 +1216,7 @@ class DesktopOrderApp:
         skus_by_id = {sku.sku: sku for sku in self.csv_layer.read_skus()}
         
         # Filter: only SKUs in assortment
-        sku_ids = [sku_id for sku_id in sku_ids if skus_by_id.get(sku_id, SKU(sku="", description="")).in_assortment]
+        sku_ids = [sku_id for sku_id in sku_ids if sku_id in skus_by_id and skus_by_id[sku_id].in_assortment]
         
         # Read transactions and sales
         transactions = self.csv_layer.read_transactions()
