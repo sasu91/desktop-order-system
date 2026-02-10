@@ -38,12 +38,24 @@
     },
     "oos_detection_mode": {
       "value": "strict",
-      "description": "Modalit\u00e0 rilevamento OOS: strict (on_hand=0) o relaxed (on_hand+on_order=0)"
+      "description": "Modalità rilevamento OOS: strict (on_hand=0) o relaxed (on_hand+on_order=0)"
     },
     "forecast_method": {
       "value": "simple",
       "auto_apply_to_new_sku": true,
       "description": "Metodo forecast globale: simple (level+DOW) o monte_carlo"
+    },
+    "pack_size": {
+      "value": 1,
+      "auto_apply_to_new_sku": true
+    },
+    "review_period": {
+      "value": 7,
+      "auto_apply_to_new_sku": true
+    },
+    "safety_stock": {
+      "value": 0,
+      "auto_apply_to_new_sku": true
     }
   },
   "monte_carlo": {
@@ -60,7 +72,7 @@
     "random_seed": {
       "value": 42,
       "auto_apply_to_new_sku": true,
-      "description": "Seed deterministico per riproducibilit\u00e0 (0 = random)"
+      "description": "Seed deterministico per riproducibilità (0 = random)"
     },
     "output_stat": {
       "value": "mean",
@@ -91,7 +103,7 @@
   "auto_variability": {
     "enabled": {
       "value": true,
-      "description": "Abilita classificazione automatica variabilit\u00e0 domanda"
+      "description": "Abilita classificazione automatica variabilità domanda"
     },
     "min_observations": {
       "value": 30,
@@ -112,6 +124,22 @@
     "fallback_category": {
       "value": "LOW",
       "description": "Categoria di default se dati insufficienti (LOW, STABLE, SEASONAL, HIGH)"
+    }
+  },
+  "expiry_alerts": {
+    "critical_threshold_days": {
+      "value": 7,
+      "description": "Giorni scadenza per stato CRITICO (arancione)"
+    },
+    "warning_threshold_days": {
+      "value": 14,
+      "description": "Giorni scadenza per stato ATTENZIONE (giallo)"
+    }
+  },
+  "dashboard": {
+    "stock_unit_price": {
+      "value": 10,
+      "description": "Prezzo unitario medio per calcolo valore stock"
     }
   }
 }

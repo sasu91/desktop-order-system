@@ -76,6 +76,11 @@ class DesktopOrderApp:
             # Initialize CSV layer
             self.csv_layer = CSVLayer(data_dir=data_dir)
             
+            # Load expiry thresholds from settings
+            settings = self.csv_layer.read_settings()
+            self.expiry_critical_days = settings.get("expiry_alerts", {}).get("critical_threshold_days", {}).get("value", 7)
+            self.expiry_warning_days = settings.get("expiry_alerts", {}).get("warning_threshold_days", {}).get("value", 14)
+            
             # Initialize workflows
             self.order_workflow = OrderWorkflow(self.csv_layer, lead_time_days=7)
             self.receiving_workflow = ReceivingWorkflow(self.csv_layer)
@@ -3253,11 +3258,11 @@ class DesktopOrderApp:
             description = sku_obj.description if sku_obj else "N/A"
             days_left = lot.days_until_expiry(date.today())
             
-            # Status based on days left
-            if days_left <= 7:
+            # Status based on days left (use configurable thresholds)
+            if days_left <= self.expiry_critical_days:
                 status = "🔴 CRITICO"
                 tag = "critical"
-            elif days_left <= 14:
+            elif days_left <= self.expiry_warning_days:
                 status = "🟡 ATTENZIONE"
                 tag = "warning"
             else:
@@ -4956,7 +4961,38 @@ class DesktopOrderApp:
         
         self._create_param_rows(section_mc.get_content_frame(), mc_params, "monte_carlo")
         
-        # ===== SECTION 4: Dashboard =====
+        # ===== SECTION 4: Expiry Alerts =====
+        section_expiry = CollapsibleFrame(scrollable_frame, title="⏰ Soglie Alert Scadenze", expanded=False)
+        section_expiry.pack(fill="x", pady=5)
+        
+        expiry_auto_frame = ttk.Frame(section_expiry.get_content_frame())
+        expiry_auto_frame.pack(fill="x", pady=(0, 10))
+        expiry_auto_var = tk.BooleanVar(value=False)  # Not auto-applied to SKU
+        ttk.Label(expiry_auto_frame, text="ℹ️ Impostazioni globali per color-coding lotti in scadenza", font=("Helvetica", 9, "italic"), foreground="gray").pack(anchor="w")
+        self.settings_section_widgets["expiry_alerts"] = expiry_auto_var
+        
+        expiry_params = [
+            {
+                "key": "expiry_critical_threshold_days",
+                "label": "🔴 Giorni CRITICO (arancione)",
+                "description": "Giorni alla scadenza per stato CRITICO (arancione)",
+                "type": "int",
+                "min": 1,
+                "max": 30
+            },
+            {
+                "key": "expiry_warning_threshold_days",
+                "label": "🟡 Giorni ATTENZIONE (giallo)",
+                "description": "Giorni alla scadenza per stato ATTENZIONE (giallo)",
+                "type": "int",
+                "min": 1,
+                "max": 60
+            }
+        ]
+        
+        self._create_param_rows(section_expiry.get_content_frame(), expiry_params, "expiry_alerts")
+        
+        # ===== SECTION 5: Dashboard =====
         section_dashboard = CollapsibleFrame(scrollable_frame, title="📊 Dashboard", expanded=False)
         section_dashboard.pack(fill="x", pady=5)
         
@@ -5037,6 +5073,8 @@ class DesktopOrderApp:
                 "mc_horizon_mode": ("monte_carlo", "horizon_mode"),
                 "mc_horizon_days": ("monte_carlo", "horizon_days"),
                 "mc_show_comparison": ("monte_carlo", "show_comparison"),
+                "expiry_critical_threshold_days": ("expiry_alerts", "critical_threshold_days"),
+                "expiry_warning_threshold_days": ("expiry_alerts", "warning_threshold_days"),
                 "stock_unit_price": ("dashboard", "stock_unit_price"),
             }
             
@@ -5094,6 +5132,8 @@ class DesktopOrderApp:
                 "mc_horizon_mode": ("monte_carlo", "horizon_mode"),
                 "mc_horizon_days": ("monte_carlo", "horizon_days"),
                 "mc_show_comparison": ("monte_carlo", "show_comparison"),
+                "expiry_critical_threshold_days": ("expiry_alerts", "critical_threshold_days"),
+                "expiry_warning_threshold_days": ("expiry_alerts", "warning_threshold_days"),
                 "stock_unit_price": ("dashboard", "stock_unit_price"),
             }
             
@@ -5121,6 +5161,13 @@ class DesktopOrderApp:
             # Update OrderWorkflow lead_time if changed
             lead_time = settings["reorder_engine"]["lead_time_days"]["value"]
             self.order_workflow = OrderWorkflow(self.csv_layer, lead_time_days=lead_time)
+            
+            # Update expiry thresholds if changed
+            self.expiry_critical_days = settings.get("expiry_alerts", {}).get("critical_threshold_days", {}).get("value", 7)
+            self.expiry_warning_days = settings.get("expiry_alerts", {}).get("warning_threshold_days", {}).get("value", 14)
+            
+            # Refresh expiry tab with new thresholds
+            self._refresh_expiry_alerts()
             
             messagebox.showinfo("Successo", "Impostazioni salvate correttamente!")
             
