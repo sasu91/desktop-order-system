@@ -136,6 +136,61 @@
       "description": "Giorni scadenza per stato ATTENZIONE (giallo)"
     }
   },
+  "shelf_life_policy": {
+    "enabled": {
+      "value": true,
+      "description": "Abilita integrazione shelf life nel motore riordino"
+    },
+    "min_shelf_life_global": {
+      "value": 7,
+      "auto_apply_to_new_sku": false,
+      "description": "Giorni shelf life residua minima per vendita (globale, 0 = no constraint)"
+    },
+    "waste_penalty_mode": {
+      "value": "soft",
+      "auto_apply_to_new_sku": false,
+      "description": "Modalità penalty per waste risk: soft (riduzione qty), hard (blocco ordine)"
+    },
+    "waste_penalty_factor": {
+      "value": 0.5,
+      "auto_apply_to_new_sku": false,
+      "description": "Fattore riduzione quantità in soft penalty (0.0-1.0, 0.5 = -50%)"
+    },
+    "waste_risk_threshold": {
+      "value": 15.0,
+      "auto_apply_to_new_sku": false,
+      "description": "Soglia waste risk % per attivare penalty (0-100)"
+    },
+    "waste_horizon_days": {
+      "value": 21,
+      "description": "Orizzonte giorni per calcolo waste risk (lead time + buffer)"
+    },
+    "category_overrides": {
+      "value": {
+        "STABLE": {
+          "min_shelf_life_days": 7,
+          "waste_penalty_factor": 0.3,
+          "waste_risk_threshold": 20.0
+        },
+        "LOW": {
+          "min_shelf_life_days": 5,
+          "waste_penalty_factor": 0.5,
+          "waste_risk_threshold": 15.0
+        },
+        "HIGH": {
+          "min_shelf_life_days": 10,
+          "waste_penalty_factor": 0.7,
+          "waste_risk_threshold": 10.0
+        },
+        "SEASONAL": {
+          "min_shelf_life_days": 7,
+          "waste_penalty_factor": 0.6,
+          "waste_risk_threshold": 12.0
+        }
+      },
+      "description": "Override parametri per categoria demand_variability"
+    }
+  },
   "dashboard": {
     "stock_unit_price": {
       "value": 10,

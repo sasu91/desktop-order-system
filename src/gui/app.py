@@ -937,7 +937,7 @@ class DesktopOrderApp:
         
         self.proposal_treeview = ttk.Treeview(
             proposal_frame,
-            columns=("SKU", "Description", "Pack Size", "Colli Proposti", "Pezzi Proposti", "MC Comparison", "Receipt Date"),
+            columns=("SKU", "Description", "Pack Size", "Usable Stock", "Waste Risk %", "Colli Proposti", "Pezzi Proposti", "Shelf Penalty", "MC Comparison", "Receipt Date"),
             height=10,
             yscrollcommand=scrollbar.set,
         )
@@ -945,18 +945,24 @@ class DesktopOrderApp:
         
         self.proposal_treeview.column("#0", width=0, stretch=tk.NO)
         self.proposal_treeview.column("SKU", anchor=tk.W, width=100)
-        self.proposal_treeview.column("Description", anchor=tk.W, width=220)
-        self.proposal_treeview.column("Pack Size", anchor=tk.CENTER, width=80)
-        self.proposal_treeview.column("Colli Proposti", anchor=tk.CENTER, width=110)
-        self.proposal_treeview.column("Pezzi Proposti", anchor=tk.CENTER, width=110)
+        self.proposal_treeview.column("Description", anchor=tk.W, width=200)
+        self.proposal_treeview.column("Pack Size", anchor=tk.CENTER, width=70)
+        self.proposal_treeview.column("Usable Stock", anchor=tk.CENTER, width=90)
+        self.proposal_treeview.column("Waste Risk %", anchor=tk.CENTER, width=90)
+        self.proposal_treeview.column("Colli Proposti", anchor=tk.CENTER, width=100)
+        self.proposal_treeview.column("Pezzi Proposti", anchor=tk.CENTER, width=100)
+        self.proposal_treeview.column("Shelf Penalty", anchor=tk.CENTER, width=90)
         self.proposal_treeview.column("MC Comparison", anchor=tk.CENTER, width=110)
         self.proposal_treeview.column("Receipt Date", anchor=tk.CENTER, width=120)
         
         self.proposal_treeview.heading("SKU", text="SKU", anchor=tk.W)
         self.proposal_treeview.heading("Description", text="Descrizione", anchor=tk.W)
         self.proposal_treeview.heading("Pack Size", text="Pz/Collo", anchor=tk.CENTER)
+        self.proposal_treeview.heading("Usable Stock", text="Stock Usabile", anchor=tk.CENTER)
+        self.proposal_treeview.heading("Waste Risk %", text="Rischio ♻️", anchor=tk.CENTER)
         self.proposal_treeview.heading("Colli Proposti", text="Colli Proposti", anchor=tk.CENTER)
         self.proposal_treeview.heading("Pezzi Proposti", text="Pezzi Totali", anchor=tk.CENTER)
+        self.proposal_treeview.heading("Shelf Penalty", text="Penalità ⚠️", anchor=tk.CENTER)
         self.proposal_treeview.heading("MC Comparison", text="📊 MC Info", anchor=tk.CENTER)
         self.proposal_treeview.heading("Receipt Date", text="Data Ricevimento", anchor=tk.CENTER)
         
@@ -1064,11 +1070,20 @@ class DesktopOrderApp:
         # Inventory Position
         details.append("═══ INVENTORY POSITION (IP) ═══")
         details.append(f"On Hand: {to_colli(proposal.current_on_hand, pack_size)}")
+        if proposal.usable_stock < proposal.current_on_hand:
+            # Show shelf life impact on stock
+            details.append(f"  Stock usabile (shelf life OK): {to_colli(proposal.usable_stock, pack_size)}")
+            details.append(f"  Stock inutilizzabile (scaduto): {to_colli(proposal.unusable_stock, pack_size)}")
+            if proposal.waste_risk_percent > 0:
+                details.append(f"  Rischio spreco: {proposal.waste_risk_percent:.1f}%")
         details.append(f"On Order: {to_colli(proposal.current_on_order, pack_size)}")
         if proposal.unfulfilled_qty > 0:
             details.append(f"Unfulfilled (backorder): {to_colli(proposal.unfulfilled_qty, pack_size)}")
-        details.append(f"IP = on_hand + on_order - unfulfilled")
+        ip_formula = "IP = usable_stock + on_order - unfulfilled" if proposal.usable_stock < proposal.current_on_hand else "IP = on_hand + on_order - unfulfilled"
+        details.append(ip_formula)
         details.append(f"IP = {to_colli(proposal.inventory_position, pack_size)}")
+        if proposal.shelf_life_penalty_applied:
+            details.append(f"⚠️ PENALTY SHELF LIFE: {proposal.shelf_life_penalty_message}")
         details.append("")
         
         # Proposed Qty
@@ -1573,6 +1588,11 @@ class DesktopOrderApp:
                 stat_label = f"P{proposal.mc_output_percentile}" if proposal.mc_output_stat == "percentile" else "Media"
                 mc_comparison_display = f"Confronto: {stat_label} ({proposal.mc_comparison_qty} pz)"
             
+            # Shelf life columns
+            usable_stock_display = f"{proposal.usable_stock}/{proposal.current_on_hand}" if proposal.usable_stock < proposal.current_on_hand else str(proposal.current_on_hand)
+            waste_risk_display = f"{proposal.waste_risk_percent:.1f}%" if proposal.waste_risk_percent > 0 else ""
+            shelf_penalty_display = proposal.shelf_life_penalty_message if proposal.shelf_life_penalty_applied else ""
+            
             self.proposal_treeview.insert(
                 "",
                 "end",
@@ -1580,8 +1600,11 @@ class DesktopOrderApp:
                     proposal.sku,
                     proposal.description,
                     pack_size,
+                    usable_stock_display,
+                    waste_risk_display,
                     colli_proposti,
                     proposal.proposed_qty,
+                    shelf_penalty_display,
                     mc_comparison_display,
                     proposal.receipt_date.isoformat() if proposal.receipt_date else "",
                 ),
@@ -3742,6 +3765,23 @@ class DesktopOrderApp:
         oos_popup_var = tk.StringVar(value=current_sku.oos_popup_preference if current_sku else "ask")
         add_field_row(content_oos, 2, "Popup OOS:", "ask/always_yes/always_no", oos_popup_var, "combobox", choices=["ask", "always_yes", "always_no"])
         
+        # ===== SECTION 4: Shelf Life Policy =====
+        section_shelf_life = CollapsibleFrame(form_frame, title="♻️ Shelf Life & Scadenze", expanded=False)
+        section_shelf_life.pack(fill="x", pady=5)
+        content_shelf_life = section_shelf_life.get_content_frame()
+        
+        min_shelf_life_var = tk.StringVar(value=str(current_sku.min_shelf_life_days) if (current_sku and current_sku.min_shelf_life_days > 0) else "0")
+        add_field_row(content_shelf_life, 0, "Shelf Life Minima (giorni):", "Giorni minimi shelf life accettabile (0=globale)", min_shelf_life_var, "entry")
+        
+        waste_penalty_mode_var = tk.StringVar(value=current_sku.waste_penalty_mode if current_sku else "")
+        add_field_row(content_shelf_life, 1, "Modalità Penalità Spreco:", "soft/hard/vuoto=globale", waste_penalty_mode_var, "combobox", choices=["", "soft", "hard"])
+        
+        waste_penalty_factor_var = tk.StringVar(value=str(current_sku.waste_penalty_factor) if (current_sku and current_sku.waste_penalty_factor > 0) else "0")
+        add_field_row(content_shelf_life, 2, "Fattore Penalità:", "0-1 per % o qty fissa (0=globale)", waste_penalty_factor_var, "entry")
+        
+        waste_risk_threshold_var = tk.StringVar(value=str(current_sku.waste_risk_threshold) if (current_sku and current_sku.waste_risk_threshold > 0) else "0")
+        add_field_row(content_shelf_life, 3, "Soglia Rischio Spreco (%):", "0-100, 0=globale", waste_risk_threshold_var, "entry")
+        
         # ===== SECTION 5: Monte Carlo =====
         section_mc = CollapsibleFrame(form_frame, title="🎲 Forecast Monte Carlo", expanded=False)
         section_mc.pack(fill="x", pady=5)
@@ -3788,6 +3828,8 @@ class DesktopOrderApp:
                 max_stock_var.get(), reorder_point_var.get(), 
                 demand_var.get(), oos_boost_var.get(), oos_mode_var.get(), 
                 oos_popup_var.get(),
+                min_shelf_life_var.get(), waste_penalty_mode_var.get(), 
+                waste_penalty_factor_var.get(), waste_risk_threshold_var.get(),
                 forecast_method_var.get(), mc_distribution_var.get(), mc_n_sims_var.get(),
                 mc_seed_var.get(), mc_output_stat_var.get(), mc_percentile_var.get(),
                 mc_horizon_mode_var.get(), mc_horizon_days_var.get(),
@@ -3821,6 +3863,8 @@ class DesktopOrderApp:
                         safety_stock_str, shelf_life_str, max_stock_str, reorder_point_str,
                         demand_variability_str, oos_boost_str, oos_mode_str, 
                         oos_popup_pref,
+                        min_shelf_life_str, waste_penalty_mode_str, waste_penalty_factor_str, 
+                        waste_risk_threshold_str,
                         forecast_method_str, mc_distribution_str, mc_n_sims_str,
                         mc_seed_str, mc_output_stat_str, mc_percentile_str,
                         mc_horizon_mode_str, mc_horizon_days_str,
@@ -3889,6 +3933,33 @@ class DesktopOrderApp:
         oos_popup_preference = (oos_popup_pref or "ask").strip()
         if oos_popup_preference not in ["ask", "always_yes", "always_no"]:
             messagebox.showerror("Errore di Validazione", "Preferenza popup OOS non valida. Usa: ask, always_yes o always_no.", parent=popup)
+            return
+        
+        # Parse and validate shelf life policy parameters
+        try:
+            min_shelf_life_days = int(min_shelf_life_str)
+            waste_penalty_factor = float(waste_penalty_factor_str)
+            waste_risk_threshold = float(waste_risk_threshold_str)
+        except ValueError:
+            messagebox.showerror("Errore di Validazione", "Parametri shelf life devono essere numeri validi.", parent=popup)
+            return
+        
+        waste_penalty_mode = (waste_penalty_mode_str or "").strip()
+        
+        if min_shelf_life_days < 0 or min_shelf_life_days > 365:
+            messagebox.showerror("Errore di Validazione", "Min Shelf Life deve essere 0 (globale) o 1-365.", parent=popup)
+            return
+        
+        if waste_penalty_mode and waste_penalty_mode not in ["percentage", "fixed_qty"]:
+            messagebox.showerror("Errore di Validazione", "Modalità penalità non valida: usa '' (globale), 'percentage', o 'fixed_qty'.", parent=popup)
+            return
+        
+        if waste_penalty_factor < 0 or waste_penalty_factor > 1:
+            messagebox.showerror("Errore di Validazione", "Fattore penalità deve essere tra 0 e 1.", parent=popup)
+            return
+        
+        if waste_risk_threshold < 0 or waste_risk_threshold > 100:
+            messagebox.showerror("Errore di Validazione", "Soglia rischio spreco deve essere tra 0 e 100.", parent=popup)
             return
         
         # Parse demand variability
@@ -3978,6 +4049,10 @@ class DesktopOrderApp:
                     oos_boost_percent=oos_boost_percent,
                     oos_detection_mode=oos_detection_mode,
                     oos_popup_preference=oos_popup_preference,
+                    min_shelf_life_days=min_shelf_life_days,
+                    waste_penalty_mode=waste_penalty_mode,
+                    waste_penalty_factor=waste_penalty_factor,
+                    waste_risk_threshold=waste_risk_threshold,
                     forecast_method=forecast_method,
                     mc_distribution=mc_distribution,
                     mc_n_simulations=mc_n_simulations,
@@ -4008,6 +4083,8 @@ class DesktopOrderApp:
                     safety_stock, shelf_life_days, max_stock, reorder_point,
                     demand_variability, oos_boost_percent, oos_detection_mode,
                     oos_popup_preference,
+                    min_shelf_life_days, waste_penalty_mode, waste_penalty_factor, 
+                    waste_risk_threshold,
                     forecast_method, mc_distribution, mc_n_simulations, mc_random_seed,
                     mc_output_stat, mc_output_percentile, mc_horizon_mode, mc_horizon_days,
                     in_assortment
@@ -4992,7 +5069,75 @@ class DesktopOrderApp:
         
         self._create_param_rows(section_expiry.get_content_frame(), expiry_params, "expiry_alerts")
         
-        # ===== SECTION 5: Dashboard =====
+        # ===== SECTION 5: Shelf Life Policy =====
+        section_shelf_life = CollapsibleFrame(scrollable_frame, title="♻️ Shelf Life & Gestione Scadenze", expanded=False)
+        section_shelf_life.pack(fill="x", pady=5)
+        
+        shelf_life_auto_frame = ttk.Frame(section_shelf_life.get_content_frame())
+        shelf_life_auto_frame.pack(fill="x", pady=(0, 10))
+        shelf_life_auto_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(shelf_life_auto_frame, text="✓ Auto-applica tutti i parametri di questa sezione ai nuovi SKU", variable=shelf_life_auto_var).pack(anchor="w")
+        self.settings_section_widgets["shelf_life_policy"] = shelf_life_auto_var
+        
+        shelf_life_params = [
+            {
+                "key": "enabled",
+                "label": "🔧 Abilita Shelf Life",
+                "description": "Attiva controllo shelf life nel motore riordino (usa stock usabile invece di on_hand)",
+                "type": "bool"
+            },
+            {
+                "key": "min_shelf_life_global",
+                "label": "Shelf Life Minima Globale (giorni)",
+                "description": "Giorni minimi shelf life accettabile (default per nuovi SKU)",
+                "type": "int",
+                "min": 1,
+                "max": 365
+            },
+            {
+                "key": "waste_penalty_mode",
+                "label": "Modalità Penalità Spreco",
+                "description": "Come penalizzare prodotti a rischio spreco",
+                "type": "choice",
+                "choices": ["soft", "hard"]
+            },
+            {
+                "key": "waste_penalty_factor",
+                "label": "Fattore Penalità",
+                "description": "Riduzione % o qty fissa se waste_risk > threshold",
+                "type": "float",
+                "min": 0.0,
+                "max": 1.0
+            },
+            {
+                "key": "waste_risk_threshold",
+                "label": "Soglia Rischio Spreco (%)",
+                "description": "Percentuale rischio oltre cui applicare penalità (0-100)",
+                "type": "float",
+                "min": 0.0,
+                "max": 100.0
+            },
+            {
+                "key": "waste_horizon_days",
+                "label": "Orizzonte Valutazione Spreco (giorni)",
+                "description": "Giorni futuri per calcolare % stock a rischio",
+                "type": "int",
+                "min": 1,
+                "max": 90
+            },
+            {
+                "key": "waste_realization_factor",
+                "label": "Fattore Realizzazione Spreco",
+                "description": "Moltiplicatore per convertire waste_risk in expected_waste_rate per Monte Carlo (0-1)",
+                "type": "float",
+                "min": 0.0,
+                "max": 1.0
+            }
+        ]
+        
+        self._create_param_rows(section_shelf_life.get_content_frame(), shelf_life_params, "shelf_life_policy")
+        
+        # ===== SECTION 6: Dashboard =====
         section_dashboard = CollapsibleFrame(scrollable_frame, title="📊 Dashboard", expanded=False)
         section_dashboard.pack(fill="x", pady=5)
         

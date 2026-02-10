@@ -420,6 +420,7 @@ def monte_carlo_forecast(
     random_seed: int = 42,
     output_stat: str = "mean",
     output_percentile: int = 80,
+    expected_waste_rate: float = 0.0,  # NEW (Fase 3): % perdite attese da shelf life (0.0-1.0)
 ) -> List[float]:
     """
     Monte Carlo demand forecasting via simulation.
@@ -428,6 +429,7 @@ def monte_carlo_forecast(
     - Sample historical demand distribution (empirical, normal, lognormal, residuals)
     - Simulate n_simulations demand trajectories over horizon_days
     - Aggregate using mean or percentile
+    - Apply waste rate adjustment if shelf life losses expected
     
     Args:
         history: List of dicts {"date": date, "qty_sold": float}
@@ -443,6 +445,9 @@ def monte_carlo_forecast(
             - "mean": Average across simulations (default)
             - "percentile": Use specified percentile
         output_percentile: Percentile value if output_stat="percentile" (50-99)
+        expected_waste_rate: Expected waste fraction due to shelf life (0.0-1.0)
+                            e.g., 0.1 = 10% of demand unusable due to expiry
+                            Forecast is reduced by this factor: fc_adj = fc × (1 - waste_rate)
     
     Returns:
         List[float] of length horizon_days with forecasted demand
@@ -530,6 +535,17 @@ def monte_carlo_forecast(
     else:
         raise ValueError(f"Unknown output_stat: {output_stat}")
     
+    # Apply shelf life waste adjustment (Fase 3)
+    # If expected_waste_rate > 0, reduce forecast to account for unusable stock
+    if expected_waste_rate > 0:
+        if not (0.0 <= expected_waste_rate <= 1.0):
+            raise ValueError(f"expected_waste_rate must be 0.0-1.0, got {expected_waste_rate}")
+        # Reduce forecast: usable demand = total demand × (1 - waste_rate)
+        forecast_values = [v * (1.0 - expected_waste_rate) for v in forecast_values]
+    
+    # Ensure non-negative (already done in path generation, but double-check after waste adjustment)
+    forecast_values = [max(0.0, v) for v in forecast_values]
+    
     return forecast_values
 
 
@@ -539,6 +555,7 @@ def monte_carlo_forecast_with_stats(
     distribution: str = "empirical",
     n_simulations: int = 1000,
     random_seed: int = 42,
+    expected_waste_rate: float = 0.0,  # NEW (Fase 3): % perdite attese da shelf life
 ) -> Dict[str, Any]:
     """
     Monte Carlo forecast with full statistical summary.
@@ -644,14 +661,36 @@ def monte_carlo_forecast_with_stats(
     # Compute statistics
     simulations_array = np.array(simulations)
     
+    # Calculate raw statistics
+    mean_fc = np.mean(simulations_array, axis=0).tolist()
+    median_fc = np.percentile(simulations_array, 50, axis=0).tolist()
+    p10_fc = np.percentile(simulations_array, 10, axis=0).tolist()
+    p25_fc = np.percentile(simulations_array, 25, axis=0).tolist()
+    p75_fc = np.percentile(simulations_array, 75, axis=0).tolist()
+    p90_fc = np.percentile(simulations_array, 90, axis=0).tolist()
+    p95_fc = np.percentile(simulations_array, 95, axis=0).tolist()
+    
+    # Apply shelf life waste adjustment (Fase 3)
+    if expected_waste_rate > 0:
+        if not (0.0 <= expected_waste_rate <= 1.0):
+            raise ValueError(f"expected_waste_rate must be 0.0-1.0, got {expected_waste_rate}")
+        waste_factor = 1.0 - expected_waste_rate
+        mean_fc = [v * waste_factor for v in mean_fc]
+        median_fc = [v * waste_factor for v in median_fc]
+        p10_fc = [v * waste_factor for v in p10_fc]
+        p25_fc = [v * waste_factor for v in p25_fc]
+        p75_fc = [v * waste_factor for v in p75_fc]
+        p90_fc = [v * waste_factor for v in p90_fc]
+        p95_fc = [v * waste_factor for v in p95_fc]
+    
     return {
-        "mean": np.mean(simulations_array, axis=0).tolist(),
-        "median": np.percentile(simulations_array, 50, axis=0).tolist(),
-        "p10": np.percentile(simulations_array, 10, axis=0).tolist(),
-        "p25": np.percentile(simulations_array, 25, axis=0).tolist(),
-        "p75": np.percentile(simulations_array, 75, axis=0).tolist(),
-        "p90": np.percentile(simulations_array, 90, axis=0).tolist(),
-        "p95": np.percentile(simulations_array, 95, axis=0).tolist(),
+        "mean": [max(0.0, v) for v in mean_fc],
+        "median": [max(0.0, v) for v in median_fc],
+        "p10": [max(0.0, v) for v in p10_fc],
+        "p25": [max(0.0, v) for v in p25_fc],
+        "p75": [max(0.0, v) for v in p75_fc],
+        "p90": [max(0.0, v) for v in p90_fc],
+        "p95": [max(0.0, v) for v in p95_fc],
         "n_simulations": n_simulations,
         "distribution": distribution,
     }

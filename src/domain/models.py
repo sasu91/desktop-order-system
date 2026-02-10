@@ -47,6 +47,13 @@ class SKU:
     review_period: int = 7          # Review period in days (for forecast calculation)
     safety_stock: int = 0           # Safety stock quantity
     shelf_life_days: int = 0        # Shelf life in days (0 = no expiry/non-perishable)
+    
+    # Shelf life operational parameters (for reorder engine integration)
+    min_shelf_life_days: int = 0    # Minimum residual shelf life for sale (days, 0 = no constraint)
+    waste_penalty_mode: str = ""    # "soft", "hard", or "" (use global setting)
+    waste_penalty_factor: float = 0.0  # Soft penalty multiplier 0.0-1.0 (0 = use global)
+    waste_risk_threshold: float = 0.0  # Waste risk % threshold for penalty trigger (0-100, 0 = use global)
+    
     max_stock: int = 999            # Maximum stock level
     reorder_point: int = 10         # Reorder trigger point
     demand_variability: DemandVariability = DemandVariability.STABLE
@@ -86,6 +93,16 @@ class SKU:
             raise ValueError("Safety stock cannot be negative")
         if self.shelf_life_days < 0:
             raise ValueError("Shelf life cannot be negative")
+        if self.min_shelf_life_days < 0:
+            raise ValueError("Min shelf life cannot be negative")
+        if self.min_shelf_life_days > self.shelf_life_days and self.shelf_life_days > 0:
+            raise ValueError("Min shelf life cannot exceed total shelf life")
+        if self.waste_penalty_mode not in ["", "soft", "hard"]:
+            raise ValueError("Waste penalty mode must be '', 'soft', or 'hard'")
+        if self.waste_penalty_factor < 0.0 or self.waste_penalty_factor > 1.0:
+            raise ValueError("Waste penalty factor must be 0.0-1.0")
+        if self.waste_risk_threshold < 0.0 or self.waste_risk_threshold > 100.0:
+            raise ValueError("Waste risk threshold must be 0.0-100.0")
         if self.max_stock < 1:
             raise ValueError("Max stock must be >= 1")
         if self.reorder_point < 0:
@@ -258,6 +275,13 @@ class OrderProposal:
     simulation_used: bool = False  # True se è stata usata simulazione intermittente
     simulation_trigger_day: int = 0  # Giorno in cui IP scende sotto soglia (0 = oggi)
     simulation_notes: str = ""  # Note sulla simulazione
+    
+    # Shelf life integration (Fase 2)
+    usable_stock: int = 0  # Stock utilizzabile (shelf life >= min_shelf_life_days)
+    unusable_stock: int = 0  # Stock non utilizzabile (scaduto o shelf life insufficiente)
+    waste_risk_percent: float = 0.0  # % stock a rischio spreco
+    shelf_life_penalty_applied: bool = False  # True se penalty applicato
+    shelf_life_penalty_message: str = ""  # Messaggio penalty (es. "Reduced by 50%")
 
 
 @dataclass

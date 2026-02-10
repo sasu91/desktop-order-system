@@ -23,8 +23,9 @@ class CSVLayer:
     # CSV file schemas (filename -> list of columns)
     SCHEMAS = {
         "skus.csv": ["sku", "description", "ean", "moq", "pack_size", "lead_time_days", 
-                     "review_period", "safety_stock", "shelf_life_days", "max_stock", 
-                     "reorder_point", "demand_variability", "oos_boost_percent", 
+                     "review_period", "safety_stock", "shelf_life_days", "min_shelf_life_days",
+                     "waste_penalty_mode", "waste_penalty_factor", "waste_risk_threshold",
+                     "max_stock", "reorder_point", "demand_variability", "oos_boost_percent", 
                      "oos_detection_mode", "oos_popup_preference", "forecast_method",
                      "mc_distribution", "mc_n_simulations", "mc_random_seed", "mc_output_stat",
                      "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days", "in_assortment"],
@@ -79,7 +80,7 @@ class CSVLayer:
         filepath = self.data_dir / filename
         
         with open(filepath, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=columns)
+            writer = csv.DictWriter(f, fieldnames=columns, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(rows)
     
@@ -117,6 +118,11 @@ class CSVLayer:
                     review_period=int(row.get("review_period", "7")),
                     safety_stock=int(row.get("safety_stock", "0")),
                     shelf_life_days=int(row.get("shelf_life_days", "0")),
+                    # Shelf life operational parameters (backward-compatible)
+                    min_shelf_life_days=int(row.get("min_shelf_life_days", "0")),
+                    waste_penalty_mode=row.get("waste_penalty_mode", "").strip(),
+                    waste_penalty_factor=float(row.get("waste_penalty_factor", "0.0")),
+                    waste_risk_threshold=float(row.get("waste_risk_threshold", "0.0")),
                     max_stock=int(row.get("max_stock", "999")),
                     reorder_point=int(row.get("reorder_point", "10")),
                     demand_variability=demand_var,
@@ -187,12 +193,24 @@ class CSVLayer:
                     review_period=sku.review_period,
                     safety_stock=sku.safety_stock,
                     shelf_life_days=sku.shelf_life_days,
+                    min_shelf_life_days=sku.min_shelf_life_days,
+                    waste_penalty_mode=sku.waste_penalty_mode,
+                    waste_penalty_factor=sku.waste_penalty_factor,
+                    waste_risk_threshold=sku.waste_risk_threshold,
                     max_stock=sku.max_stock,
                     reorder_point=sku.reorder_point,
                     demand_variability=classified_variability,  # Auto-classified
                     oos_boost_percent=sku.oos_boost_percent,
                     oos_detection_mode=sku.oos_detection_mode,
                     oos_popup_preference=sku.oos_popup_preference,
+                    forecast_method=sku.forecast_method,
+                    mc_distribution=sku.mc_distribution,
+                    mc_n_simulations=sku.mc_n_simulations,
+                    mc_random_seed=sku.mc_random_seed,
+                    mc_output_stat=sku.mc_output_stat,
+                    mc_output_percentile=sku.mc_output_percentile,
+                    mc_horizon_mode=sku.mc_horizon_mode,
+                    mc_horizon_days=sku.mc_horizon_days,
                 )
             except Exception as e:
                 # Fallback to original if auto-classification fails
@@ -216,6 +234,11 @@ class CSVLayer:
             reorder_point=defaults.get("reorder_point", sku.reorder_point) if sku.reorder_point == 10 else sku.reorder_point,
             demand_variability=DemandVariability[defaults.get("demand_variability", sku.demand_variability.value)] if sku.demand_variability == DemandVariability.STABLE else sku.demand_variability,
             shelf_life_days=sku.shelf_life_days,
+            # Shelf life operational params (no auto-apply defaults for now)
+            min_shelf_life_days=sku.min_shelf_life_days,
+            waste_penalty_mode=sku.waste_penalty_mode,
+            waste_penalty_factor=sku.waste_penalty_factor,
+            waste_risk_threshold=sku.waste_risk_threshold,
             oos_boost_percent=sku.oos_boost_percent,
             oos_detection_mode=sku.oos_detection_mode,
             oos_popup_preference=sku.oos_popup_preference,
@@ -240,6 +263,10 @@ class CSVLayer:
             "review_period": str(final_sku.review_period),
             "safety_stock": str(final_sku.safety_stock),
             "shelf_life_days": str(final_sku.shelf_life_days),
+            "min_shelf_life_days": str(final_sku.min_shelf_life_days),
+            "waste_penalty_mode": final_sku.waste_penalty_mode,
+            "waste_penalty_factor": str(final_sku.waste_penalty_factor),
+            "waste_risk_threshold": str(final_sku.waste_risk_threshold),
             "max_stock": str(final_sku.max_stock),
             "reorder_point": str(final_sku.reorder_point),
             "demand_variability": final_sku.demand_variability.value,
@@ -306,6 +333,10 @@ class CSVLayer:
         oos_boost_percent: float = 0.0,
         oos_detection_mode: str = "",
         oos_popup_preference: str = "ask",
+        min_shelf_life_days: int = 0,
+        waste_penalty_mode: str = "",
+        waste_penalty_factor: float = 0.0,
+        waste_risk_threshold: float = 0.0,
         forecast_method: str = "",
         mc_distribution: str = "",
         mc_n_simulations: int = 0,
@@ -388,6 +419,10 @@ class CSVLayer:
                 "review_period": row.get("review_period", "7").strip() or "7",
                 "safety_stock": row.get("safety_stock", "0").strip() or "0",
                 "shelf_life_days": row.get("shelf_life_days", "0").strip() or "0",
+                "min_shelf_life_days": row.get("min_shelf_life_days", "0").strip() or "0",
+                "waste_penalty_mode": row.get("waste_penalty_mode", "").strip(),
+                "waste_penalty_factor": row.get("waste_penalty_factor", "0").strip() or "0",
+                "waste_risk_threshold": row.get("waste_risk_threshold", "0").strip() or "0",
                 "max_stock": row.get("max_stock", "999").strip() or "999",
                 "reorder_point": row.get("reorder_point", "10").strip() or "10",
                 "demand_variability": row.get("demand_variability", "STABLE").strip() or "STABLE",
@@ -419,6 +454,10 @@ class CSVLayer:
                 normalized_row["review_period"] = str(review_period)
                 normalized_row["safety_stock"] = str(safety_stock)
                 normalized_row["shelf_life_days"] = str(shelf_life_days)
+                normalized_row["min_shelf_life_days"] = str(min_shelf_life_days)
+                normalized_row["waste_penalty_mode"] = waste_penalty_mode
+                normalized_row["waste_penalty_factor"] = str(waste_penalty_factor)
+                normalized_row["waste_risk_threshold"] = str(waste_risk_threshold)
                 normalized_row["max_stock"] = str(max_stock)
                 normalized_row["reorder_point"] = str(reorder_point)
                 normalized_row["demand_variability"] = demand_variability.value

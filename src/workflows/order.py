@@ -7,7 +7,7 @@ import logging
 
 from ..domain.models import Stock, OrderProposal, OrderConfirmation, Transaction, EventType, SKU
 from ..persistence.csv_layer import CSVLayer
-from ..domain.ledger import StockCalculator
+from ..domain.ledger import StockCalculator, ShelfLifeCalculator
 
 
 def _normalize_boost_to_fraction(boost: float) -> float:
@@ -238,6 +238,51 @@ class OrderWorkflow:
         global_forecast_method = settings.get("reorder_engine", {}).get("forecast_method", {}).get("value", "simple")
         mc_show_comparison = settings.get("monte_carlo", {}).get("show_comparison", {}).get("value", False)
         
+        # === SHELF LIFE INTEGRATION (Fase 2/3) ===
+        # Calculate usable stock BEFORE forecast to use in IP and waste_rate
+        shelf_life_enabled = settings.get("shelf_life_policy", {}).get("enabled", {}).get("value", True)
+        usable_result = None
+        usable_qty = current_stock.on_hand  # Default: use total on_hand
+        unusable_qty = 0
+        waste_risk_percent = 0.0
+        expected_waste_rate = 0.0  # For Monte Carlo adjustment
+        
+        if shelf_life_enabled and shelf_life_days > 0:
+            # Determina parametri shelf life con category override (SKU > Category > Global)
+            category = demand_variability.value if demand_variability else "STABLE"
+            category_overrides = settings.get("shelf_life_policy", {}).get("category_overrides", {}).get("value", {})
+            category_params = category_overrides.get(category, {})
+            
+            # SKU-specific > Category > Global fallback
+            min_shelf_life = sku_obj.min_shelf_life_days if (sku_obj and sku_obj.min_shelf_life_days > 0) else \
+                             category_params.get("min_shelf_life_days", 
+                             settings.get("shelf_life_policy", {}).get("min_shelf_life_global", {}).get("value", 7))
+            
+            waste_horizon_days = settings.get("shelf_life_policy", {}).get("waste_horizon_days", {}).get("value", 14)
+            
+            # Fetch lots for SKU and calculate usable stock
+            lots = self.csv_layer.get_lots_by_sku(sku, sort_by_expiry=True)
+            
+            usable_result = ShelfLifeCalculator.calculate_usable_stock(
+                lots=lots,
+                check_date=date.today(),
+                min_shelf_life_days=min_shelf_life,
+                waste_horizon_days=waste_horizon_days
+            )
+            
+            usable_qty = usable_result.usable_qty
+            unusable_qty = usable_result.unusable_qty
+            waste_risk_percent = usable_result.waste_risk_percent
+            
+            # Calculate expected waste rate for Monte Carlo adjustment (Fase 3)
+            if waste_risk_percent > 0:
+                from ..uncertainty import WasteUncertainty
+                waste_realization_factor = settings.get("shelf_life_policy", {}).get("waste_realization_factor", {}).get("value", 0.5)
+                expected_waste_rate = WasteUncertainty.calculate_expected_waste_rate(
+                    waste_risk_percent=waste_risk_percent,
+                    waste_realization_factor=waste_realization_factor
+                )
+        
         # Override with SKU-specific method if provided
         forecast_method = sku_obj.forecast_method if (sku_obj and sku_obj.forecast_method) else global_forecast_method
         
@@ -294,6 +339,7 @@ class OrderWorkflow:
                     random_seed=mc_params["random_seed"],
                     output_stat=mc_params["output_stat"],
                     output_percentile=mc_params["output_percentile"],
+                    expected_waste_rate=expected_waste_rate,  # NEW (Fase 3): shelf life waste adjustment
                 )
                 
                 # Build summary of forecast values
@@ -328,8 +374,8 @@ class OrderWorkflow:
             if S > shelf_life_capacity:
                 shelf_life_warning = True
         
-        # NEW IP formula: IP = on_hand + on_order - unfulfilled_qty
-        inventory_position = current_stock.inventory_position()
+        # NEW IP formula: IP = usable_qty + on_order - unfulfilled_qty (usa usable stock se shelf life enabled)
+        inventory_position = usable_qty + current_stock.on_order - current_stock.unfulfilled_qty
         unfulfilled_qty = current_stock.unfulfilled_qty
         
         # === MONTE CARLO COMPARISON (se richiesto) ===
@@ -363,6 +409,7 @@ class OrderWorkflow:
                     random_seed=mc_params["random_seed"],
                     output_stat=mc_params["output_stat"],
                     output_percentile=mc_params["output_percentile"],
+                    expected_waste_rate=expected_waste_rate,  # NEW (Fase 3): shelf life waste adjustment
                 )
                 
                 # Build summary of forecast values
@@ -449,6 +496,42 @@ class OrderWorkflow:
             if proposed_qty > 0 and moq > 1 and proposed_qty < moq:
                 proposed_qty = 0  # Can't meet MOQ without exceeding max_stock
         
+        # === APPLY SHELF LIFE PENALTY (Fase 2) ===
+        shelf_life_penalty_applied = False
+        shelf_life_penalty_message = ""
+        
+        if shelf_life_enabled and shelf_life_days > 0 and proposed_qty > 0:
+            # Determina parametri penalty con category override
+            category = demand_variability.value if demand_variability else "STABLE"
+            category_overrides = settings.get("shelf_life_policy", {}).get("category_overrides", {}).get("value", {})
+            category_params = category_overrides.get(category, {})
+            
+            waste_penalty_mode = sku_obj.waste_penalty_mode if (sku_obj and sku_obj.waste_penalty_mode) else \
+                                 settings.get("shelf_life_policy", {}).get("waste_penalty_mode", {}).get("value", "soft")
+            
+            waste_penalty_factor = sku_obj.waste_penalty_factor if (sku_obj and sku_obj.waste_penalty_factor > 0) else \
+                                   category_params.get("waste_penalty_factor",
+                                   settings.get("shelf_life_policy", {}).get("waste_penalty_factor", {}).get("value", 0.5))
+            
+            waste_risk_threshold = sku_obj.waste_risk_threshold if (sku_obj and sku_obj.waste_risk_threshold > 0) else \
+                                   category_params.get("waste_risk_threshold",
+                                   settings.get("shelf_life_policy", {}).get("waste_risk_threshold", {}).get("value", 15.0))
+            
+            # Applica penalty se waste risk > threshold
+            if waste_risk_percent >= waste_risk_threshold:
+                original_proposed = proposed_qty
+                proposed_qty, penalty_msg = ShelfLifeCalculator.apply_shelf_life_penalty(
+                    proposed_qty=proposed_qty,
+                    waste_risk_percent=waste_risk_percent,
+                    waste_risk_threshold=waste_risk_threshold,
+                    penalty_mode=waste_penalty_mode,
+                    penalty_factor=waste_penalty_factor
+                )
+                
+                if penalty_msg:
+                    shelf_life_penalty_applied = True
+                    shelf_life_penalty_message = penalty_msg
+        
         receipt_date = date.today() + timedelta(days=lead_time)
         
         notes = f"S={S} (forecast={forecast_qty}+safety={safety_stock}), IP={inventory_position}, Pack={pack_size}, MOQ={moq}, Max={max_stock}"
@@ -456,6 +539,10 @@ class OrderWorkflow:
             notes += f", Unfulfilled={unfulfilled_qty}"
         if shelf_life_warning:
             notes += f" ⚠️ SHELF LIFE: Target S={S} exceeds {shelf_life_days}d capacity"
+        if shelf_life_enabled and shelf_life_days > 0:
+            notes += f" | Usable={usable_qty}, Waste Risk={waste_risk_percent:.1f}%"
+        if shelf_life_penalty_applied:
+            notes += f" | {shelf_life_penalty_message}"
         
         # Calculate projected stock at receipt date (only ledger events, no forecast sales)
         projected_stock_at_receipt = 0
@@ -514,6 +601,12 @@ class OrderWorkflow:
             simulation_used=simulation_used,
             simulation_trigger_day=simulation_trigger_day,
             simulation_notes=simulation_notes,
+            # Shelf life info (Fase 2)
+            usable_stock=usable_qty,
+            unusable_stock=unusable_qty,
+            waste_risk_percent=waste_risk_percent,
+            shelf_life_penalty_applied=shelf_life_penalty_applied,
+            shelf_life_penalty_message=shelf_life_penalty_message,
         )
     
     def confirm_order(

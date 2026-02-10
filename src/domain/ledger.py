@@ -403,6 +403,144 @@ def validate_ean(ean: Optional[str]) -> Tuple[bool, Optional[str]]:
     return True, None
 
 
+@dataclass
+class UsableStockResult:
+    """Result of usable stock calculation."""
+    total_on_hand: int
+    usable_qty: int  # Qty with sufficient residual shelf life
+    unusable_qty: int  # Qty expiring too soon (< min_shelf_life_days)
+    expiring_soon_qty: int  # Qty in waste risk window
+    waste_risk_percent: float  # % of stock at risk of waste
+
+
+class ShelfLifeCalculator:
+    """
+    Shelf life-aware stock calculations for reorder engine integration.
+    
+    Calculates:
+    - Usable stock (lots with shelf life >= min_shelf_life_days)
+    - Waste risk (probability/quantity of expiring stock)
+    - Shelf life constraints for order proposals
+    """
+    
+    @staticmethod
+    def calculate_usable_stock(
+        lots: List['Lot'],  # Forward reference (imported in csv_layer)
+        check_date: date,
+        min_shelf_life_days: int = 0,
+        waste_horizon_days: int = 14,
+    ) -> UsableStockResult:
+        """
+        Calculate usable stock considering shelf life constraints.
+        
+        Args:
+            lots: List of Lot objects for a SKU
+            check_date: Reference date (typically today)
+            min_shelf_life_days: Minimum residual shelf life required for sale
+            waste_horizon_days: Lookahead window for waste risk calculation
+        
+        Returns:
+            UsableStockResult with breakdown of stock by shelf life status
+        """
+        from .models import Lot  # Import here to avoid circular dependency
+        
+        total_on_hand = sum(lot.qty_on_hand for lot in lots if lot.qty_on_hand > 0)
+        
+        if min_shelf_life_days == 0:
+            # No constraint: all non-expired stock is usable
+            usable_qty = total_on_hand
+            unusable_qty = 0
+            expiring_soon_qty = 0
+            waste_risk_percent = 0.0
+            return UsableStockResult(
+                total_on_hand=total_on_hand,
+                usable_qty=usable_qty,
+                unusable_qty=unusable_qty,
+                expiring_soon_qty=expiring_soon_qty,
+                waste_risk_percent=waste_risk_percent
+            )
+        
+        usable_qty = 0
+        unusable_qty = 0
+        expiring_soon_qty = 0
+        
+        for lot in lots:
+            if lot.qty_on_hand <= 0:
+                continue
+            
+            if lot.expiry_date is None:
+                # No expiry date = infinite shelf life
+                usable_qty += lot.qty_on_hand
+                continue
+            
+            days_left = lot.days_until_expiry(check_date)
+            
+            if days_left is None or days_left < 0:
+                # Already expired
+                unusable_qty += lot.qty_on_hand
+            elif days_left < min_shelf_life_days:
+                # Not enough residual shelf life for sale
+                unusable_qty += lot.qty_on_hand
+            elif days_left <= waste_horizon_days:
+                # Usable but expiring soon (waste risk window)
+                usable_qty += lot.qty_on_hand
+                expiring_soon_qty += lot.qty_on_hand
+            else:
+                # Usable with good shelf life
+                usable_qty += lot.qty_on_hand
+        
+        # Waste risk: % of total stock expiring within horizon
+        waste_risk_percent = (expiring_soon_qty / total_on_hand * 100) if total_on_hand > 0 else 0.0
+        
+        return UsableStockResult(
+            total_on_hand=total_on_hand,
+            usable_qty=usable_qty,
+            unusable_qty=unusable_qty,
+            expiring_soon_qty=expiring_soon_qty,
+            waste_risk_percent=waste_risk_percent
+        )
+    
+    @staticmethod
+    def apply_shelf_life_penalty(
+        proposed_qty: int,
+        waste_risk_percent: float,
+        waste_risk_threshold: float,
+        penalty_mode: str,
+        penalty_factor: float,
+    ) -> Tuple[int, str]:
+        """
+        Apply shelf life penalty to reorder quantity.
+        
+        Args:
+            proposed_qty: Original proposed order quantity
+            waste_risk_percent: Current waste risk % (from calculate_usable_stock)
+            waste_risk_threshold: Threshold to trigger penalty
+            penalty_mode: "soft" (reduce qty) or "hard" (block order)
+            penalty_factor: Reduction factor for soft penalty (0.0-1.0)
+        
+        Returns:
+            (adjusted_qty, reason_message)
+        """
+        if waste_risk_percent < waste_risk_threshold:
+            # No penalty needed
+            return proposed_qty, ""
+        
+        if penalty_mode == "hard":
+            # Hard cap: block order
+            return 0, f"❌ BLOCKED: Waste risk {waste_risk_percent:.1f}% > {waste_risk_threshold}% (hard mode)"
+        
+        elif penalty_mode == "soft":
+            # Soft penalty: reduce quantity
+            reduction_pct = penalty_factor * 100
+            adjusted_qty = int(proposed_qty * (1.0 - penalty_factor))
+            reason = f"⚠️ Reduced by {reduction_pct:.0f}% (waste risk {waste_risk_percent:.1f}%)"
+            return adjusted_qty, reason
+        
+        else:
+            # Unknown mode: no penalty
+            return proposed_qty, ""
+
+
 class LotConsumptionManager:
     """
     FEFO (First Expired First Out) lot consumption logic.

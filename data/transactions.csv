@@ -3,3 +3,8 @@ date,sku,event,qty,receipt_date,note
 2026-01-18,SKU_LOW,SNAPSHOT,20,,Inventario iniziale - IP calibrato per proposta > 0
 2026-01-18,SKU_SEASONAL,SNAPSHOT,250,,Inventario iniziale - IP calibrato per proposta > 0
 2026-01-18,SKU_HIGH,SNAPSHOT,420,,Inventario iniziale - IP calibrato per proposta > 0
+2025-12-12,TEST_SHELF_LIFE,SNAPSHOT,100,,Initial stock for shelf life test
+2025-12-12,TEST_SHELF_LIFE,SNAPSHOT,100,,Initial stock for shelf life test
+2025-12-12,TEST_SHELF_LIFE,SNAPSHOT,100,,Initial stock for shelf life test
+2025-12-12,TEST_SHELF_LIFE,SNAPSHOT,100,,Initial stock for shelf life test
+2025-12-12,TEST_SHELF_LIFE,SNAPSHOT,100,,Initial stock for shelf life test

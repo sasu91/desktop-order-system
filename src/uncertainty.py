@@ -530,3 +530,132 @@ def calculate_safety_stock(
         "target_csl": target_csl,
         "protection_period_days": protection_period_days,
     }
+
+
+# ============ Shelf Life Waste Uncertainty (Fase 3) ============
+
+class WasteUncertainty:
+    """
+    Uncertainty adjustments for shelf life waste in perishable products.
+    
+    High waste risk → Higher demand uncertainty due to:
+    - Unpredictable stock losses (expiring inventory)
+    - FEFO rotation disruptions
+    - Sales cannibalization from near-expiry discounts
+    
+    Methods:
+        - calculate_waste_variance_multiplier(): Increase CV based on waste risk
+        - calculate_expected_waste_rate(): Estimate forecast reduction from expiry
+        - adjust_safety_stock(): Increase safety stock for perishables
+    """
+    
+    @staticmethod
+    def calculate_waste_variance_multiplier(
+        waste_risk_percent: float,
+        base_multiplier: float = 0.3,
+    ) -> float:
+        """
+        Calculate variance multiplier factor for waste-induced uncertainty.
+        
+        Formula:
+            variance_multiplier = 1.0 + (waste_risk / 100) × base_multiplier
+        
+        Args:
+            waste_risk_percent: Current waste risk % (from ShelfLifeCalculator)
+            base_multiplier: Sensitivity factor (default 0.3 = +30% var per 100% risk)
+        
+        Returns:
+            float: Multiplier > 1.0 to increase demand variance
+        
+        Example:
+            >>> WasteUncertainty.calculate_waste_variance_multiplier(20.0, base_multiplier=0.3)
+            1.06  # +6% variance increase
+            >>> WasteUncertainty.calculate_waste_variance_multiplier(50.0, base_multiplier=0.5)
+            1.25  # +25% variance increase
+        """
+        if waste_risk_percent < 0 or waste_risk_percent > 100:
+            raise ValueError(f"waste_risk_percent must be 0-100, got {waste_risk_percent}")
+        
+        if base_multiplier < 0 or base_multiplier > 1.0:
+            raise ValueError(f"base_multiplier must be 0-1.0, got {base_multiplier}")
+        
+        return 1.0 + (waste_risk_percent / 100.0) * base_multiplier
+    
+    @staticmethod
+    def calculate_expected_waste_rate(
+        waste_risk_percent: float,
+        waste_realization_factor: float = 0.5,
+    ) -> float:
+        """
+        Estimate expected waste rate for demand forecast adjustment.
+        
+        Not all "at-risk" stock becomes waste (some is sold, discounted, donated).
+        waste_realization_factor models the fraction that becomes actual loss.
+        
+        Formula:
+            expected_waste_rate = (waste_risk / 100) × waste_realization_factor
+        
+        Args:
+            waste_risk_percent: Current waste risk % (from ShelfLifeCalculator)
+            waste_realization_factor: Fraction of at-risk stock that becomes waste (0.0-1.0)
+                                     Default 0.5 = 50% of at-risk stock is actually wasted
+        
+        Returns:
+            float: Expected waste rate as fraction (0.0-1.0)
+        
+        Example:
+            >>> WasteUncertainty.calculate_expected_waste_rate(20.0, waste_realization_factor=0.5)
+            0.10  # 10% expected waste (20% risk × 50% realization)
+            >>> WasteUncertainty.calculate_expected_waste_rate(40.0, waste_realization_factor=0.7)
+            0.28  # 28% expected waste (40% risk × 70% realization)
+        """
+        if waste_risk_percent < 0 or waste_risk_percent > 100:
+            raise ValueError(f"waste_risk_percent must be 0-100, got {waste_risk_percent}")
+        
+        if waste_realization_factor < 0 or waste_realization_factor > 1.0:
+            raise ValueError(f"waste_realization_factor must be 0-1.0, got {waste_realization_factor}")
+        
+        return (waste_risk_percent / 100.0) * waste_realization_factor
+    
+    @staticmethod
+    def adjust_safety_stock_for_waste(
+        base_safety_stock: int,
+        waste_risk_percent: float,
+        safety_buffer_factor: float = 0.2,
+    ) -> int:
+        """
+        Increase safety stock to account for potential waste losses.
+        
+        Perishable products need higher safety stock because:
+        - Some inventory may expire before use
+        - Higher demand uncertainty (variance multiplier)
+        - Risk of stockouts from unusable inventory
+        
+        Formula:
+            adjusted_safety = base_safety × (1 + (waste_risk / 100) × buffer_factor)
+        
+        Args:
+            base_safety_stock: Original safety stock (from CSL calculation)
+            waste_risk_percent: Current waste risk %
+            safety_buffer_factor: Safety increase per 100% risk (default 0.2 = +20%)
+        
+        Returns:
+            int: Adjusted safety stock (rounded up)
+        
+        Example:
+            >>> WasteUncertainty.adjust_safety_stock_for_waste(100, waste_risk_percent=30.0, safety_buffer_factor=0.2)
+            106  # +6% safety increase (30% risk × 0.2 factor)
+        """
+        if base_safety_stock < 0:
+            raise ValueError(f"base_safety_stock cannot be negative, got {base_safety_stock}")
+        
+        if waste_risk_percent < 0 or waste_risk_percent > 100:
+            raise ValueError(f"waste_risk_percent must be 0-100, got {waste_risk_percent}")
+        
+        if safety_buffer_factor < 0 or safety_buffer_factor > 1.0:
+            raise ValueError(f"safety_buffer_factor must be 0-1.0, got {safety_buffer_factor}")
+        
+        waste_multiplier = 1.0 + (waste_risk_percent / 100.0) * safety_buffer_factor
+        adjusted_safety = base_safety_stock * waste_multiplier
+        
+        return int(round(adjusted_safety))

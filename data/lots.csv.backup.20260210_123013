@@ -1,0 +1,3 @@
+lot_id,sku,expiry_date,qty_on_hand,receipt_id,receipt_date
+LOT_USABLE_001,TEST_SHELF_LIFE,2026-03-12,50,RCV_001,2026-01-11
+LOT_UNUSABLE_001,TEST_SHELF_LIFE,2026-02-20,30,RCV_002,2025-12-22

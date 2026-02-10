@@ -1,5 +1,2 @@
-sku,description,ean,moq,pack_size,lead_time_days,review_period,safety_stock,shelf_life_days,max_stock,reorder_point,demand_variability,oos_boost_percent,oos_detection_mode,oos_popup_preference,forecast_method,mc_distribution,mc_n_simulations,mc_random_seed,mc_output_stat,mc_output_percentile,mc_horizon_mode,mc_horizon_days,mc_show_comparison
-SKU_STABLE,Prodotto Vendite Stabili,8001234567890,10,5,7,7,15,0,500,30,STABLE,0.0,strict,ask,simple,empirical,2000,42,percentile,90,auto,14,true
-SKU_LOW,Prodotto Basso Movimento,8002345678901,5,1,7,7,5,0,100,10,LOW,0.0,strict,ask,simple,empirical,1000,42,mean,75,auto,14,false
-SKU_SEASONAL,Prodotto Andamento Stagionale,8003456789012,12,6,7,7,20,0,600,40,SEASONAL,0.0,strict,ask,simple,empirical,1000,42,mean,75,auto,14,false
-SKU_HIGH,Prodotto Alta Variabilità,8004567890123,15,10,7,7,30,0,800,50,HIGH,0.0,strict,ask,monte_carlo,lognormal,3000,123,percentile,95,auto,14,false
+sku,description,ean,moq,pack_size,lead_time_days,review_period,safety_stock,shelf_life_days,min_shelf_life_days,waste_penalty_mode,waste_penalty_factor,waste_risk_threshold,max_stock,reorder_point,demand_variability,oos_boost_percent,oos_detection_mode,oos_popup_preference,forecast_method,mc_distribution,mc_n_simulations,mc_random_seed,mc_output_stat,mc_output_percentile,mc_horizon_mode,mc_horizon_days,in_assortment
+TEST_SHELF_LIFE,Test SKU with shelf life,1234567890123,20,10,7,7,0,60,14,soft,0.3,20.0,999,10,LOW,0.0,,ask,,,0,0,,0,,0,true
