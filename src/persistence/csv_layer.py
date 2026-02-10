@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 
-from ..domain.models import Transaction, EventType, SKU, SalesRecord, AuditLog, DemandVariability
+from ..domain.models import Transaction, EventType, SKU, SalesRecord, AuditLog, DemandVariability, Lot
 
 
 class CSVLayer:
@@ -27,12 +27,13 @@ class CSVLayer:
                      "reorder_point", "demand_variability", "oos_boost_percent", 
                      "oos_detection_mode", "oos_popup_preference", "forecast_method",
                      "mc_distribution", "mc_n_simulations", "mc_random_seed", "mc_output_stat",
-                     "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days"],
+                     "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days", "in_assortment"],
         "transactions.csv": ["date", "sku", "event", "qty", "receipt_date", "note"],
         "sales.csv": ["date", "sku", "qty_sold"],
         "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "qty_received", "status", "receipt_date"],
         "receiving_logs.csv": ["document_id", "receipt_id", "date", "sku", "qty_received", "receipt_date", "order_ids"],
         "audit_log.csv": ["timestamp", "operation", "sku", "details", "user"],
+        "lots.csv": ["lot_id", "sku", "expiry_date", "qty_on_hand", "receipt_id", "receipt_date"],
     }
     
     def __init__(self, data_dir: Optional[Path] = None):
@@ -1081,3 +1082,197 @@ class CSVLayer:
                 pass
             logger.error(f"Atomic write failed for {filename}: {e}")
             raise
+    
+    # ==================== LOT MANAGEMENT ====================
+    
+    def read_lots(self) -> List[Lot]:
+        """
+        Read all lots from lots.csv.
+        
+        Returns:
+            List of Lot objects
+        """
+        lots = []
+        filepath = self.data_dir / "lots.csv"
+        
+        if not filepath.exists():
+            return []
+        
+        with open(filepath, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                lot_id = row.get("lot_id", "").strip()
+                sku = row.get("sku", "").strip()
+                expiry_date_str = row.get("expiry_date", "").strip()
+                qty_on_hand = int(row.get("qty_on_hand", 0))
+                receipt_id = row.get("receipt_id", "").strip()
+                receipt_date_str = row.get("receipt_date", "").strip()
+                
+                if not lot_id or not sku or not receipt_id:
+                    continue  # Skip invalid rows
+                
+                expiry_date = date.fromisoformat(expiry_date_str) if expiry_date_str else None
+                receipt_date = date.fromisoformat(receipt_date_str)
+                
+                lot = Lot(
+                    lot_id=lot_id,
+                    sku=sku,
+                    expiry_date=expiry_date,
+                    qty_on_hand=qty_on_hand,
+                    receipt_id=receipt_id,
+                    receipt_date=receipt_date,
+                )
+                lots.append(lot)
+        
+        return lots
+    
+    def write_lot(self, lot: Lot):
+        """
+        Write or update a single lot to lots.csv.
+        
+        Args:
+            lot: Lot object to write
+        """
+        lots = self.read_lots()
+        
+        # Check if lot already exists
+        existing_index = None
+        for i, existing_lot in enumerate(lots):
+            if existing_lot.lot_id == lot.lot_id:
+                existing_index = i
+                break
+        
+        # Update or append
+        if existing_index is not None:
+            lots[existing_index] = lot
+        else:
+            lots.append(lot)
+        
+        # Write all lots
+        rows = []
+        for lot_obj in lots:
+            rows.append({
+                "lot_id": lot_obj.lot_id,
+                "sku": lot_obj.sku,
+                "expiry_date": lot_obj.expiry_date.isoformat() if lot_obj.expiry_date else "",
+                "qty_on_hand": str(lot_obj.qty_on_hand),
+                "receipt_id": lot_obj.receipt_id,
+                "receipt_date": lot_obj.receipt_date.isoformat(),
+            })
+        
+        self._write_csv_atomic("lots.csv", rows)
+    
+    def update_lot_quantity(self, lot_id: str, new_qty: int):
+        """
+        Update lot quantity (for consumption via FEFO).
+        
+        Args:
+            lot_id: Lot identifier
+            new_qty: New quantity (can be 0 to deplete lot)
+        """
+        lots = self.read_lots()
+        updated = False
+        
+        for i, lot in enumerate(lots):
+            if lot.lot_id == lot_id:
+                # Create new lot with updated quantity
+                updated_lot = Lot(
+                    lot_id=lot.lot_id,
+                    sku=lot.sku,
+                    expiry_date=lot.expiry_date,
+                    qty_on_hand=new_qty,
+                    receipt_id=lot.receipt_id,
+                    receipt_date=lot.receipt_date,
+                )
+                lots[i] = updated_lot
+                updated = True
+                break
+        
+        if not updated:
+            raise ValueError(f"Lot not found: {lot_id}")
+        
+        # Remove lots with qty = 0
+        lots = [lot for lot in lots if lot.qty_on_hand > 0]
+        
+        # Write back
+        rows = []
+        for lot_obj in lots:
+            rows.append({
+                "lot_id": lot_obj.lot_id,
+                "sku": lot_obj.sku,
+                "expiry_date": lot_obj.expiry_date.isoformat() if lot_obj.expiry_date else "",
+                "qty_on_hand": str(lot_obj.qty_on_hand),
+                "receipt_id": lot_obj.receipt_id,
+                "receipt_date": lot_obj.receipt_date.isoformat(),
+            })
+        
+        self._write_csv_atomic("lots.csv", rows)
+    
+    def get_lots_by_sku(self, sku: str, sort_by_expiry: bool = True) -> List[Lot]:
+        """
+        Get all lots for a specific SKU.
+        
+        Args:
+            sku: SKU identifier
+            sort_by_expiry: If True, sort by expiry date (FEFO order)
+        
+        Returns:
+            List of lots for the SKU
+        """
+        lots = self.read_lots()
+        sku_lots = [lot for lot in lots if lot.sku == sku]
+        
+        if sort_by_expiry:
+            # Sort: None (no expiry) last, then by expiry date ascending
+            sku_lots.sort(key=lambda lot: (lot.expiry_date is None, lot.expiry_date or date.max))
+        
+        return sku_lots
+    
+    def get_expiring_lots(self, days_threshold: int, check_date: Optional[date] = None) -> List[Lot]:
+        """
+        Get lots expiring within days_threshold.
+        
+        Args:
+            days_threshold: Days until expiry (e.g., 7 = expiring in next 7 days)
+            check_date: Reference date (defaults to today)
+        
+        Returns:
+            List of lots expiring soon
+        """
+        if check_date is None:
+            check_date = date.today()
+        
+        lots = self.read_lots()
+        expiring = []
+        
+        for lot in lots:
+            if lot.expiry_date is None:
+                continue
+            
+            days_left = (lot.expiry_date - check_date).days
+            if 0 <= days_left <= days_threshold:
+                expiring.append(lot)
+        
+        # Sort by expiry date (closest first)
+        expiring.sort(key=lambda lot: lot.expiry_date)
+        
+        return expiring
+    
+    def get_expired_lots(self, check_date: Optional[date] = None) -> List[Lot]:
+        """
+        Get expired lots.
+        
+        Args:
+            check_date: Reference date (defaults to today)
+        
+        Returns:
+            List of expired lots
+        """
+        if check_date is None:
+            check_date = date.today()
+        
+        lots = self.read_lots()
+        expired = [lot for lot in lots if lot.is_expired(check_date)]
+        
+        return expired
+

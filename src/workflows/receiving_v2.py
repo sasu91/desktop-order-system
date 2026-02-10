@@ -54,7 +54,7 @@ class ReceivingWorkflow:
         self,
         document_id: str,
         receipt_date: date,
-        items: List[Dict[str, Any]],  # [{sku, qty_received, order_ids: Optional[List[str]]}]
+        items: List[Dict[str, Any]],  # [{sku, qty_received, order_ids, lot_id, expiry_date}]
         notes: str = "",
     ) -> Tuple[List[Transaction], bool, Dict[str, Dict]]:
         """
@@ -239,6 +239,7 @@ class ReceivingWorkflow:
                     )
             
             # Write to receiving_logs
+            receipt_id = self.generate_receipt_id(receipt_date, document_id, sku)
             self.csv_layer.write_receiving_log(
                 document_id=document_id,
                 date_str=date.today().isoformat(),
@@ -247,6 +248,38 @@ class ReceivingWorkflow:
                 receipt_date=receipt_date.isoformat(),
                 order_ids=",".join(allocated_order_ids),
             )
+            
+            # NEW: Create lot if lot_id or expiry_date provided
+            lot_id = item.get("lot_id", "").strip()
+            expiry_date_str = item.get("expiry_date", "").strip()
+            
+            if lot_id or expiry_date_str:
+                # Generate lot_id if not provided
+                if not lot_id:
+                    lot_id = f"{receipt_id}_{sku}"
+                
+                # Parse expiry_date
+                expiry_date_obj = None
+                if expiry_date_str:
+                    try:
+                        expiry_date_obj = date.fromisoformat(expiry_date_str)
+                    except ValueError:
+                        logger.warning(f"Invalid expiry_date format for {sku}: {expiry_date_str}, skipping lot creation")
+                
+                # Create Lot object
+                from ..domain.models import Lot
+                lot = Lot(
+                    lot_id=lot_id,
+                    sku=sku,
+                    expiry_date=expiry_date_obj,
+                    qty_on_hand=qty_received,
+                    receipt_id=receipt_id,
+                    receipt_date=receipt_date,
+                )
+                
+                # Write to lots.csv
+                self.csv_layer.write_lot(lot)
+                logger.info(f"Created lot {lot_id} for {sku}, qty={qty_received}, expiry={expiry_date_obj}")
         
         # 4. Write transactions to ledger (batch)
         if transactions:

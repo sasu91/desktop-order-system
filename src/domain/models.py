@@ -130,6 +130,40 @@ class Transaction:
 
 
 @dataclass(frozen=True)
+class Lot:
+    """Inventory lot with expiry tracking - immutable."""
+    lot_id: str                      # Unique lot identifier (supplier lot or internal)
+    sku: str                         # Reference to SKU
+    expiry_date: Optional[Date]      # Expiry date (None = no expiry for this lot)
+    qty_on_hand: int                 # Current quantity in this lot
+    receipt_id: str                  # Reference to receiving_logs
+    receipt_date: Date               # Date when lot was received
+    
+    def __post_init__(self):
+        if not self.lot_id or not self.lot_id.strip():
+            raise ValueError("Lot ID cannot be empty")
+        if not self.sku or not self.sku.strip():
+            raise ValueError("SKU cannot be empty")
+        if self.qty_on_hand < 0:
+            raise ValueError("Lot quantity cannot be negative")
+        if self.expiry_date and self.expiry_date < self.receipt_date:
+            raise ValueError("Expiry date cannot be before receipt date")
+    
+    def is_expired(self, check_date: Date) -> bool:
+        """Check if lot is expired as of check_date."""
+        if self.expiry_date is None:
+            return False
+        return check_date > self.expiry_date
+    
+    def days_until_expiry(self, check_date: Date) -> Optional[int]:
+        """Days until expiry from check_date (None if no expiry)."""
+        if self.expiry_date is None:
+            return None
+        delta = (self.expiry_date - check_date).days
+        return delta
+
+
+@dataclass(frozen=True)
 class Stock:
     """Calculated stock state for a SKU at a given AsOf date."""
     sku: str

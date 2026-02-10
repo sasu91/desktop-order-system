@@ -169,6 +169,7 @@ class DesktopOrderApp:
         self.order_tab = ttk.Frame(self.notebook)
         self.receiving_tab = ttk.Frame(self.notebook)
         self.exception_tab = ttk.Frame(self.notebook)
+        self.expiry_tab = ttk.Frame(self.notebook)  # NEW: Expiry tracking tab
         self.admin_tab = ttk.Frame(self.notebook)
         self.settings_tab = ttk.Frame(self.notebook)
         
@@ -178,16 +179,30 @@ class DesktopOrderApp:
             "order": self.order_tab,
             "receiving": self.receiving_tab,
             "exception": self.exception_tab,
+            "expiry": self.expiry_tab,  # NEW
             "dashboard": self.dashboard_tab,
             "admin": self.admin_tab,
             "settings": self.settings_tab
         }
         
+        # Update tab_map with expiry tab
+        self.tab_map = {
+            "dashboard": "📊 Dashboard",
+            "stock": "📦 Stock",
+            "order": "🛒 Ordini",
+            "receiving": "📥 Ricevimento",
+            "exception": "⚠️ Eccezioni",
+            "expiry": "⏰ Scadenze",  # NEW
+            "admin": "🔧 Admin",
+            "settings": "⚙️ Impostazioni"
+        }
+        
         # Add tabs in saved order (or default order if not saved)
         for tab_id in self.tab_order:
-            tab_frame = self.tab_frames[tab_id]
-            tab_text = self.tab_map[tab_id]
-            self.notebook.add(tab_frame, text=tab_text)
+            tab_frame = self.tab_frames.get(tab_id)
+            if tab_frame is not None:
+                tab_text = self.tab_map[tab_id]
+                self.notebook.add(tab_frame, text=tab_text)
         
         # Build tab contents
         self._build_dashboard_tab()
@@ -195,6 +210,7 @@ class DesktopOrderApp:
         self._build_order_tab()
         self._build_receiving_tab()
         self._build_exception_tab()
+        self._build_expiry_tab()  # NEW
         self._build_admin_tab()
         self._build_settings_tab()
     
@@ -2007,8 +2023,26 @@ class DesktopOrderApp:
         confirm_frame = ttk.Frame(main_frame)
         confirm_frame.pack(side="top", fill="x", pady=(0, 10))
         
-        ttk.Label(confirm_frame, text="Verifica quantità nella tabella (doppio click per modificare), poi:", font=("Helvetica", 10)).pack(side="left", padx=(10, 20))
-        ttk.Button(confirm_frame, text="✓ Chiudi Ricevimento (Conferma Tutte)", command=self._close_receipt_bulk, style="Accent.TButton").pack(side="left", padx=5)
+        # Lot tracking inputs
+        lot_input_frame = ttk.LabelFrame(confirm_frame, text="Tracciabilità Lotto (opzionale)", padding=5)
+        lot_input_frame.pack(side="top", fill="x", pady=(0, 5))
+        
+        ttk.Label(lot_input_frame, text="Lotto ID:").grid(row=0, column=0, padx=5, sticky="e")
+        self.lot_id_var = tk.StringVar()
+        ttk.Entry(lot_input_frame, textvariable=self.lot_id_var, width=25).grid(row=0, column=1, padx=5, sticky="w")
+        ttk.Label(lot_input_frame, text="(es. LOT-2026-001, lasciare vuoto per auto-generare)").grid(row=0, column=2, padx=5, sticky="w")
+        
+        ttk.Label(lot_input_frame, text="Data Scadenza:").grid(row=1, column=0, padx=5, sticky="e")
+        self.expiry_date_var = tk.StringVar()
+        ttk.Entry(lot_input_frame, textvariable=self.expiry_date_var, width=25).grid(row=1, column=1, padx=5, sticky="w")
+        ttk.Label(lot_input_frame, text="(formato YYYY-MM-DD, lasciare vuoto se prodotto non deperibile)").grid(row=1, column=2, padx=5, sticky="w")
+        
+        # Confirmation button
+        button_frame = ttk.Frame(confirm_frame)
+        button_frame.pack(side="top", fill="x", pady=(5, 0))
+        
+        ttk.Label(button_frame, text="Verifica quantità nella tabella (doppio click per modificare), poi:", font=("Helvetica", 10)).pack(side="left", padx=(10, 20))
+        ttk.Button(button_frame, text="✓ Chiudi Ricevimento (Conferma Tutte)", command=self._close_receipt_bulk, style="Accent.TButton").pack(side="left", padx=5)
         
         # === RECEIVING HISTORY ===
         history_frame = ttk.LabelFrame(main_frame, text="Storico Ricevimenti", padding=5)
@@ -2236,6 +2270,21 @@ class DesktopOrderApp:
         
         receipt_date_obj = date.today()
         
+        # Get lot tracking info
+        lot_id_input = self.lot_id_var.get().strip()
+        expiry_date_input = self.expiry_date_var.get().strip()
+        
+        # Validate expiry_date format
+        if expiry_date_input:
+            try:
+                date.fromisoformat(expiry_date_input)
+            except ValueError:
+                messagebox.showerror(
+                    "Formato Data Errato",
+                    f"Data scadenza non valida: {expiry_date_input}\n\nFormato atteso: YYYY-MM-DD (es. 2026-12-31)"
+                )
+                return
+        
         # Prepara items per il nuovo metodo
         items = []
         for item_id, new_qty_received in self.pending_qty_edits.items():
@@ -2249,6 +2298,8 @@ class DesktopOrderApp:
                 "sku": sku,
                 "qty_received": new_qty_received,
                 "order_ids": [],  # FIFO allocation automatica
+                "lot_id": lot_id_input,  # NEW: lot tracking
+                "expiry_date": expiry_date_input,  # NEW: expiry tracking
             })
         
         if not items:
@@ -3054,6 +3105,216 @@ class DesktopOrderApp:
         ttk.Button(button_frame, text="Revert", command=do_bulk_revert).pack(side="right", padx=5)
         ttk.Button(button_frame, text="Cancel", command=popup.destroy).pack(side="right", padx=5)
 
+    
+    def _build_expiry_tab(self):
+        """Build Expiry tracking tab (lots with expiry dates)."""
+        main_frame = ttk.Frame(self.expiry_tab)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Title
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(side="top", fill="x", pady=(0, 10))
+        ttk.Label(title_frame, text="⏰ Gestione Scadenze Lotti", font=("Helvetica", 14, "bold")).pack(side="left")
+        ttk.Label(title_frame, text="(Tracciamento FEFO - First Expired First Out)", font=("Helvetica", 9, "italic"), foreground="gray").pack(side="left", padx=(10, 0))
+        
+        # === ALERT PANEL ===
+        alert_frame = ttk.LabelFrame(main_frame, text="⚠️ Alert Scadenze", padding=10)
+        alert_frame.pack(side="top", fill="x", pady=(0, 10))
+        
+        # Days threshold selector
+        threshold_frame = ttk.Frame(alert_frame)
+        threshold_frame.pack(side="top", fill="x", pady=(0, 5))
+        
+        ttk.Label(threshold_frame, text="Mostra lotti in scadenza entro:").pack(side="left", padx=5)
+        self.expiry_threshold_var = tk.IntVar(value=30)
+        ttk.Spinbox(threshold_frame, from_=1, to=365, textvariable=self.expiry_threshold_var, width=10).pack(side="left", padx=5)
+        ttk.Label(threshold_frame, text="giorni").pack(side="left", padx=5)
+        ttk.Button(threshold_frame, text="🔄 Aggiorna", command=self._refresh_expiry_alerts).pack(side="left", padx=20)
+        
+        # Alert summary
+        self.expiry_alert_label = ttk.Label(alert_frame, text="Nessun alert", font=("Helvetica", 10))
+        self.expiry_alert_label.pack(side="top", pady=5)
+        
+        # === EXPIRING LOTS TABLE ===
+        expiring_frame = ttk.LabelFrame(main_frame, text="Lotti in Scadenza", padding=5)
+        expiring_frame.pack(side="top", fill="both", expand=True, pady=(0, 10))
+        
+        expiring_scroll = ttk.Scrollbar(expiring_frame)
+        expiring_scroll.pack(side="right", fill="y")
+        
+        self.expiring_lots_treeview = ttk.Treeview(
+            expiring_frame,
+            columns=("Lot ID", "SKU", "Description", "Expiry Date", "Days Left", "Qty", "Status"),
+            height=8,
+            yscrollcommand=expiring_scroll.set,
+        )
+        expiring_scroll.config(command=self.expiring_lots_treeview.yview)
+        
+        self.expiring_lots_treeview.column("#0", width=0, stretch=tk.NO)
+        self.expiring_lots_treeview.column("Lot ID", anchor=tk.W, width=120)
+        self.expiring_lots_treeview.column("SKU", anchor=tk.W, width=80)
+        self.expiring_lots_treeview.column("Description", anchor=tk.W, width=200)
+        self.expiring_lots_treeview.column("Expiry Date", anchor=tk.CENTER, width=100)
+        self.expiring_lots_treeview.column("Days Left", anchor=tk.CENTER, width=80)
+        self.expiring_lots_treeview.column("Qty", anchor=tk.CENTER, width=80)
+        self.expiring_lots_treeview.column("Status", anchor=tk.CENTER, width=100)
+        
+        self.expiring_lots_treeview.heading("Lot ID", text="ID Lotto", anchor=tk.W)
+        self.expiring_lots_treeview.heading("SKU", text="SKU", anchor=tk.W)
+        self.expiring_lots_treeview.heading("Description", text="Descrizione", anchor=tk.W)
+        self.expiring_lots_treeview.heading("Expiry Date", text="Scadenza", anchor=tk.CENTER)
+        self.expiring_lots_treeview.heading("Days Left", text="Giorni", anchor=tk.CENTER)
+        self.expiring_lots_treeview.heading("Qty", text="Quantità", anchor=tk.CENTER)
+        self.expiring_lots_treeview.heading("Status", text="Stato", anchor=tk.CENTER)
+        
+        self.expiring_lots_treeview.pack(fill="both", expand=True)
+        
+        # Color tags
+        self.expiring_lots_treeview.tag_configure("expired", background="#ffcccc")
+        self.expiring_lots_treeview.tag_configure("critical", background="#ffe6cc")
+        self.expiring_lots_treeview.tag_configure("warning", background="#ffffcc")
+        
+        # === ALL LOTS TABLE ===
+        all_lots_frame = ttk.LabelFrame(main_frame, text="Tutti i Lotti Attivi", padding=5)
+        all_lots_frame.pack(side="top", fill="both", expand=True)
+        
+        # Toolbar
+        lot_toolbar = ttk.Frame(all_lots_frame)
+        lot_toolbar.pack(side="top", fill="x", pady=(0, 5))
+        ttk.Button(lot_toolbar, text="🔄 Aggiorna", command=self._refresh_all_lots).pack(side="left", padx=5)
+        
+        ttk.Label(lot_toolbar, text="Filtra SKU:").pack(side="left", padx=(20, 5))
+        self.lot_filter_sku_var = tk.StringVar()
+        ttk.Entry(lot_toolbar, textvariable=self.lot_filter_sku_var, width=15).pack(side="left", padx=5)
+        ttk.Button(lot_toolbar, text="Applica", command=self._refresh_all_lots).pack(side="left", padx=5)
+        
+        all_lots_scroll = ttk.Scrollbar(all_lots_frame)
+        all_lots_scroll.pack(side="right", fill="y")
+        
+        self.all_lots_treeview = ttk.Treeview(
+            all_lots_frame,
+            columns=("Lot ID", "SKU", "Description", "Expiry Date", "Qty", "Receipt Date"),
+            height=10,
+            yscrollcommand=all_lots_scroll.set,
+        )
+        all_lots_scroll.config(command=self.all_lots_treeview.yview)
+        
+        self.all_lots_treeview.column("#0", width=0, stretch=tk.NO)
+        self.all_lots_treeview.column("Lot ID", anchor=tk.W, width=120)
+        self.all_lots_treeview.column("SKU", anchor=tk.W, width=80)
+        self.all_lots_treeview.column("Description", anchor=tk.W, width=200)
+        self.all_lots_treeview.column("Expiry Date", anchor=tk.CENTER, width=100)
+        self.all_lots_treeview.column("Qty", anchor=tk.CENTER, width=80)
+        self.all_lots_treeview.column("Receipt Date", anchor=tk.CENTER, width=100)
+        
+        self.all_lots_treeview.heading("Lot ID", text="ID Lotto", anchor=tk.W)
+        self.all_lots_treeview.heading("SKU", text="SKU", anchor=tk.W)
+        self.all_lots_treeview.heading("Description", text="Descrizione", anchor=tk.W)
+        self.all_lots_treeview.heading("Expiry Date", text="Scadenza", anchor=tk.CENTER)
+        self.all_lots_treeview.heading("Qty", text="Quantità", anchor=tk.CENTER)
+        self.all_lots_treeview.heading("Receipt Date", text="Data Ricevimento", anchor=tk.CENTER)
+        
+        self.all_lots_treeview.pack(fill="both", expand=True)
+        
+        # Initial load
+        self._refresh_expiry_alerts()
+        self._refresh_all_lots()
+    
+    def _refresh_expiry_alerts(self):
+        """Refresh expiring lots alert table."""
+        threshold_days = self.expiry_threshold_var.get()
+        
+        # Get expiring + expired lots
+        expiring_lots = self.csv_layer.get_expiring_lots(threshold_days)
+        expired_lots = self.csv_layer.get_expired_lots()
+        
+        # Clear table
+        self.expiring_lots_treeview.delete(*self.expiring_lots_treeview.get_children())
+        
+        # Get SKU descriptions
+        skus_by_id = {sku.sku: sku for sku in self.csv_layer.read_skus()}
+        
+        # Display expired first
+        for lot in expired_lots:
+            sku_obj = skus_by_id.get(lot.sku)
+            description = sku_obj.description if sku_obj else "N/A"
+            days_left = lot.days_until_expiry(date.today())
+            
+            self.expiring_lots_treeview.insert(
+                "",
+                "end",
+                values=(lot.lot_id, lot.sku, description, lot.expiry_date.isoformat() if lot.expiry_date else "", days_left, lot.qty_on_hand, "❌ SCADUTO"),
+                tags=("expired",)
+            )
+        
+        # Then expiring
+        for lot in expiring_lots:
+            sku_obj = skus_by_id.get(lot.sku)
+            description = sku_obj.description if sku_obj else "N/A"
+            days_left = lot.days_until_expiry(date.today())
+            
+            # Status based on days left
+            if days_left <= 7:
+                status = "🔴 CRITICO"
+                tag = "critical"
+            elif days_left <= 14:
+                status = "🟡 ATTENZIONE"
+                tag = "warning"
+            else:
+                status = "🟢 OK"
+                tag = ""
+            
+            self.expiring_lots_treeview.insert(
+                "",
+                "end",
+                values=(lot.lot_id, lot.sku, description, lot.expiry_date.isoformat() if lot.expiry_date else "", days_left, lot.qty_on_hand, status),
+                tags=(tag,) if tag else ()
+            )
+        
+        # Update alert label
+        total_expiring = len(expiring_lots) + len(expired_lots)
+        if total_expiring == 0:
+            self.expiry_alert_label.config(text="✅ Nessun lotto in scadenza", foreground="green")
+        else:
+            self.expiry_alert_label.config(
+                text=f"⚠️ {total_expiring} lotti richiedono attenzione ({len(expired_lots)} scaduti, {len(expiring_lots)} in scadenza)",
+                foreground="red" if expired_lots else "orange"
+            )
+    
+    def _refresh_all_lots(self):
+        """Refresh all active lots table."""
+        lots = self.csv_layer.read_lots()
+        
+        # Apply SKU filter
+        sku_filter = self.lot_filter_sku_var.get().strip().lower()
+        if sku_filter:
+            lots = [lot for lot in lots if sku_filter in lot.sku.lower()]
+        
+        # Clear table
+        self.all_lots_treeview.delete(*self.all_lots_treeview.get_children())
+        
+        # Get SKU descriptions
+        skus_by_id = {sku.sku: sku for sku in self.csv_layer.read_skus()}
+        
+        # Sort by expiry date (None last)
+        lots.sort(key=lambda lot: (lot.expiry_date is None, lot.expiry_date or date.max))
+        
+        for lot in lots:
+            sku_obj = skus_by_id.get(lot.sku)
+            description = sku_obj.description if sku_obj else "N/A"
+            
+            self.all_lots_treeview.insert(
+                "",
+                "end",
+                values=(
+                    lot.lot_id,
+                    lot.sku,
+                    description,
+                    lot.expiry_date.isoformat() if lot.expiry_date else "No expiry",
+                    lot.qty_on_hand,
+                    lot.receipt_date.isoformat(),
+                ),
+            )
     
     def _build_admin_tab(self):
         """Build Admin tab (SKU management, data view)."""

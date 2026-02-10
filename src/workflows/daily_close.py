@@ -1,12 +1,15 @@
 """
-Daily closing workflow: EOD stock entry and automatic sales calculation.
+Daily closing workflow: EOD stock entry and automatic sales calculation with FEFO.
 """
 from datetime import date
 from typing import Tuple, Optional
+import logging
 
 from ..domain.models import Transaction, EventType, SalesRecord
-from ..domain.ledger import calculate_sold_from_eod_stock
+from ..domain.ledger import calculate_sold_from_eod_stock, LotConsumptionManager
 from ..persistence.csv_layer import CSVLayer
+
+logger = logging.getLogger(__name__)
 
 
 class DailyCloseWorkflow:
@@ -87,6 +90,22 @@ class DailyCloseWorkflow:
                 # Append new sale
                 sales_record = SalesRecord(date=eod_date, sku=sku, qty_sold=qty_sold)
                 self.csv_layer.append_sales(sales_record)
+            
+            # NEW: Apply FEFO consumption to lots
+            try:
+                lots = self.csv_layer.get_lots_by_sku(sku, sort_by_expiry=True)
+                if lots:
+                    consumption_records = LotConsumptionManager.consume_from_lots(
+                        sku=sku,
+                        qty_to_consume=qty_sold,
+                        lots=lots,
+                        csv_layer=self.csv_layer,
+                    )
+                    
+                    if consumption_records:
+                        logger.info(f"FEFO consumption for {sku}: {consumption_records}")
+            except Exception as e:
+                logger.warning(f"FEFO consumption failed for {sku}: {e}, continuing without lot update")
         
         # Write ADJUST if adjustment != 0 (stock discrepancy after accounting for sales)
         if adjustment != 0:

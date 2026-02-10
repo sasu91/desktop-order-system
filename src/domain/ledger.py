@@ -401,3 +401,109 @@ def validate_ean(ean: Optional[str]) -> Tuple[bool, Optional[str]]:
         return False, f"EAN must be 12 or 13 digits, got {len(ean)} digits"
     
     return True, None
+
+
+class LotConsumptionManager:
+    """
+    FEFO (First Expired First Out) lot consumption logic.
+    
+    When stock is consumed (SALE, WASTE), automatically deducts from lots
+    with nearest expiry date first, then from non-expiry lots.
+    """
+    
+    @staticmethod
+    def consume_from_lots(sku: str, qty_to_consume: int, lots: List, csv_layer) -> List[Dict]:
+        """
+        Consume quantity from lots using FEFO logic.
+        
+        Args:
+            sku: SKU identifier
+            qty_to_consume: Total quantity to consume
+            lots: List of Lot objects for the SKU (should be sorted by expiry)
+            csv_layer: CSV layer for updating lot quantities
+        
+        Returns:
+            List of consumption records: [{"lot_id": str, "qty_consumed": int, "expiry_date": date}, ...]
+        
+        Raises:
+            ValueError: If insufficient stock in lots
+        """
+        from ..domain.models import Lot
+        
+        # Get lots for this SKU, sorted FEFO (earliest expiry first)
+        sku_lots = csv_layer.get_lots_by_sku(sku, sort_by_expiry=True)
+        
+        if not sku_lots:
+            # No lot tracking for this SKU, skip FEFO logic
+            return []
+        
+        total_available = sum(lot.qty_on_hand for lot in sku_lots)
+        if total_available < qty_to_consume:
+            raise ValueError(
+                f"Insufficient stock in lots for {sku}: "
+                f"need {qty_to_consume}, available {total_available}"
+            )
+        
+        consumption_records = []
+        remaining_to_consume = qty_to_consume
+        
+        for lot in sku_lots:
+            if remaining_to_consume <= 0:
+                break
+            
+            # Consume from this lot
+            qty_from_lot = min(lot.qty_on_hand, remaining_to_consume)
+            new_qty = lot.qty_on_hand - qty_from_lot
+            
+            # Update lot quantity
+            csv_layer.update_lot_quantity(lot.lot_id, new_qty)
+            
+            consumption_records.append({
+                "lot_id": lot.lot_id,
+                "qty_consumed": qty_from_lot,
+                "expiry_date": lot.expiry_date,
+                "qty_remaining": new_qty,
+            })
+            
+            remaining_to_consume -= qty_from_lot
+        
+        return consumption_records
+    
+    @staticmethod
+    def add_fefo_note_to_transaction(txn: Transaction, consumption_records: List[Dict]) -> Transaction:
+        """
+        Add FEFO consumption details to transaction note.
+        
+        Args:
+            txn: Original transaction
+            consumption_records: Output from consume_from_lots()
+        
+        Returns:
+            New transaction with enhanced note
+        """
+        if not consumption_records:
+            return txn
+        
+        lot_details = []
+        for record in consumption_records:
+            lot_id = record["lot_id"]
+            qty = record["qty_consumed"]
+            exp = record["expiry_date"]
+            exp_str = exp.isoformat() if exp else "no expiry"
+            lot_details.append(f"{lot_id}:{qty}pz(exp:{exp_str})")
+        
+        fefo_note = f"FEFO: {', '.join(lot_details)}"
+        original_note = txn.note or ""
+        combined_note = f"{original_note}; {fefo_note}".strip("; ")
+        
+        # Create new transaction with updated note
+        from ..domain.models import Transaction
+        return Transaction(
+            date=txn.date,
+            sku=txn.sku,
+            event=txn.event,
+            qty=txn.qty,
+            receipt_date=txn.receipt_date,
+            note=combined_note,
+        )
+
