@@ -274,14 +274,34 @@ class OrderWorkflow:
             unusable_qty = usable_result.unusable_qty
             waste_risk_percent = usable_result.waste_risk_percent
             
-            # Calculate expected waste rate for Monte Carlo adjustment (Fase 3)
-            if waste_risk_percent > 0:
-                from ..uncertainty import WasteUncertainty
-                waste_realization_factor = settings.get("shelf_life_policy", {}).get("waste_realization_factor", {}).get("value", 0.5)
-                expected_waste_rate = WasteUncertainty.calculate_expected_waste_rate(
-                    waste_risk_percent=waste_risk_percent,
-                    waste_realization_factor=waste_realization_factor
+            # SAFETY FALLBACK: If lots don't cover ledger stock, use ledger as source of truth
+            # This prevents artificial IP deflation when lot tracking is incomplete/desynchronized
+            lots_total = usable_result.total_on_hand
+            ledger_stock = current_stock.on_hand
+            discrepancy_threshold = max(5, ledger_stock * 0.1)  # 10% or 5 units
+            
+            if not lots or lots_total < ledger_stock - discrepancy_threshold:
+                # Lots missing or significantly lower than ledger → fallback to ledger
+                logging.warning(
+                    f"Shelf life fallback for {sku}: "
+                    f"lots total={lots_total}, ledger on_hand={ledger_stock}. "
+                    f"Using ledger stock, waste risk set to 0%. "
+                    f"Reconcile lots.csv with ledger to restore shelf life tracking."
                 )
+                usable_qty = ledger_stock
+                unusable_qty = 0
+                waste_risk_percent = 0.0
+                # Note: expected_waste_rate stays 0.0 (already initialized)
+            else:
+                # Lots data reliable: use shelf life calculations normally
+                # Calculate expected waste rate for Monte Carlo adjustment (Fase 3)
+                if waste_risk_percent > 0:
+                    from ..uncertainty import WasteUncertainty
+                    waste_realization_factor = settings.get("shelf_life_policy", {}).get("waste_realization_factor", {}).get("value", 0.5)
+                    expected_waste_rate = WasteUncertainty.calculate_expected_waste_rate(
+                        waste_risk_percent=waste_risk_percent,
+                        waste_realization_factor=waste_realization_factor
+                    )
         
         # Override with SKU-specific method if provided
         forecast_method = sku_obj.forecast_method if (sku_obj and sku_obj.forecast_method) else global_forecast_method
@@ -496,9 +516,10 @@ class OrderWorkflow:
             if proposed_qty > 0 and moq > 1 and proposed_qty < moq:
                 proposed_qty = 0  # Can't meet MOQ without exceeding max_stock
         
-        # === APPLY SHELF LIFE PENALTY (Fase 2) ===
+        # === APPLY SHELF LIFE PENALTY (Fase 2 - FORWARD-LOOKING) ===
         shelf_life_penalty_applied = False
         shelf_life_penalty_message = ""
+        waste_risk_forward_percent = 0.0  # Projected waste risk at receipt_date
         
         if shelf_life_enabled and shelf_life_days > 0 and proposed_qty > 0:
             # Determina parametri penalty con category override
@@ -517,12 +538,38 @@ class OrderWorkflow:
                                    category_params.get("waste_risk_threshold",
                                    settings.get("shelf_life_policy", {}).get("waste_risk_threshold", {}).get("value", 15.0))
             
-            # Applica penalty se waste risk > threshold
-            if waste_risk_percent >= waste_risk_threshold:
+            # NEW: Calculate FORWARD waste risk (at receipt_date, including incoming order)
+            # This gives a more realistic picture than current waste_risk_percent
+            receipt_date_calc = date.today() + timedelta(days=lead_time)
+            
+            # Get shelf life parameters (same as earlier calculation)
+            min_shelf_life_calc = sku_obj.min_shelf_life_days if (sku_obj and sku_obj.min_shelf_life_days > 0) else \
+                                  category_params.get("min_shelf_life_days", 
+                                  settings.get("shelf_life_policy", {}).get("min_shelf_life_global", {}).get("value", 7))
+            
+            waste_horizon_days_calc = settings.get("shelf_life_policy", {}).get("waste_horizon_days", {}).get("value", 14)
+            
+            # Calculate forward-looking waste risk
+            if not lots or lots_total < ledger_stock - discrepancy_threshold:
+                # Fallback case: no forward calculation possible
+                waste_risk_forward_percent = 0.0
+            else:
+                waste_risk_forward_percent, _, _ = ShelfLifeCalculator.calculate_forward_waste_risk(
+                    lots=lots,
+                    current_date=date.today(),
+                    receipt_date=receipt_date_calc,
+                    proposed_qty=proposed_qty,
+                    sku_shelf_life_days=shelf_life_days,
+                    min_shelf_life_days=min_shelf_life_calc,
+                    waste_horizon_days=waste_horizon_days_calc
+                )
+            
+            # Use FORWARD waste risk for penalty decision
+            if waste_risk_forward_percent >= waste_risk_threshold:
                 original_proposed = proposed_qty
                 proposed_qty, penalty_msg = ShelfLifeCalculator.apply_shelf_life_penalty(
                     proposed_qty=proposed_qty,
-                    waste_risk_percent=waste_risk_percent,
+                    waste_risk_percent=waste_risk_forward_percent,
                     waste_risk_threshold=waste_risk_threshold,
                     penalty_mode=waste_penalty_mode,
                     penalty_factor=waste_penalty_factor
@@ -540,7 +587,11 @@ class OrderWorkflow:
         if shelf_life_warning:
             notes += f" ⚠️ SHELF LIFE: Target S={S} exceeds {shelf_life_days}d capacity"
         if shelf_life_enabled and shelf_life_days > 0:
-            notes += f" | Usable={usable_qty}, Waste Risk={waste_risk_percent:.1f}%"
+            # Show both current and forward waste risk for visibility
+            if waste_risk_forward_percent > 0:
+                notes += f" | Usable={usable_qty}, Waste Risk Now={waste_risk_percent:.1f}%, @Receipt={waste_risk_forward_percent:.1f}%"
+            else:
+                notes += f" | Usable={usable_qty}, Waste Risk={waste_risk_percent:.1f}%"
         if shelf_life_penalty_applied:
             notes += f" | {shelf_life_penalty_message}"
         
@@ -605,6 +656,7 @@ class OrderWorkflow:
             usable_stock=usable_qty,
             unusable_stock=unusable_qty,
             waste_risk_percent=waste_risk_percent,
+            waste_risk_forward_percent=waste_risk_forward_percent,
             shelf_life_penalty_applied=shelf_life_penalty_applied,
             shelf_life_penalty_message=shelf_life_penalty_message,
         )

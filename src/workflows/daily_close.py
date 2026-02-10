@@ -91,7 +91,10 @@ class DailyCloseWorkflow:
                 sales_record = SalesRecord(date=eod_date, sku=sku, qty_sold=qty_sold)
                 self.csv_layer.append_sales(sales_record)
             
-            # NEW: Apply FEFO consumption to lots
+            # Apply FEFO consumption to lots (real-time sync)
+            # Note: EOD sales are recorded in sales.csv only, not as SALE transactions in ledger
+            # Therefore FEFO must be applied explicitly here (auto-FEFO in write_transaction only
+            # applies to SALE/WASTE events written to ledger)
             try:
                 lots = self.csv_layer.get_lots_by_sku(sku, sort_by_expiry=True)
                 if lots:
@@ -103,9 +106,11 @@ class DailyCloseWorkflow:
                     )
                     
                     if consumption_records:
-                        logger.info(f"FEFO consumption for {sku}: {consumption_records}")
+                        logger.info(f"FEFO consumption for {sku} EOD sales: {consumption_records}")
             except Exception as e:
                 logger.warning(f"FEFO consumption failed for {sku}: {e}, continuing without lot update")
+
+
         
         # Write ADJUST if adjustment != 0 (stock discrepancy after accounting for sales)
         if adjustment != 0:

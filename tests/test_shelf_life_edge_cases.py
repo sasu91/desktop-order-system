@@ -18,7 +18,7 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from src.domain.models import SKU, Transaction, EventType, Stock, SalesRecord, DemandVariability
+from src.domain.models import SKU, Transaction, EventType, Stock, SalesRecord, DemandVariability, Lot
 from src.persistence.csv_layer import CSVLayer
 from src.workflows.order import OrderWorkflow, calculate_daily_sales_average
 from src.domain.ledger import StockCalculator
@@ -95,6 +95,17 @@ class TestEdgeCaseExpiredStock:
                     receipt_date=receipt_date,
                     note=f"Receive lot {i+1}"
                 ))
+                # CREATE LOT (required for shelf life tracking)
+                expiry_date = receipt_date + timedelta(days=sku.shelf_life_days)
+                lot = Lot(
+                    lot_id=f"LOT_EXPIRED_{i+1}",
+                    sku=sku.sku,
+                    expiry_date=expiry_date,
+                    qty_on_hand=50,
+                    receipt_id=f"REC_{receipt_date.isoformat()}_{i+1}",
+                    receipt_date=receipt_date
+                )
+                csv_layer.write_lot(lot)
             
             # Create sales history (minimal - most stock should remain)
             for i in range(14):
@@ -230,6 +241,7 @@ class TestEdgeCaseExpiredStock:
                 (base_date - timedelta(days=5), 50, "Fresh"),  # 25 days left
             ]
             
+            lot_idx = 0
             for receipt_date, qty, note in lot_configs:
                 csv_layer.write_transaction(Transaction(
                     date=receipt_date - timedelta(days=7),
@@ -247,6 +259,18 @@ class TestEdgeCaseExpiredStock:
                     receipt_date=receipt_date,
                     note=f"Receive {note}"
                 ))
+                # CREATE LOT (required for shelf life tracking)
+                expiry_date = receipt_date + timedelta(days=sku.shelf_life_days)
+                lot = Lot(
+                    lot_id=f"LOT_MIXED_{lot_idx+1}",
+                    sku=sku.sku,
+                    expiry_date=expiry_date,
+                    qty_on_hand=qty,
+                    receipt_id=f"REC_{receipt_date.isoformat()}_{lot_idx+1}",
+                    receipt_date=receipt_date
+                )
+                csv_layer.write_lot(lot)
+                lot_idx += 1
             
             # Add sales history
             for i in range(14):

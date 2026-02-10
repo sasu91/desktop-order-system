@@ -621,6 +621,11 @@ class CSVLayer:
     
     def write_transaction(self, txn: Transaction):
         """Add a new transaction to transactions.csv."""
+        # Auto-apply FEFO for SALE/WASTE events
+        from ..domain.models import EventType
+        if txn.event in [EventType.SALE, EventType.WASTE] and txn.qty > 0:
+            txn = self._apply_fefo_to_transaction(txn)
+        
         self._append_csv("transactions.csv", {
             "date": txn.date.isoformat(),
             "sku": txn.sku,
@@ -632,8 +637,13 @@ class CSVLayer:
     
     def write_transactions_batch(self, txns: List[Transaction]):
         """Add multiple transactions at once (append mode)."""
+        from ..domain.models import EventType
         rows = self._read_csv("transactions.csv")
         for txn in txns:
+            # Auto-apply FEFO for SALE/WASTE events
+            if txn.event in [EventType.SALE, EventType.WASTE] and txn.qty > 0:
+                txn = self._apply_fefo_to_transaction(txn)
+            
             rows.append({
                 "date": txn.date.isoformat(),
                 "sku": txn.sku,
@@ -1311,7 +1321,73 @@ class CSVLayer:
             check_date = date.today()
         
         lots = self.read_lots()
-        expired = [lot for lot in lots if lot.is_expired(check_date)]
+        expired = []
+        
+        for lot in lots:
+            if lot.expiry_date is None:
+                continue
+            
+            if lot.expiry_date < check_date:
+                expired.append(lot)
+        
+        # Sort by expiry date (oldest first)
+        expired.sort(key=lambda lot: lot.expiry_date)
         
         return expired
-
+    
+    # ============ FEFO Auto-Trigger ============
+    
+    def _apply_fefo_to_transaction(self, txn: Transaction) -> Transaction:
+        """
+        Apply FEFO consumption to SALE/WASTE transaction.
+        
+        This method is called automatically by write_transaction() and write_transactions_batch()
+        when event is SALE or WASTE with qty > 0.
+        
+        Args:
+            txn: Transaction to process
+        
+        Returns:
+            Transaction with updated note containing FEFO details
+        
+        Note:
+            - If no lots exist for SKU, returns original transaction unchanged
+            - If FEFO consumption fails, logs warning and returns original transaction
+        """
+        import logging
+        from ..domain.ledger import LotConsumptionManager
+        
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Get lots for this SKU
+            lots = self.get_lots_by_sku(txn.sku, sort_by_expiry=True)
+            if not lots:
+                # No lot tracking for this SKU, skip FEFO
+                return txn
+            
+            # Apply FEFO consumption
+            consumption_records = LotConsumptionManager.consume_from_lots(
+                sku=txn.sku,
+                qty_to_consume=txn.qty,
+                lots=lots,
+                csv_layer=self,
+            )
+            
+            if consumption_records:
+                # Add FEFO details to transaction note
+                updated_txn = LotConsumptionManager.add_fefo_note_to_transaction(
+                    txn, consumption_records
+                )
+                logger.info(f"Real-time FEFO for {txn.sku} ({txn.event.value}): {len(consumption_records)} lots consumed")
+                return updated_txn
+            else:
+                return txn
+        
+        except Exception as e:
+            # Log error but don't fail transaction write
+            logger.warning(
+                f"FEFO auto-trigger failed for {txn.sku} ({txn.event.value}, qty={txn.qty}): {e}. "
+                f"Transaction will be written without FEFO update."
+            )
+            return txn

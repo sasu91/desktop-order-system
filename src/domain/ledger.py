@@ -3,7 +3,7 @@ Stock calculation engine (AsOf logic).
 
 Core ledger processing: deterministic, testable, no I/O.
 """
-from datetime import date
+from datetime import date, timedelta
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from collections import defaultdict
@@ -539,6 +539,75 @@ class ShelfLifeCalculator:
         else:
             # Unknown mode: no penalty
             return proposed_qty, ""
+    
+    @staticmethod
+    def calculate_forward_waste_risk(
+        lots: List['Lot'],
+        current_date: date,
+        receipt_date: date,
+        proposed_qty: int,
+        sku_shelf_life_days: int,
+        min_shelf_life_days: int,
+        waste_horizon_days: int,
+    ) -> Tuple[float, int, int]:
+        """
+        Calculate waste risk projected to receipt_date including incoming order.
+        
+        This provides a more realistic waste risk assessment by considering:
+        1. Existing lots aged forward by lead_time days
+        2. Incoming order as a virtual lot with full shelf life
+        
+        Args:
+            lots: Current lots for the SKU
+            current_date: Today's date
+            receipt_date: Expected receipt date of new order
+            proposed_qty: Quantity being ordered
+            sku_shelf_life_days: Total shelf life for this SKU (for new lot)
+            min_shelf_life_days: Minimum shelf life threshold
+            waste_horizon_days: Waste risk window
+        
+        Returns:
+            (waste_risk_percent, total_stock_at_receipt, expiring_soon_at_receipt)
+        """
+        from .models import Lot
+        
+        if proposed_qty <= 0:
+            # No order: just calculate current waste risk aged forward
+            aged_result = ShelfLifeCalculator.calculate_usable_stock(
+                lots=lots,
+                check_date=receipt_date,
+                min_shelf_life_days=min_shelf_life_days,
+                waste_horizon_days=waste_horizon_days
+            )
+            return aged_result.waste_risk_percent, aged_result.total_on_hand, aged_result.expiring_soon_qty
+        
+        # Create virtual lot for incoming order
+        incoming_expiry = receipt_date + timedelta(days=sku_shelf_life_days) if sku_shelf_life_days > 0 else None
+        incoming_lot = Lot(
+            lot_id="VIRTUAL_INCOMING",
+            sku="VIRTUAL",
+            expiry_date=incoming_expiry,
+            qty_on_hand=proposed_qty,
+            receipt_id="VIRTUAL",
+            receipt_date=receipt_date
+        )
+        
+        # Combine existing + incoming lots
+        combined_lots = list(lots) + [incoming_lot]
+        
+        # Calculate waste risk at receipt_date
+        forward_result = ShelfLifeCalculator.calculate_usable_stock(
+            lots=combined_lots,
+            check_date=receipt_date,
+            min_shelf_life_days=min_shelf_life_days,
+            waste_horizon_days=waste_horizon_days
+        )
+        
+        return (
+            forward_result.waste_risk_percent,
+            forward_result.total_on_hand,
+            forward_result.expiring_soon_qty
+        )
 
 
 class LotConsumptionManager:

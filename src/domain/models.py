@@ -279,7 +279,8 @@ class OrderProposal:
     # Shelf life integration (Fase 2)
     usable_stock: int = 0  # Stock utilizzabile (shelf life >= min_shelf_life_days)
     unusable_stock: int = 0  # Stock non utilizzabile (scaduto o shelf life insufficiente)
-    waste_risk_percent: float = 0.0  # % stock a rischio spreco
+    waste_risk_percent: float = 0.0  # % stock a rischio spreco (oggi)
+    waste_risk_forward_percent: float = 0.0  # % stock a rischio spreco al receipt_date (include ordine)
     shelf_life_penalty_applied: bool = False  # True se penalty applicato
     shelf_life_penalty_message: str = ""  # Messaggio penalty (es. "Reduced by 50%")
 
