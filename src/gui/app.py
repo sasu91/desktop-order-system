@@ -4889,12 +4889,58 @@ class DesktopOrderApp:
         search_entry = ttk.Entry(search_frame, textvariable=self.settings_search_var, width=40)
         search_entry.pack(side="left", padx=5)
         
+        # Storage for widgets
+        self.settings_widgets = {}
+        self.settings_section_widgets = {}  # For section auto-apply checkboxes
+        self.settings_rows = []  # For search filtering
         
-        # Scrollable container for settings form
-        scroll_container = ttk.Frame(main_frame)
-        scroll_container.pack(fill="both", expand=True, pady=10)
+        # Sub-tabs notebook
+        self.settings_notebook = ttk.Notebook(main_frame)
+        self.settings_notebook.pack(fill="both", expand=True, pady=10)
         
-        # Canvas with scrollbar
+        # Create sub-tabs
+        self._build_reorder_settings_tab()
+        self._build_auto_variability_settings_tab()
+        self._build_monte_carlo_settings_tab()
+        self._build_expiry_alerts_settings_tab()
+        self._build_shelf_life_settings_tab()
+        self._build_dashboard_settings_tab()
+        self._build_holidays_settings_tab()
+        
+        # Buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(side="bottom", fill="x", pady=10)
+        
+        ttk.Button(
+            button_frame,
+            text="💾 Salva Impostazioni",
+            command=self._save_settings
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="↺ Ripristina Default",
+            command=self._reset_settings_to_default
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="🔄 Ricarica",
+            command=self._refresh_settings_tab
+        ).pack(side="left", padx=5)
+        
+        # Load current settings
+        self._refresh_settings_tab()
+    
+    def _build_reorder_settings_tab(self):
+        """Build Reorder Engine Parameters sub-tab."""
+        tab_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(tab_frame, text="⚙️ Parametri Base")
+        
+        # Scrollable container
+        scroll_container = ttk.Frame(tab_frame)
+        scroll_container.pack(fill="both", expand=True)
+        
         canvas = tk.Canvas(scroll_container, highlightthickness=0)
         scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
@@ -4910,35 +4956,25 @@ class DesktopOrderApp:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Enable mouse wheel scrolling (bind to canvas, not globally)
+        # Enable mouse wheel scrolling
         def _on_mousewheel(event):
             try:
                 if canvas.winfo_exists():
                     canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
             except tk.TclError:
-                pass  # Widget destroyed, ignore
+                pass
         
-        # Bind mousewheel only when mouse is over the canvas
         canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
         canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
         
-        # Storage for widgets
-        self.settings_widgets = {}
-        self.settings_section_widgets = {}  # For section auto-apply checkboxes
-        self.settings_rows = []  # For search filtering
-        
-        # ===== SECTION 1: Reorder Engine Base Parameters =====
-        section_reorder = CollapsibleFrame(scrollable_frame, title="⚙️ Parametri Base Motore Riordino", expanded=True)
-        section_reorder.pack(fill="x", pady=5)
-        
-        # Section auto-apply checkbox
-        reorder_auto_frame = ttk.Frame(section_reorder.get_content_frame())
+        # Auto-apply checkbox
+        reorder_auto_frame = ttk.Frame(scrollable_frame)
         reorder_auto_frame.pack(fill="x", pady=(0, 10))
         reorder_auto_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(reorder_auto_frame, text="✓ Auto-applica tutti i parametri di questa sezione ai nuovi SKU", variable=reorder_auto_var).pack(anchor="w")
         self.settings_section_widgets["reorder_engine"] = reorder_auto_var
         
-        # Parameters for Reorder Engine section
+        # Parameters
         reorder_params = [
             {
                 "key": "lead_time_days",
@@ -5035,18 +5071,51 @@ class DesktopOrderApp:
             },
         ]
         
-        self._create_param_rows(section_reorder.get_content_frame(), reorder_params, "reorder_engine")
+        self._create_param_rows(scrollable_frame, reorder_params, "reorder_engine")
+    
+    def _build_auto_variability_settings_tab(self):
+        """Build Auto-Variability Parameters sub-tab."""
+        tab_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(tab_frame, text="⚡ Auto-Variabilità")
         
-        # ===== SECTION 2: Auto-Variabilità =====
-        section_auto_var = CollapsibleFrame(scrollable_frame, title="⚡ Auto-classificazione Variabilità", expanded=False)
-        section_auto_var.pack(fill="x", pady=5)
+        # Scrollable container
+        scroll_container = ttk.Frame(tab_frame)
+        scroll_container.pack(fill="both", expand=True)
         
-        auto_var_auto_frame = ttk.Frame(section_auto_var.get_content_frame())
+        canvas = tk.Canvas(scroll_container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Enable mouse wheel scrolling
+        def _on_mousewheel(event):
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
+        
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        
+        # Auto-apply checkbox
+        auto_var_auto_frame = ttk.Frame(scrollable_frame)
         auto_var_auto_frame.pack(fill="x", pady=(0, 10))
         auto_var_auto_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(auto_var_auto_frame, text="✓ Auto-applica tutti i parametri di questa sezione ai nuovi SKU", variable=auto_var_auto_var).pack(anchor="w")
         self.settings_section_widgets["auto_variability"] = auto_var_auto_var
         
+        # Parameters
         auto_var_params = [
             {
                 "key": "auto_variability_enabled",
@@ -5095,18 +5164,51 @@ class DesktopOrderApp:
             },
         ]
         
-        self._create_param_rows(section_auto_var.get_content_frame(), auto_var_params, "auto_variability")
+        self._create_param_rows(scrollable_frame, auto_var_params, "auto_variability")
+    
+    def _build_monte_carlo_settings_tab(self):
+        """Build Monte Carlo Simulation Parameters sub-tab."""
+        tab_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(tab_frame, text="🎲 Monte Carlo")
         
-        # ===== SECTION 3: Monte Carlo =====
-        section_mc = CollapsibleFrame(scrollable_frame, title="🎲 Simulazione Monte Carlo", expanded=False)
-        section_mc.pack(fill="x", pady=5)
+        # Scrollable container
+        scroll_container = ttk.Frame(tab_frame)
+        scroll_container.pack(fill="both", expand=True)
         
-        mc_auto_frame = ttk.Frame(section_mc.get_content_frame())
+        canvas = tk.Canvas(scroll_container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Enable mouse wheel scrolling
+        def _on_mousewheel(event):
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
+        
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        
+        # Auto-apply checkbox
+        mc_auto_frame = ttk.Frame(scrollable_frame)
         mc_auto_frame.pack(fill="x", pady=(0, 10))
         mc_auto_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(mc_auto_frame, text="✓ Auto-applica tutti i parametri di questa sezione ai nuovi SKU", variable=mc_auto_var).pack(anchor="w")
         self.settings_section_widgets["monte_carlo"] = mc_auto_var
         
+        # Parameters
         mc_params = [
             {
                 "key": "mc_distribution",
@@ -5169,18 +5271,51 @@ class DesktopOrderApp:
             },
         ]
         
-        self._create_param_rows(section_mc.get_content_frame(), mc_params, "monte_carlo")
+        self._create_param_rows(scrollable_frame, mc_params, "monte_carlo")
+    
+    def _build_expiry_alerts_settings_tab(self):
+        """Build Expiry Alerts Thresholds sub-tab."""
+        tab_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(tab_frame, text="⏰ Alert Scadenze")
         
-        # ===== SECTION 4: Expiry Alerts =====
-        section_expiry = CollapsibleFrame(scrollable_frame, title="⏰ Soglie Alert Scadenze", expanded=False)
-        section_expiry.pack(fill="x", pady=5)
+        # Scrollable container
+        scroll_container = ttk.Frame(tab_frame)
+        scroll_container.pack(fill="both", expand=True)
         
-        expiry_auto_frame = ttk.Frame(section_expiry.get_content_frame())
+        canvas = tk.Canvas(scroll_container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Enable mouse wheel scrolling
+        def _on_mousewheel(event):
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
+        
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        
+        # Info label (no auto-apply for global settings)
+        expiry_auto_frame = ttk.Frame(scrollable_frame)
         expiry_auto_frame.pack(fill="x", pady=(0, 10))
         expiry_auto_var = tk.BooleanVar(value=False)  # Not auto-applied to SKU
         ttk.Label(expiry_auto_frame, text="ℹ️ Impostazioni globali per color-coding lotti in scadenza", font=("Helvetica", 9, "italic"), foreground="gray").pack(anchor="w")
         self.settings_section_widgets["expiry_alerts"] = expiry_auto_var
         
+        # Parameters
         expiry_params = [
             {
                 "key": "expiry_critical_threshold_days",
@@ -5200,18 +5335,51 @@ class DesktopOrderApp:
             }
         ]
         
-        self._create_param_rows(section_expiry.get_content_frame(), expiry_params, "expiry_alerts")
+        self._create_param_rows(scrollable_frame, expiry_params, "expiry_alerts")
+    
+    def _build_shelf_life_settings_tab(self):
+        """Build Shelf Life Policy Parameters sub-tab."""
+        tab_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(tab_frame, text="♻️ Shelf Life")
         
-        # ===== SECTION 5: Shelf Life Policy =====
-        section_shelf_life = CollapsibleFrame(scrollable_frame, title="♻️ Shelf Life & Gestione Scadenze", expanded=False)
-        section_shelf_life.pack(fill="x", pady=5)
+        # Scrollable container
+        scroll_container = ttk.Frame(tab_frame)
+        scroll_container.pack(fill="both", expand=True)
         
-        shelf_life_auto_frame = ttk.Frame(section_shelf_life.get_content_frame())
+        canvas = tk.Canvas(scroll_container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Enable mouse wheel scrolling
+        def _on_mousewheel(event):
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
+        
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        
+        # Auto-apply checkbox
+        shelf_life_auto_frame = ttk.Frame(scrollable_frame)
         shelf_life_auto_frame.pack(fill="x", pady=(0, 10))
         shelf_life_auto_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(shelf_life_auto_frame, text="✓ Auto-applica tutti i parametri di questa sezione ai nuovi SKU", variable=shelf_life_auto_var).pack(anchor="w")
         self.settings_section_widgets["shelf_life_policy"] = shelf_life_auto_var
         
+        # Parameters
         shelf_life_params = [
             {
                 "key": "enabled",
@@ -5268,18 +5436,51 @@ class DesktopOrderApp:
             }
         ]
         
-        self._create_param_rows(section_shelf_life.get_content_frame(), shelf_life_params, "shelf_life_policy")
+        self._create_param_rows(scrollable_frame, shelf_life_params, "shelf_life_policy")
+    
+    def _build_dashboard_settings_tab(self):
+        """Build Dashboard Parameters sub-tab."""
+        tab_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(tab_frame, text="📊 Dashboard")
         
-        # ===== SECTION 6: Dashboard =====
-        section_dashboard = CollapsibleFrame(scrollable_frame, title="📊 Dashboard", expanded=False)
-        section_dashboard.pack(fill="x", pady=5)
+        # Scrollable container
+        scroll_container = ttk.Frame(tab_frame)
+        scroll_container.pack(fill="both", expand=True)
         
-        dashboard_auto_frame = ttk.Frame(section_dashboard.get_content_frame())
+        canvas = tk.Canvas(scroll_container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Enable mouse wheel scrolling
+        def _on_mousewheel(event):
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
+        
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        
+        # Auto-apply checkbox
+        dashboard_auto_frame = ttk.Frame(scrollable_frame)
         dashboard_auto_frame.pack(fill="x", pady=(0, 10))
         dashboard_auto_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(dashboard_auto_frame, text="✓ Auto-applica tutti i parametri di questa sezione ai nuovi SKU", variable=dashboard_auto_var).pack(anchor="w")
         self.settings_section_widgets["dashboard"] = dashboard_auto_var
         
+        # Parameters
         dashboard_params = [
             {
                 "key": "stock_unit_price",
@@ -5291,17 +5492,16 @@ class DesktopOrderApp:
             }
         ]
         
-        self._create_param_rows(section_dashboard.get_content_frame(), dashboard_params, "dashboard")
-        
-        # ===== SECTION 7: Holidays and Calendar =====
-        section_holidays = CollapsibleFrame(scrollable_frame, title="📅 Calendario e Festività", expanded=False)
-        section_holidays.pack(fill="x", pady=5)
-        
-        holidays_content = section_holidays.get_content_frame()
+        self._create_param_rows(scrollable_frame, dashboard_params, "dashboard")
+    
+    def _build_holidays_settings_tab(self):
+        """Build Holidays and Calendar Management sub-tab."""
+        tab_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(tab_frame, text="📅 Festività")
         
         # Instructions
         instructions = ttk.Label(
-            holidays_content,
+            tab_frame,
             text="Gestisci festività e chiusure che bloccano ordini e/o ricevimenti.\n"
                  "Le festività italiane ufficiali (Natale, Pasqua, ecc.) sono sempre incluse automaticamente.",
             foreground="gray",
@@ -5310,7 +5510,7 @@ class DesktopOrderApp:
         instructions.pack(fill="x", pady=(0, 10))
         
         # Holidays toolbar
-        holidays_toolbar = ttk.Frame(holidays_content)
+        holidays_toolbar = ttk.Frame(tab_frame)
         holidays_toolbar.pack(fill="x", pady=(0, 5))
         
         ttk.Button(
@@ -5338,7 +5538,7 @@ class DesktopOrderApp:
         ).pack(side="left", padx=2)
         
         # Holidays table
-        holidays_table_frame = ttk.Frame(holidays_content)
+        holidays_table_frame = ttk.Frame(tab_frame)
         holidays_table_frame.pack(fill="both", expand=True, pady=5)
         
         # Scrollbar
@@ -5348,7 +5548,7 @@ class DesktopOrderApp:
         self.holidays_treeview = ttk.Treeview(
             holidays_table_frame,
             columns=("Nome", "Tipo", "Date", "Scope", "Effetto"),
-            height=6,
+            height=10,
             yscrollcommand=holidays_scrollbar.set,
         )
         holidays_scrollbar.config(command=self.holidays_treeview.yview)
@@ -5373,31 +5573,6 @@ class DesktopOrderApp:
         
         # Load holidays
         self._refresh_holidays_table()
-        
-        # Buttons
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(side="bottom", fill="x", pady=10)
-        
-        ttk.Button(
-            button_frame,
-            text="💾 Salva Impostazioni",
-            command=self._save_settings
-        ).pack(side="left", padx=5)
-        
-        ttk.Button(
-            button_frame,
-            text="↺ Ripristina Default",
-            command=self._reset_settings_to_default
-        ).pack(side="left", padx=5)
-        
-        ttk.Button(
-            button_frame,
-            text="🔄 Ricarica",
-            command=self._refresh_settings_tab
-        ).pack(side="left", padx=5)
-        
-        # Load current settings
-        self._refresh_settings_tab()
     
     def _refresh_settings_tab(self):
         """Refresh settings tab with current values."""
