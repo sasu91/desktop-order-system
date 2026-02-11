@@ -120,6 +120,7 @@ class DesktopOrderApp:
             "order": "📋 Ordini",
             "receiving": "📥 Ricevimenti",
             "exception": "⚠️ Eccezioni",
+            "expiry": "⏰ Scadenze",
             "dashboard": "📊 Dashboard",
             "admin": "🔧 Gestione SKU",
             "settings": "⚙️ Impostazioni"
@@ -5816,15 +5817,24 @@ class DesktopOrderApp:
         Returns:
             List of tab IDs in saved order (or default order if not saved)
         """
-        default_order = ["stock", "order", "receiving", "exception", "dashboard", "admin", "settings"]
+        default_order = ["stock", "order", "receiving", "exception", "expiry", "dashboard", "admin", "settings"]
         
         try:
             settings = self.csv_layer.read_settings()
             if "ui" in settings and "tab_order" in settings["ui"]:
                 saved_order = settings["ui"]["tab_order"]
-                # Validate saved order (must contain all tab IDs)
-                if set(saved_order) == set(default_order) and len(saved_order) == len(default_order):
-                    return saved_order
+                # Validate saved order: allow subset for backward compatibility
+                saved_set = set(saved_order)
+                default_set = set(default_order)
+                
+                # If saved order has all tabs or is a valid subset, use it
+                if saved_set.issubset(default_set):
+                    # Merge: preserve saved order + append missing tabs
+                    merged = [tab for tab in saved_order if tab in default_set]
+                    for tab in default_order:
+                        if tab not in merged:
+                            merged.append(tab)
+                    return merged
         except:
             pass
         
