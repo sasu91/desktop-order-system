@@ -415,3 +415,282 @@ class TestEdgeCases:
         
         with pytest.raises(ValueError, match="Could not find delivery day"):
             next_delivery_day(monday, config)
+
+
+class TestHolidaySystem:
+    """Test holiday and closure management with effect-based blocking."""
+    
+    def test_easter_2026_calculation(self):
+        """Test Easter Sunday 2026 is calculated correctly."""
+        from src.domain.holidays import easter_sunday
+        
+        # Easter 2026 is April 5 (verified via external sources)
+        easter = easter_sunday(2026)
+        assert easter == Date(2026, 4, 5), "Easter 2026 should be April 5"
+        assert easter.weekday() == 6, "Easter should be a Sunday"
+    
+    def test_easter_monday_2026(self):
+        """Test Lunedì dell'Angelo (Easter Monday) 2026."""
+        from src.domain.holidays import easter_sunday
+        
+        easter = easter_sunday(2026)
+        easter_monday = easter + timedelta(days=1)
+        
+        assert easter_monday == Date(2026, 4, 6), "Easter Monday 2026 should be April 6"
+        assert easter_monday.weekday() == 0, "Easter Monday should be a Monday"
+    
+    def test_italian_public_holidays_2026(self):
+        """Test Italian public holidays for 2026."""
+        from src.domain.holidays import italian_public_holidays
+        
+        holidays = italian_public_holidays(2026)
+        
+        # Check fixed holidays
+        assert Date(2026, 1, 1) in holidays  # Capodanno
+        assert Date(2026, 1, 6) in holidays  # Epifania
+        assert Date(2026, 4, 25) in holidays  # Liberazione
+        assert Date(2026, 5, 1) in holidays  # Festa del Lavoro
+        assert Date(2026, 6, 2) in holidays  # Repubblica
+        assert Date(2026, 8, 15) in holidays  # Ferragosto
+        assert Date(2026, 11, 1) in holidays  # Ognissanti
+        assert Date(2026, 12, 8) in holidays  # Immacolata
+        assert Date(2026, 12, 25) in holidays  # Natale
+        assert Date(2026, 12, 26) in holidays  # Santo Stefano
+        
+        # Check mobile holidays
+        assert Date(2026, 4, 5) in holidays  # Pasqua
+        assert Date(2026, 4, 6) in holidays  # Lunedì dell'Angelo
+        
+        assert len(holidays) == 12, "Should have 12 public holidays (10 fixed + 2 mobile)"
+    
+    def test_holiday_calendar_from_config(self):
+        """Test loading HolidayCalendar from config file."""
+        import tempfile
+        import json
+        from pathlib import Path
+        from src.domain.holidays import HolidayCalendar
+        
+        test_dir = tempfile.mkdtemp()
+        config_path = Path(test_dir) / "holidays.json"
+        
+        try:
+            # Create minimal config
+            config = {
+                "holidays": [
+                    {
+                        "name": "Test Single Date",
+                        "scope": "store",
+                        "effect": "both",
+                        "type": "single",
+                        "params": {"date": "2026-03-15"}
+                    }
+                ]
+            }
+            
+            with open(config_path, 'w') as f:
+                json.dump(config, f)
+            
+            cal = HolidayCalendar.from_config(config_path)
+            
+            # Check the custom holiday is loaded
+            assert cal.is_holiday(Date(2026, 3, 15), scope="store")
+            assert not cal.is_holiday(Date(2026, 3, 16), scope="store")
+            
+        finally:
+            import shutil
+            shutil.rmtree(test_dir, ignore_errors=True)
+    
+    def test_holiday_effect_no_order(self):
+        """Test that no_order effect blocks orders but not receipts."""
+        from src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
+        
+        rule = HolidayRule(
+            name="Supplier Closure",
+            scope="supplier",
+            effect=HolidayEffect.NO_ORDER,
+            type=HolidayType.SINGLE_DATE,
+            params={"date": "2026-03-20"}
+        )
+        
+        cal = HolidayCalendar(rules=[rule])
+        
+        test_date = Date(2026, 3, 20)
+        
+        # Check effects
+        effects = cal.effects_on(test_date)
+        assert "no_order" in effects
+        assert "no_receipt" not in effects
+        
+       # Check is_holiday with effect filter
+        assert cal.is_holiday(test_date, effect=HolidayEffect.NO_ORDER)
+        assert not cal.is_holiday(test_date, effect=HolidayEffect.NO_RECEIPT)
+    
+    def test_holiday_effect_no_receipt(self):
+        """Test that no_receipt effect blocks receipts but not orders."""
+        from src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
+        
+        rule = HolidayRule(
+            name="Warehouse Inventory",
+            scope="warehouse",
+            effect=HolidayEffect.NO_RECEIPT,
+            type=HolidayType.SINGLE_DATE,
+            params={"date": "2026-12-31"}
+        )
+        
+        cal = HolidayCalendar(rules=[rule])
+        
+        test_date = Date(2026, 12, 31)
+        
+        # Check effects
+        effects = cal.effects_on(test_date)
+        assert "no_receipt" in effects
+        assert "no_order" not in effects
+    
+    def test_holiday_range(self):
+        """Test range-type holiday (e.g., summer closure)."""
+        from src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
+        
+        rule = HolidayRule(
+            name="Summer Closure",
+            scope="store",
+            effect=HolidayEffect.BOTH,
+            type=HolidayType.RANGE,
+            params={"start": "2026-08-10", "end": "2026-08-20"}
+        )
+        
+        cal = HolidayCalendar(rules=[rule])
+        
+        # Check dates in range
+        assert cal.is_holiday(Date(2026, 8, 10))
+        assert cal.is_holiday(Date(2026, 8, 15))
+        assert cal.is_holiday(Date(2026, 8, 20))
+        
+        # Check dates outside range
+        assert not cal.is_holiday(Date(2026, 8, 9))
+        assert not cal.is_holiday(Date(2026, 8, 21))
+    
+    def test_holiday_fixed_date_annual(self):
+        """Test fixed-date holiday that recurs annually."""
+        from src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
+        
+        rule = HolidayRule(
+            name="Patron Saint",
+            scope="store",
+            effect=HolidayEffect.BOTH,
+            type=HolidayType.FIXED_DATE,
+            params={"month": 12, "day": 7}  # Sant'Ambrogio (Milan)
+        )
+        
+        cal = HolidayCalendar(rules=[rule])
+        
+        # Should apply to same date in different years
+        assert cal.is_holiday(Date(2026, 12, 7))
+        assert cal.is_holiday(Date(2027, 12, 7))
+        assert cal.is_holiday(Date(2025, 12, 7))
+        
+        # Should not apply to other dates
+        assert not cal.is_holiday(Date(2026, 12, 8))
+    
+    def test_calendar_integration_with_holidays(self):
+        """Test CalendarConfig integration with HolidayCalendar."""
+        from src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
+        
+        # Create holiday that blocks orders but not receipts
+        rule = HolidayRule(
+            name="Supplier Closed",
+            scope="supplier",
+            effect=HolidayEffect.NO_ORDER,
+            type=HolidayType.SINGLE_DATE,
+            params={"date": "2026-02-10"}
+        )
+        
+        cal = HolidayCalendar(rules=[rule])
+        config = CalendarConfig(holiday_calendar=cal)
+        
+        test_date = Date(2026, 2, 10)  # Tuesday
+        
+        # Tuesday normally valid, but supplier closed
+        assert not is_order_day(test_date, config), "Should not allow orders on supplier closure"
+        assert is_delivery_day(test_date, config), "Should allow receipts (no_receipt not set)"
+    
+    def test_calendar_integration_both_effect(self):
+        """Test that BOTH effect blocks both orders and receipts."""
+        from src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
+        
+        # Natale with BOTH effect
+        rule = HolidayRule(
+            name="Natale",
+            scope="system",
+            effect=HolidayEffect.BOTH,
+            type=HolidayType.FIXED_DATE,
+            params={"month": 12, "day": 25}
+        )
+        
+        cal = HolidayCalendar(rules=[rule])
+        config = CalendarConfig(holiday_calendar=cal)
+        
+        christmas = Date(2026, 12, 25)
+        
+        assert not is_order_day(christmas, config)
+        assert not is_delivery_day(christmas, config)
+    
+    def test_italian_holidays_automatic(self):
+        """Test that Italian public holidays are loaded automatically."""
+        from src.domain.holidays import HolidayCalendar
+        from pathlib import Path
+        
+        # Load with non-existent config (should fallback to Italian holidays)
+        cal = HolidayCalendar.from_config(Path("/nonexistent/holidays.json"))
+        
+        # Check some Italian holidays are present
+        assert cal.is_holiday(Date(2026, 1, 1))  # Capodanno
+        assert cal.is_holiday(Date(2026, 4, 5))  # Pasqua 2026
+        assert cal.is_holiday(Date(2026, 4, 6))  # Lunedì dell'Angelo 2026
+        assert cal.is_holiday(Date(2026, 12, 25))  # Natale
+    
+    def test_list_holidays_for_year(self):
+        """Test listing all holidays for a specific year."""
+        from src.domain.holidays import HolidayCalendar
+        from pathlib import Path
+        
+        cal = HolidayCalendar.from_config(Path("/nonexistent/holidays.json"))
+        holidays_2026 = cal.list_holidays(2026)
+        
+        # Should include at least Italian public holidays (12)
+        assert len(holidays_2026) >= 12
+        assert Date(2026, 1, 1) in holidays_2026
+        assert Date(2026, 12, 25) in holidays_2026
+        
+        # Should be sorted
+        assert holidays_2026 == sorted(holidays_2026)
+    
+    def test_backward_compatibility_holidays_set(self):
+        """Test backward compatibility with deprecated holidays set."""
+        # Old way: using holidays set directly
+        monday = Date(2026, 2, 2)
+        config = CalendarConfig(holidays={monday})
+        
+        # Should still work
+        assert not is_order_day(monday, config)
+        assert not is_delivery_day(monday, config)
+    
+    def test_create_calendar_with_holidays_helper(self):
+        """Test helper function for creating calendar with holidays."""
+        from src.domain.calendar import create_calendar_with_holidays
+        import tempfile
+        
+        test_dir = tempfile.mkdtemp()
+        
+        try:
+            config = create_calendar_with_holidays(test_dir)
+            
+            # Should have holiday_calendar initialized
+            assert config.holiday_calendar is not None
+            
+            # Should block Italian holidays
+            assert not is_order_day(Date(2026, 1, 1), config)  # Capodanno
+            assert not is_delivery_day(Date(2026, 12, 25), config)  # Natale
+            
+        finally:
+            import shutil
+            shutil.rmtree(test_dir, ignore_errors=True)

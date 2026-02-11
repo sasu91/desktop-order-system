@@ -29,8 +29,11 @@ Usage Examples:
 """
 from datetime import date as Date, timedelta
 from enum import Enum
-from typing import Tuple, Optional
+from typing import Tuple, Optional, TYPE_CHECKING
 from dataclasses import dataclass
+
+if TYPE_CHECKING:
+    from src.domain.holidays import HolidayCalendar
 
 
 class Lane(Enum):
@@ -50,13 +53,15 @@ class CalendarConfig:
         delivery_days: Set of weekdays when deliveries can be received
         lead_time_days: Standard lead time in days
         saturday_lane_lead_time: Lead time for Friday->Saturday lane
-        holidays: Set of dates that are non-working days (future feature)
+        holidays: Set of dates (DEPRECATED: use holiday_calendar instead)
+        holiday_calendar: HolidayCalendar instance for effect-aware holiday management
     """
     order_days: set = None          # Default: {0,1,2,3,4} = Mon-Fri
     delivery_days: set = None       # Default: {0,1,2,3,4,5} = Mon-Sat
     lead_time_days: int = 1         # Default: next day delivery
     saturday_lane_lead_time: int = 1  # Friday->Saturday lead time
-    holidays: set = None            # Future: exceptional non-working days
+    holidays: set = None            # DEPRECATED: use holiday_calendar
+    holiday_calendar: Optional['HolidayCalendar'] = None  # Effect-aware holiday management
     
     def __post_init__(self):
         # Set defaults using object.__setattr__ (frozen dataclass)
@@ -76,6 +81,11 @@ def is_order_day(date: Date, config: CalendarConfig = DEFAULT_CONFIG) -> bool:
     """
     Check if a date is a valid order day.
     
+    Checks:
+    1. Holiday calendar for no_order effect (if configured)
+    2. Deprecated holidays set (backward compatibility)
+    3. Weekday restriction
+    
     Args:
         date: Date to check
         config: Calendar configuration
@@ -83,14 +93,27 @@ def is_order_day(date: Date, config: CalendarConfig = DEFAULT_CONFIG) -> bool:
     Returns:
         True if date is a valid order day
     """
+    # Check holiday calendar for no_order effect
+    if config.holiday_calendar is not None:
+        effects = config.holiday_calendar.effects_on(date)
+        if "no_order" in effects:
+            return False
+    
+    # Backward compatibility: deprecated holidays set
     if date in config.holidays:
         return False
+    
     return date.weekday() in config.order_days
 
 
 def is_delivery_day(date: Date, config: CalendarConfig = DEFAULT_CONFIG) -> bool:
     """
     Check if a date is a valid delivery day.
+    
+    Checks:
+    1. Holiday calendar for no_receipt effect (if configured)
+    2. Deprecated holidays set (backward compatibility)
+    3. Weekday restriction
     
     Args:
         date: Date to check
@@ -99,8 +122,16 @@ def is_delivery_day(date: Date, config: CalendarConfig = DEFAULT_CONFIG) -> bool
     Returns:
         True if date is a valid delivery day
     """
+    # Check holiday calendar for no_receipt effect
+    if config.holiday_calendar is not None:
+        effects = config.holiday_calendar.effects_on(date)
+        if "no_receipt" in effects:
+            return False
+    
+    # Backward compatibility: deprecated holidays set
     if date in config.holidays:
         return False
+    
     return date.weekday() in config.delivery_days
 
 
@@ -294,6 +325,54 @@ def get_friday_lanes(
     
     return saturday_window, monday_window
 
+# ============ Holiday Calendar Initialization ============
+
+def load_holiday_calendar(data_dir) -> 'HolidayCalendar':
+    """
+    Load HolidayCalendar from holidays.json in data directory.
+    
+    Fallback to Italian public holidays only if file missing/invalid.
+    
+    Args:
+        data_dir: Path to data directory containing holidays.json
+        
+    Returns:
+        HolidayCalendar instance
+    """
+    from pathlib import Path
+    from src.domain.holidays import HolidayCalendar
+    
+    config_path = Path(data_dir) / "holidays.json"
+    return HolidayCalendar.from_config(config_path)
+
+
+def create_calendar_with_holidays(data_dir) -> CalendarConfig:
+    """
+    Create CalendarConfig with HolidayCalendar loaded from data directory.
+    
+    This is the recommended way to initialize the calendar for production use.
+    
+    Args:
+        data_dir: Path to data directory containing holidays.json
+        
+    Returns:
+        CalendarConfig with holiday_calendar initialized
+        
+    Example:
+        >>> from pathlib import Path
+        >>> config = create_calendar_with_holidays(Path("data"))
+        >>> # Now is_order_day() and is_delivery_day() respect holiday effects
+    """
+    holiday_cal = load_holiday_calendar(data_dir)
+    
+    return CalendarConfig(
+        order_days={0, 1, 2, 3, 4},  # Mon-Fri
+        delivery_days={0, 1, 2, 3, 4, 5},  # Mon-Sat
+        lead_time_days=1,
+        saturday_lane_lead_time=1,
+        holidays=set(),  # Deprecated, kept for backward compat
+        holiday_calendar=holiday_cal
+    )
 
 # Utility function for order proposal integration
 def calculate_protection_period_days(

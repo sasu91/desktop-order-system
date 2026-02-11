@@ -49,6 +49,43 @@ stock = StockCalculator.calculate_asof(
 - `data/order_logs.csv`: Order confirmation history
 - `data/receiving_logs.csv`: Receiving closure history
 
+### Holiday & Closure Management
+
+**Effect-aware holiday system** blocking orders and/or receipts based on scope:
+
+- **Italian public holidays** (12 total): automatic, including Easter calculation
+- **Custom closures**: configurable via `data/holidays.json`
+- **Granular effects**:
+  - `no_order`: blocks orders only (supplier closed, can still receive)
+  - `no_receipt`: blocks receipts only (inventory day, can still order)
+  - `both`: blocks both (national holidays)
+
+Example `holidays.json`:
+```json
+{
+  "holidays": [
+    {
+      "name": "Chiusura estiva",
+      "scope": "store",
+      "effect": "both",
+      "type": "range",
+      "params": {"start": "2026-08-10", "end": "2026-08-20"}
+    },
+    {
+      "name": "Inventario magazzino",
+      "scope": "warehouse",
+      "effect": "no_receipt",
+      "type": "single",
+      "params": {"date": "2026-12-31"}
+    }
+  ]
+}
+```
+
+**Integration**: `next_receipt_date()` automatically skips holidays based on effect.
+
+📖 **Full documentation**: See [HOLIDAY_SYSTEM.md](HOLIDAY_SYSTEM.md)
+
 ## Setup & Running
 
 ### Requirements
