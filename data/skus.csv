@@ -1,2 +1,3 @@
 sku,description,ean,moq,pack_size,lead_time_days,review_period,safety_stock,shelf_life_days,min_shelf_life_days,waste_penalty_mode,waste_penalty_factor,waste_risk_threshold,max_stock,reorder_point,demand_variability,oos_boost_percent,oos_detection_mode,oos_popup_preference,forecast_method,mc_distribution,mc_n_simulations,mc_random_seed,mc_output_stat,mc_output_percentile,mc_horizon_mode,mc_horizon_days,in_assortment
-TEST_SHELF_LIFE,Test SKU with shelf life,1234567890123,20,10,7,7,0,60,14,soft,0.3,20.0,999,10,LOW,0.0,,ask,,,0,0,,0,,0,true
+SKU_FRESH,Fresh Dairy 1L,4006381333931,12,6,1,7,6,14,5,soft,0.4,20.0,120,30,HIGH,10.0,strict,ask,simple,,0,0,,0,,0,true
+SKU_PANTRY,Pantry Pasta 500g,5901234123457,20,10,1,7,10,180,30,,0.0,0.0,300,60,STABLE,0.0,relaxed,ask,,,0,0,,0,,0,true
