@@ -53,12 +53,15 @@ class TestCSVLayerAutoCreate:
         with open(temp_data_dir / "skus.csv", "r") as f:
             headers = f.readline().strip().split(",")
         
-        expected_headers = ["sku", "description", "ean", "moq", "pack_size", "lead_time_days", 
-                           "review_period", "safety_stock", "shelf_life_days", "max_stock", 
-                           "reorder_point", "demand_variability", "oos_boost_percent", 
-                           "oos_detection_mode", "oos_popup_preference", "forecast_method",
-                           "mc_distribution", "mc_n_simulations", "mc_random_seed", "mc_output_stat",
-                           "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days"]
+        expected_headers = [
+            "sku", "description", "ean", "moq", "pack_size", "lead_time_days",
+            "review_period", "safety_stock", "shelf_life_days", "min_shelf_life_days",
+            "waste_penalty_mode", "waste_penalty_factor", "waste_risk_threshold",
+            "max_stock", "reorder_point", "demand_variability", "oos_boost_percent",
+            "oos_detection_mode", "oos_popup_preference", "forecast_method",
+            "mc_distribution", "mc_n_simulations", "mc_random_seed", "mc_output_stat",
+            "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days", "in_assortment",
+        ]
         assert headers == expected_headers
 
 

@@ -142,6 +142,7 @@ class ReceivingWorkflow:
         # Write to receiving_logs for idempotency tracking
         for sku, qty_received in sku_quantities.items():
             self.csv_layer.write_receiving_log(
+                document_id=receipt_id,
                 receipt_id=receipt_id,
                 date_str=today.isoformat(),
                 sku=sku,
