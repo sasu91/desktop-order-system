@@ -608,6 +608,219 @@ class ShelfLifeCalculator:
             forward_result.total_on_hand,
             forward_result.expiring_soon_qty
         )
+    
+    @staticmethod
+    def calculate_forward_waste_risk_demand_adjusted(
+        lots: List,
+        receipt_date: date,
+        proposed_qty: int,
+        sku_shelf_life_days: int,
+        min_shelf_life_days: int,
+        waste_horizon_days: int,
+        forecast_daily_demand: float,
+    ) -> Tuple[float, int, int, int]:
+        """
+        Calculate forward-looking waste risk adjusted for expected demand consumption.
+        
+        This method improves upon calculate_forward_waste_risk by accounting for the fact
+        that stock "expiring soon" will be partially consumed by normal sales before expiry.
+        
+        Algorithm:
+        1. Age lots to receipt_date and add virtual incoming lot
+        2. Identify stock expiring within waste_horizon (expiring_soon_qty)
+        3. For each expiring-soon lot, calculate expected demand until its expiry
+        4. Subtract expected demand from expiring_soon_qty
+        5. Calculate adjusted waste risk = max(0, expiring_soon - demand) / total_stock
+        
+        Args:
+            lots: Current lot inventory
+            receipt_date: Date when order will be received
+            proposed_qty: Quantity of incoming order
+            sku_shelf_life_days: Total shelf life of SKU (for virtual incoming lot)
+            min_shelf_life_days: Minimum residual shelf life for sale
+            waste_horizon_days: Lookahead window for waste risk
+            forecast_daily_demand: Expected daily demand rate (units/day)
+        
+        Returns:
+            Tuple[float, int, int, int]:
+                - waste_risk_adjusted_percent: Demand-adjusted waste risk %
+                - total_on_hand: Total stock at receipt (existing + incoming)
+                - expiring_soon_qty: Raw qty expiring within horizon (before demand adjustment)
+                - expected_waste_qty: Estimated actual waste after demand consumption
+        
+        Example:
+            Receipt date: 2026-02-15
+            Existing lots at receipt: 30 units expiring 2026-02-17 (2 days after receipt)
+            Incoming order: 40 units (expiry 2026-04-16)
+            Forecast: 10 units/day
+            
+            Traditional forward risk: 30/70 = 42.9%
+            Demand-adjusted:
+                - Expected demand in 2 days = 10 * 2 = 20
+                - Expected waste = max(0, 30 - 20) = 10
+                - Adjusted risk = 10/70 = 14.3%
+        """
+        from .models import Lot
+        
+        if proposed_qty <= 0:
+            # No order: calculate waste risk at receipt without incoming lot
+            aged_result = ShelfLifeCalculator.calculate_usable_stock(
+                lots=lots,
+                check_date=receipt_date,
+                min_shelf_life_days=min_shelf_life_days,
+                waste_horizon_days=waste_horizon_days
+            )
+            
+            # Adjust for demand even without new order
+            expected_waste = ShelfLifeCalculator._calculate_expected_waste(
+                lots=lots,
+                check_date=receipt_date,
+                min_shelf_life_days=min_shelf_life_days,
+                waste_horizon_days=waste_horizon_days,
+                forecast_daily_demand=forecast_daily_demand
+            )
+            
+            total_stock = aged_result.total_on_hand
+            adjusted_risk = (expected_waste / total_stock * 100) if total_stock > 0 else 0.0
+            
+            return (
+                adjusted_risk,
+                total_stock,
+                aged_result.expiring_soon_qty,
+                expected_waste
+            )
+        
+        # Create virtual lot for incoming order
+        incoming_expiry = receipt_date + timedelta(days=sku_shelf_life_days) if sku_shelf_life_days > 0 else None
+        incoming_lot = Lot(
+            lot_id="VIRTUAL_INCOMING",
+            sku="VIRTUAL",
+            expiry_date=incoming_expiry,
+            qty_on_hand=proposed_qty,
+            receipt_id="VIRTUAL",
+            receipt_date=receipt_date
+        )
+        
+        # Combine existing + incoming lots
+        combined_lots = list(lots) + [incoming_lot]
+        
+        # Calculate traditional forward waste risk
+        forward_result = ShelfLifeCalculator.calculate_usable_stock(
+            lots=combined_lots,
+            check_date=receipt_date,
+            min_shelf_life_days=min_shelf_life_days,
+            waste_horizon_days=waste_horizon_days
+        )
+        
+        # Calculate demand-adjusted expected waste
+        expected_waste = ShelfLifeCalculator._calculate_expected_waste(
+            lots=combined_lots,
+            check_date=receipt_date,
+            min_shelf_life_days=min_shelf_life_days,
+            waste_horizon_days=waste_horizon_days,
+            forecast_daily_demand=forecast_daily_demand
+        )
+        
+        total_stock = forward_result.total_on_hand
+        adjusted_risk = (expected_waste / total_stock * 100) if total_stock > 0 else 0.0
+        
+        return (
+            adjusted_risk,
+            total_stock,
+            forward_result.expiring_soon_qty,
+            expected_waste
+        )
+    
+    @staticmethod
+    def _calculate_expected_waste(
+        lots: List,
+        check_date: date,
+        min_shelf_life_days: int,
+        waste_horizon_days: int,
+        forecast_daily_demand: float,
+    ) -> int:
+        """
+        Calculate expected waste accounting for demand consumption.
+        
+        For each lot expiring within waste_horizon:
+        1. Calculate days until its expiry
+        2. Estimate demand that will be consumed before expiry
+        3. Residual qty after demand = potential waste
+        
+        Args:
+            lots: Lot inventory at check_date
+            check_date: Reference date
+            min_shelf_life_days: Minimum shelf life threshold
+            waste_horizon_days: Waste risk window
+            forecast_daily_demand: Daily demand rate
+        
+        Returns:
+            Expected waste quantity (integer)
+        """
+        from .models import Lot
+        
+        if forecast_daily_demand <= 0:
+            # No demand forecast: fallback to traditional risk (all expiring-soon = waste)
+            expiring_soon = 0
+            for lot in lots:
+                if lot.qty_on_hand <= 0:
+                    continue
+                if lot.expiry_date is None:
+                    continue
+                
+                days_left = lot.days_until_expiry(check_date)
+                if days_left is None or days_left < min_shelf_life_days:
+                    continue
+                if days_left <= waste_horizon_days:
+                    expiring_soon += lot.qty_on_hand
+            
+            return expiring_soon
+        
+        # Collect expiring-soon lots with their expiry dates
+        expiring_lots = []
+        for lot in lots:
+            if lot.qty_on_hand <= 0:
+                continue
+            if lot.expiry_date is None:
+                continue
+            
+            days_left = lot.days_until_expiry(check_date)
+            if days_left is None or days_left < min_shelf_life_days:
+                continue
+            if days_left <= waste_horizon_days:
+                expiring_lots.append({
+                    'qty': lot.qty_on_hand,
+                    'days_until_expiry': days_left
+                })
+        
+        if not expiring_lots:
+            return 0
+        
+        # Sort by expiry (earliest first) for FEFO simulation
+        expiring_lots.sort(key=lambda x: x['days_until_expiry'])
+        
+        # Simulate FEFO consumption with forecasted demand
+        total_expected_waste = 0
+        cumulative_demand_days = 0
+        
+        for lot_info in expiring_lots:
+            qty = lot_info['qty']
+            days_until_expiry = lot_info['days_until_expiry']
+            
+            # Demand window: from cumulative_demand_days to expiry
+            demand_window_days = max(0, days_until_expiry - cumulative_demand_days)
+            expected_demand_in_window = forecast_daily_demand * demand_window_days
+            
+            # Waste = qty that exceeds demand in its lifespan
+            waste_from_lot = max(0, qty - expected_demand_in_window)
+            total_expected_waste += int(waste_from_lot)
+            
+            # Update cumulative demand consumed
+            consumed_from_lot = min(qty, expected_demand_in_window)
+            if consumed_from_lot > 0:
+                cumulative_demand_days += consumed_from_lot / forecast_daily_demand
+        
+        return total_expected_waste
 
 
 class LotConsumptionManager:

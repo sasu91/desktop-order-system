@@ -281,6 +281,8 @@ class OrderProposal:
     unusable_stock: int = 0  # Stock non utilizzabile (scaduto o shelf life insufficiente)
     waste_risk_percent: float = 0.0  # % stock a rischio spreco (oggi)
     waste_risk_forward_percent: float = 0.0  # % stock a rischio spreco al receipt_date (include ordine)
+    waste_risk_demand_adjusted_percent: float = 0.0  # % stock a rischio spreco al receipt (demand-adjusted)
+    expected_waste_qty: int = 0  # Quantità prevista di spreco (dopo demand consumption)
     shelf_life_penalty_applied: bool = False  # True se penalty applicato
     shelf_life_penalty_message: str = ""  # Messaggio penalty (es. "Reduced by 50%")
 
