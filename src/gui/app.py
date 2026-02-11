@@ -3950,8 +3950,8 @@ class DesktopOrderApp:
             messagebox.showerror("Errore di Validazione", "Min Shelf Life deve essere 0 (globale) o 1-365.", parent=popup)
             return
         
-        if waste_penalty_mode and waste_penalty_mode not in ["percentage", "fixed_qty"]:
-            messagebox.showerror("Errore di Validazione", "Modalità penalità non valida: usa '' (globale), 'percentage', o 'fixed_qty'.", parent=popup)
+        if waste_penalty_mode and waste_penalty_mode not in ["soft", "hard"]:
+            messagebox.showerror("Errore di Validazione", "Modalità penalità non valida: usa '' (globale), 'soft', o 'hard'.", parent=popup)
             return
         
         if waste_penalty_factor < 0 or waste_penalty_factor > 1:
