@@ -1046,6 +1046,81 @@ class CSVLayer:
         
         return defaults
     
+    # ============ Holiday Operations ============
+    
+    def read_holidays(self) -> List[Dict[str, Any]]:
+        """
+        Read holidays from holidays.json.
+        
+        Returns:
+            List of holiday dictionaries with keys: name, scope, effect, type, params
+        """
+        holidays_file = self.data_dir / "holidays.json"
+        
+        if not holidays_file.exists():
+            # Return empty list if file doesn't exist
+            return []
+        
+        try:
+            with open(holidays_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("holidays", [])
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Warning: Could not read holidays.json: {e}. Returning empty list.")
+            return []
+    
+    def write_holidays(self, holidays: List[Dict[str, Any]]):
+        """
+        Write holidays to holidays.json.
+        
+        Args:
+            holidays: List of holiday dictionaries
+        """
+        holidays_file = self.data_dir / "holidays.json"
+        
+        with open(holidays_file, "w", encoding="utf-8") as f:
+            json.dump({"holidays": holidays}, f, indent=2, ensure_ascii=False)
+    
+    def add_holiday(self, holiday: Dict[str, Any]):
+        """
+        Add a new holiday to holidays.json.
+        
+        Args:
+            holiday: Holiday dictionary with keys: name, scope, effect, type, params
+        """
+        holidays = self.read_holidays()
+        holidays.append(holiday)
+        self.write_holidays(holidays)
+    
+    def update_holiday(self, index: int, holiday: Dict[str, Any]):
+        """
+        Update an existing holiday by index.
+        
+        Args:
+            index: Index of the holiday to update
+            holiday: Updated holiday dictionary
+        """
+        holidays = self.read_holidays()
+        if 0 <= index < len(holidays):
+            holidays[index] = holiday
+            self.write_holidays(holidays)
+        else:
+            raise IndexError(f"Holiday index {index} out of range")
+    
+    def delete_holiday(self, index: int):
+        """
+        Delete a holiday by index.
+        
+        Args:
+            index: Index of the holiday to delete
+        """
+        holidays = self.read_holidays()
+        if 0 <= index < len(holidays):
+            holidays.pop(index)
+            self.write_holidays(holidays)
+        else:
+            raise IndexError(f"Holiday index {index} out of range")
+    
     # ============ Atomic Write & Backup Operations ============
     
     def _backup_file(self, filename: str, max_backups: int = 5):

@@ -1,12 +1,9 @@
 {
-  "$schema": "holidays-schema",
-  "description": "Holidays and closures configuration for desktop-order-system",
-  
   "holidays": [
     {
-      "name": "Santo Patrono (esempio Milano)",
+      "name": "Santo Patrono (esempio Milano) (modificato)",
       "scope": "store",
-      "effect": "both",
+      "effect": "no_receipt",
       "type": "fixed",
       "params": {
         "month": 12,
@@ -45,44 +42,34 @@
         "end": "2026-08-05"
       },
       "comment": "Fornitore chiuso (non può ordinare, può ricevere ordini precedenti)"
+    },
+    {
+      "name": "Ferie Estive 2026",
+      "scope": "logistics",
+      "effect": "both",
+      "type": "range",
+      "params": {
+        "start": "2026-08-10",
+        "end": "2026-08-25"
+      }
+    },
+    {
+      "name": "Sant'Ambrogio (Milano)",
+      "scope": "logistics",
+      "effect": "both",
+      "type": "single",
+      "params": {
+        "date": "2026-12-07"
+      }
+    },
+    {
+      "name": "Inventario Mensile",
+      "scope": "orders",
+      "effect": "no_order",
+      "type": "fixed",
+      "params": {
+        "day": 1
+      }
     }
-  ],
-  
-  "_notes": {
-    "automatic_holidays": [
-      "Le festività nazionali italiane sono automatiche:",
-      "- Capodanno (1 gen), Epifania (6 gen), Pasqua (variabile)",
-      "- Lunedì dell'Angelo (Pasquetta, variabile), Liberazione (25 apr)",
-      "- Festa del Lavoro (1 mag), Festa della Repubblica (2 giu)",
-      "- Ferragosto (15 ago), Ognissanti (1 nov)",
-      "- Immacolata (8 dic), Natale (25 dic), S.Stefano (26 dic)"
-    ],
-    "scope_values": [
-      "system: festività nazionali (automatiche + override da config)",
-      "store: chiusure negozio/punto vendita",
-      "warehouse: chiusure magazzino/deposito",
-      "supplier: chiusure fornitore"
-    ],
-    "effect_values": [
-      "both: blocca ordini E ricezione",
-      "no_order: blocca solo ordini (può ricevere)",
-      "no_receipt: blocca solo ricezione (può ordinare)"
-    ],
-    "type_values": [
-      "fixed: ricorrenza annuale (month/day), es. patrono",
-      "range: intervallo date (start/end ISO), es. ferie",
-      "single: data singola (date ISO), es. inventario"
-    ],
-    "precedence": [
-      "Le regole da config PREVALGONO sugli effetti delle festività italiane automatiche",
-      "per la stessa data. Es: se Natale in config ha effect=no_order,",
-      "sovrascrive il default both delle festività di sistema."
-    ],
-    "validation": [
-      "Date ISO: YYYY-MM-DD obbligatorio",
-      "Range: start <= end verificato",
-      "Fixed: month [1-12], day [1-31] verificato",
-      "Se file manca o invalido: fallback a sole festività italiane (no crash)"
-    ]
-  }
+  ]
 }

@@ -5293,6 +5293,87 @@ class DesktopOrderApp:
         
         self._create_param_rows(section_dashboard.get_content_frame(), dashboard_params, "dashboard")
         
+        # ===== SECTION 7: Holidays and Calendar =====
+        section_holidays = CollapsibleFrame(scrollable_frame, title="📅 Calendario e Festività", expanded=False)
+        section_holidays.pack(fill="x", pady=5)
+        
+        holidays_content = section_holidays.get_content_frame()
+        
+        # Instructions
+        instructions = ttk.Label(
+            holidays_content,
+            text="Gestisci festività e chiusure che bloccano ordini e/o ricevimenti.\n"
+                 "Le festività italiane ufficiali (Natale, Pasqua, ecc.) sono sempre incluse automaticamente.",
+            foreground="gray",
+            font=("Helvetica", 9, "italic")
+        )
+        instructions.pack(fill="x", pady=(0, 10))
+        
+        # Holidays toolbar
+        holidays_toolbar = ttk.Frame(holidays_content)
+        holidays_toolbar.pack(fill="x", pady=(0, 5))
+        
+        ttk.Button(
+            holidays_toolbar,
+            text="➕ Aggiungi Festività",
+            command=self._add_holiday
+        ).pack(side="left", padx=2)
+        
+        ttk.Button(
+            holidays_toolbar,
+            text="✏️ Modifica",
+            command=self._edit_holiday
+        ).pack(side="left", padx=2)
+        
+        ttk.Button(
+            holidays_toolbar,
+            text="🗑️ Elimina",
+            command=self._delete_holiday
+        ).pack(side="left", padx=2)
+        
+        ttk.Button(
+            holidays_toolbar,
+            text="🔄 Ricarica",
+            command=self._refresh_holidays_table
+        ).pack(side="left", padx=2)
+        
+        # Holidays table
+        holidays_table_frame = ttk.Frame(holidays_content)
+        holidays_table_frame.pack(fill="both", expand=True, pady=5)
+        
+        # Scrollbar
+        holidays_scrollbar = ttk.Scrollbar(holidays_table_frame)
+        holidays_scrollbar.pack(side="right", fill="y")
+        
+        self.holidays_treeview = ttk.Treeview(
+            holidays_table_frame,
+            columns=("Nome", "Tipo", "Date", "Scope", "Effetto"),
+            height=6,
+            yscrollcommand=holidays_scrollbar.set,
+        )
+        holidays_scrollbar.config(command=self.holidays_treeview.yview)
+        
+        self.holidays_treeview.column("#0", width=0, stretch=tk.NO)
+        self.holidays_treeview.column("Nome", anchor=tk.W, width=150)
+        self.holidays_treeview.column("Tipo", anchor=tk.CENTER, width=80)
+        self.holidays_treeview.column("Date", anchor=tk.W, width=180)
+        self.holidays_treeview.column("Scope", anchor=tk.CENTER, width=100)
+        self.holidays_treeview.column("Effetto", anchor=tk.CENTER, width=100)
+        
+        self.holidays_treeview.heading("Nome", text="Nome", anchor=tk.W)
+        self.holidays_treeview.heading("Tipo", text="Tipo", anchor=tk.CENTER)
+        self.holidays_treeview.heading("Date", text="Date", anchor=tk.W)
+        self.holidays_treeview.heading("Scope", text="Ambito", anchor=tk.CENTER)
+        self.holidays_treeview.heading("Effetto", text="Effetto", anchor=tk.CENTER)
+        
+        self.holidays_treeview.pack(fill="both", expand=True)
+        
+        # Bind double-click to edit
+        self.holidays_treeview.bind("<Double-1>", lambda e: self._edit_holiday())
+        
+        # Load holidays
+        self._refresh_holidays_table()
+        
         # Buttons
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(side="bottom", fill="x", pady=10)
@@ -5607,6 +5688,311 @@ class DesktopOrderApp:
             
         except Exception as e:
             logger.error(f"Failed to save tab order: {str(e)}", exc_info=True)
+    
+    # ============ Holiday Management ============
+    
+    def _refresh_holidays_table(self):
+        """Refresh holidays table from holidays.json."""
+        self.holidays_treeview.delete(*self.holidays_treeview.get_children())
+        
+        holidays = self.csv_layer.read_holidays()
+        
+        for holiday in holidays:
+            name = holiday.get("name", "")
+            holiday_type = holiday.get("type", "")
+            scope = holiday.get("scope", "")
+            effect = holiday.get("effect", "")
+            params = holiday.get("params", {})
+            
+            # Format dates based on type
+            if holiday_type == "single":
+                date_str = params.get("date", "")
+            elif holiday_type == "range":
+                start = params.get("start", "")
+                end = params.get("end", "")
+                date_str = f"{start} → {end}"
+            elif holiday_type == "fixed":
+                day = params.get("day", "")
+                date_str = f"Giorno {day} di ogni mese"
+            else:
+                date_str = str(params)
+            
+            # Format effect
+            effect_labels = {
+                "no_order": "No Ordini",
+                "no_receipt": "No Ricevimenti",
+                "both": "Entrambi"
+            }
+            effect_label = effect_labels.get(effect, effect)
+            
+            # Format scope
+            scope_labels = {
+                "logistics": "Logistica",
+                "orders": "Ordini",
+                "receipts": "Ricevimenti"
+            }
+            scope_label = scope_labels.get(scope, scope)
+            
+            self.holidays_treeview.insert(
+                "",
+                "end",
+                values=(name, holiday_type, date_str, scope_label, effect_label)
+            )
+    
+    def _add_holiday(self):
+        """Open dialog to add a new holiday."""
+        self._show_holiday_dialog(mode="add")
+    
+    def _edit_holiday(self):
+        """Open dialog to edit selected holiday."""
+        selection = self.holidays_treeview.selection()
+        if not selection:
+            messagebox.showwarning("Nessuna selezione", "Seleziona una festività da modificare.")
+            return
+        
+        # Get index of selected holiday
+        index = self.holidays_treeview.index(selection[0])
+        holidays = self.csv_layer.read_holidays()
+        
+        if 0 <= index < len(holidays):
+            self._show_holiday_dialog(mode="edit", index=index, holiday=holidays[index])
+    
+    def _delete_holiday(self):
+        """Delete selected holiday."""
+        selection = self.holidays_treeview.selection()
+        if not selection:
+            messagebox.showwarning("Nessuna selezione", "Seleziona una festività da eliminare.")
+            return
+        
+        # Get index of selected holiday
+        index = self.holidays_treeview.index(selection[0])
+        holidays = self.csv_layer.read_holidays()
+        
+        if 0 <= index < len(holidays):
+            holiday = holidays[index]
+            confirm = messagebox.askyesno(
+                "Conferma eliminazione",
+                f"Eliminare la festività '{holiday.get('name', '')}'?"
+            )
+            if confirm:
+                try:
+                    self.csv_layer.delete_holiday(index)
+                    self._refresh_holidays_table()
+                    self._reload_calendar()
+                    messagebox.showinfo("Successo", "Festività eliminata con successo.")
+                except Exception as e:
+                    messagebox.showerror("Errore", f"Errore durante l'eliminazione: {str(e)}")
+    
+    def _show_holiday_dialog(self, mode="add", index=None, holiday=None):
+        """
+        Show dialog to add or edit a holiday.
+        
+        Args:
+            mode: "add" or "edit"
+            index: Index of holiday to edit (for mode="edit")
+            holiday: Holiday data to edit (for mode="edit")
+        """
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Aggiungi Festività" if mode == "add" else "Modifica Festività")
+        dialog.geometry("500x450")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Main frame
+        main_frame = ttk.Frame(dialog, padding=10)
+        main_frame.pack(fill="both", expand=True)
+        
+        # Name
+        ttk.Label(main_frame, text="Nome festività:", font=("Helvetica", 10, "bold")).grid(row=0, column=0, sticky="w", pady=5)
+        name_var = tk.StringVar(value=holiday.get("name", "") if holiday else "")
+        ttk.Entry(main_frame, textvariable=name_var, width=40).grid(row=0, column=1, pady=5, sticky="ew")
+        
+        # Type
+        ttk.Label(main_frame, text="Tipo:", font=("Helvetica", 10, "bold")).grid(row=1, column=0, sticky="w", pady=5)
+        type_var = tk.StringVar(value=holiday.get("type", "single") if holiday else "single")
+        type_combo = ttk.Combobox(main_frame, textvariable=type_var, values=["single", "range", "fixed"], state="readonly", width=37)
+        type_combo.grid(row=1, column=1, pady=5, sticky="ew")
+        
+        # Scope
+        ttk.Label(main_frame, text="Ambito:", font=("Helvetica", 10, "bold")).grid(row=2, column=0, sticky="w", pady=5)
+        scope_var = tk.StringVar(value=holiday.get("scope", "logistics") if holiday else "logistics")
+        scope_combo = ttk.Combobox(main_frame, textvariable=scope_var, values=["logistics", "orders", "receipts"], state="readonly", width=37)
+        scope_combo.grid(row=2, column=1, pady=5, sticky="ew")
+        
+        # Effect
+        ttk.Label(main_frame, text="Effetto:", font=("Helvetica", 10, "bold")).grid(row=3, column=0, sticky="w", pady=5)
+        effect_var = tk.StringVar(value=holiday.get("effect", "both") if holiday else "both")
+        effect_combo = ttk.Combobox(main_frame, textvariable=effect_var, values=["no_order", "no_receipt", "both"], state="readonly", width=37)
+        effect_combo.grid(row=3, column=1, pady=5, sticky="ew")
+        
+        # Date parameters frame (changes based on type)
+        params_frame = ttk.LabelFrame(main_frame, text="Parametri Data", padding=10)
+        params_frame.grid(row=4, column=0, columnspan=2, pady=10, sticky="ew")
+        
+        # Variables for different parameter types
+        date_var = tk.StringVar()
+        start_var = tk.StringVar()
+        end_var = tk.StringVar()
+        day_var = tk.StringVar()
+        
+        # Set initial values if editing
+        if holiday:
+            params = holiday.get("params", {})
+            if holiday.get("type") == "single":
+                date_var.set(params.get("date", ""))
+            elif holiday.get("type") == "range":
+                start_var.set(params.get("start", ""))
+                end_var.set(params.get("end", ""))
+            elif holiday.get("type") == "fixed":
+                day_var.set(str(params.get("day", "1")))
+        
+        def update_params_ui(*args):
+            """Update parameters UI based on selected type."""
+            # Clear frame
+            for widget in params_frame.winfo_children():
+                widget.destroy()
+            
+            current_type = type_var.get()
+            
+            if current_type == "single":
+                ttk.Label(params_frame, text="Data (YYYY-MM-DD):").grid(row=0, column=0, sticky="w", pady=5)
+                ttk.Entry(params_frame, textvariable=date_var, width=30).grid(row=0, column=1, pady=5, sticky="ew")
+                ttk.Label(params_frame, text="Esempio: 2026-12-25", foreground="gray", font=("Helvetica", 8)).grid(row=1, column=0, columnspan=2, sticky="w")
+            
+            elif current_type == "range":
+                ttk.Label(params_frame, text="Data inizio (YYYY-MM-DD):").grid(row=0, column=0, sticky="w", pady=5)
+                ttk.Entry(params_frame, textvariable=start_var, width=30).grid(row=0, column=1, pady=5, sticky="ew")
+                
+                ttk.Label(params_frame, text="Data fine (YYYY-MM-DD):").grid(row=1, column=0, sticky="w", pady=5)
+                ttk.Entry(params_frame, textvariable=end_var, width=30).grid(row=1, column=1, pady=5, sticky="ew")
+                
+                ttk.Label(params_frame, text="Esempio: 2026-08-10 → 2026-08-25", foreground="gray", font=("Helvetica", 8)).grid(row=2, column=0, columnspan=2, sticky="w")
+            
+            elif current_type == "fixed":
+                ttk.Label(params_frame, text="Giorno del mese (1-31):").grid(row=0, column=0, sticky="w", pady=5)
+                ttk.Entry(params_frame, textvariable=day_var, width=30).grid(row=0, column=1, pady=5, sticky="ew")
+                ttk.Label(params_frame, text="Blocca questo giorno ogni mese (es: 1 = primo del mese)", foreground="gray", font=("Helvetica", 8)).grid(row=1, column=0, columnspan=2, sticky="w")
+        
+        # Bind type change to update UI
+        type_var.trace_add("write", update_params_ui)
+        
+        # Initial UI update
+        update_params_ui()
+        
+        # Expand column 1
+        main_frame.columnconfigure(1, weight=1)
+        params_frame.columnconfigure(1, weight=1)
+        
+        # Buttons
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(side="bottom", fill="x", pady=10, padx=10)
+        
+        def save_holiday():
+            """Validate and save holiday."""
+            try:
+                # Validate name
+                name = name_var.get().strip()
+                if not name:
+                    messagebox.showerror("Errore", "Inserisci un nome per la festività.")
+                    return
+                
+                # Build holiday dict
+                new_holiday = {
+                    "name": name,
+                    "scope": scope_var.get(),
+                    "effect": effect_var.get(),
+                    "type": type_var.get(),
+                    "params": {}
+                }
+                
+                # Build params based on type
+                if type_var.get() == "single":
+                    date_str = date_var.get().strip()
+                    if not date_str:
+                        messagebox.showerror("Errore", "Inserisci una data (YYYY-MM-DD).")
+                        return
+                    # Validate date format
+                    try:
+                        from datetime import datetime
+                        datetime.strptime(date_str, "%Y-%m-%d")
+                    except ValueError:
+                        messagebox.showerror("Errore", "Formato data non valido. Usa YYYY-MM-DD.")
+                        return
+                    new_holiday["params"]["date"] = date_str
+                
+                elif type_var.get() == "range":
+                    start_str = start_var.get().strip()
+                    end_str = end_var.get().strip()
+                    if not start_str or not end_str:
+                        messagebox.showerror("Errore", "Inserisci entrambe le date (YYYY-MM-DD).")
+                        return
+                    # Validate dates
+                    try:
+                        from datetime import datetime
+                        start_date = datetime.strptime(start_str, "%Y-%m-%d")
+                        end_date = datetime.strptime(end_str, "%Y-%m-%d")
+                        if start_date > end_date:
+                            messagebox.showerror("Errore", "La data di inizio deve essere precedente alla data di fine.")
+                            return
+                    except ValueError:
+                        messagebox.showerror("Errore", "Formato data non valido. Usa YYYY-MM-DD.")
+                        return
+                    new_holiday["params"]["start"] = start_str
+                    new_holiday["params"]["end"] = end_str
+                
+                elif type_var.get() == "fixed":
+                    day_str = day_var.get().strip()
+                    if not day_str:
+                        messagebox.showerror("Errore", "Inserisci un giorno (1-31).")
+                        return
+                    try:
+                        day = int(day_str)
+                        if day < 1 or day > 31:
+                            messagebox.showerror("Errore", "Il giorno deve essere tra 1 e 31.")
+                            return
+                    except ValueError:
+                        messagebox.showerror("Errore", "Il giorno deve essere un numero.")
+                        return
+                    new_holiday["params"]["day"] = day
+                
+                # Save holiday
+                if mode == "add":
+                    self.csv_layer.add_holiday(new_holiday)
+                else:
+                    if index is not None:
+                        self.csv_layer.update_holiday(index, new_holiday)
+                
+                # Reload table and calendar
+                self._refresh_holidays_table()
+                self._reload_calendar()
+                
+                messagebox.showinfo("Successo", "Festività salvata con successo.")
+                dialog.destroy()
+                
+            except Exception as e:
+                messagebox.showerror("Errore", f"Errore durante il salvataggio: {str(e)}")
+        
+        ttk.Button(button_frame, text="💾 Salva", command=save_holiday).pack(side="left", padx=5)
+        ttk.Button(button_frame, text="❌ Annulla", command=dialog.destroy).pack(side="left", padx=5)
+    
+    def _reload_calendar(self):
+        """Reload calendar configuration after holiday changes."""
+        from ..domain.calendar import create_calendar_with_holidays
+        
+        try:
+            # Reload calendar with new holidays
+            new_calendar = create_calendar_with_holidays(self.csv_layer.data_dir)
+            
+            # Note: OrderWorkflow and ReceivingWorkflow don't store calendar as attribute.
+            # Calendar is loaded during order proposal/confirmation.
+            # This method exists for future extension if workflows need calendar caching.
+            
+            logger.info("Calendar reloaded with updated holidays")
+            
+        except Exception as e:
+            logger.error(f"Failed to reload calendar: {str(e)}", exc_info=True)
+            messagebox.showwarning("Avviso", f"Calendario non ricaricato: {str(e)}")
 
 
 def main():
