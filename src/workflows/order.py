@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from typing import List, Tuple, Optional
 import logging
 
-from ..domain.models import Stock, OrderProposal, OrderConfirmation, Transaction, EventType, SKU
+from ..domain.models import Stock, OrderProposal, OrderConfirmation, Transaction, EventType, SKU, SalesRecord
 from ..persistence.csv_layer import CSVLayer
 from ..domain.ledger import StockCalculator, ShelfLifeCalculator
 
@@ -171,23 +171,39 @@ class OrderWorkflow:
         sku_obj: Optional[SKU] = None,
         oos_days_count: int = 0,
         oos_boost_percent: float = 0.0,
+        target_receipt_date: Optional[date] = None,
+        protection_period_days: Optional[int] = None,
+        transactions: Optional[List[Transaction]] = None,
+        sales_records: Optional[List[SalesRecord]] = None,
     ) -> OrderProposal:
         """
         Generate order proposal based on stock and sales history.
         
         NEW FORMULA (2026-01-29):
         S = forecast × (lead_time + review_period) + safety_stock
-        proposed = max(0, S − (on_hand + on_order))
+        proposed = max(0, S − IP)
+        
+        CALENDAR-AWARE (2026-02-11):
+        - If target_receipt_date is provided, IP uses inventory_position(as_of=target_receipt_date)
+          which filters on_order by receipt_date <= target, enabling dual-order Friday scenarios
+        - If protection_period_days is provided, it replaces (lead_time + review_period) for forecast horizon
+        
         Then: apply pack_size rounding → MOQ rounding → cap at max_stock
         
         Args:
             sku: SKU identifier
             description: SKU description
-            current_stock: Current stock state (on_hand, on_order)
+            current_stock: Current stock state (on_hand, on_order from ledger as-of today)
             daily_sales_avg: Average daily sales (from historical data)
             min_stock: Minimum stock threshold (global default, overridden by SKU reorder_point)
             days_cover: Days of sales to cover (DEPRECATED, now uses lead_time + review_period)
             sku_obj: SKU object (for pack_size, MOQ, lead_time, review_period, safety_stock, max_stock)
+            oos_days_count: Count of OOS days (for display/notes)
+            oos_boost_percent: OOS boost percentage (for safety stock adjustment)
+            target_receipt_date: Target receipt date (calendar-aware, filters pipeline by receipt_date)
+            protection_period_days: Protection period P (calendar-aware, replaces lead_time + review_period)
+            transactions: All transactions (required for inventory_position calculation if target_receipt_date provided)
+            sales_records: All sales records (required for inventory_position calculation if target_receipt_date provided)
         
         Returns:
             OrderProposal with suggested quantity (adjusted for pack_size, MOQ, and max_stock cap)
@@ -195,7 +211,7 @@ class OrderWorkflow:
         # Use SKU-specific parameters if available
         pack_size = sku_obj.pack_size if sku_obj else 1
         moq = sku_obj.moq if sku_obj else 1
-        lead_time = sku_obj.lead_time_days if sku_obj else self.lead_time_days
+        lead_time = sku_obj.lead_time_days if (sku_obj and sku_obj.lead_time_days > 0) else self.lead_time_days
         review_period = sku_obj.review_period if sku_obj else 7
         safety_stock_base = sku_obj.safety_stock if sku_obj else 0
         shelf_life_days = sku_obj.shelf_life_days if sku_obj else 0
@@ -229,8 +245,19 @@ class OrderWorkflow:
         simulation_trigger_day = 0
         simulation_notes = ""
         
-        # NEW FORMULA: S = forecast × (lead_time + review_period) + safety_stock
-        forecast_period = lead_time + review_period
+        # === CALENDAR-AWARE PLANNING HORIZON ===
+        # Use protection_period_days if provided (calendar-aware), otherwise lead_time + review_period
+        if protection_period_days is not None:
+            forecast_period = protection_period_days
+            # For receipt_date calc below, derive effective lead_time from target date
+            if target_receipt_date:
+                effective_lead_time = (target_receipt_date - date.today()).days
+            else:
+                effective_lead_time = lead_time
+        else:
+            # Traditional formula
+            forecast_period = lead_time + review_period
+            effective_lead_time = lead_time
         
         # === FORECAST METHOD SELECTION (SIMPLE vs MONTE CARLO) ===
         # Read global settings
@@ -263,9 +290,13 @@ class OrderWorkflow:
             # Fetch lots for SKU and calculate usable stock
             lots = self.csv_layer.get_lots_by_sku(sku, sort_by_expiry=True)
             
+            # CALENDAR-AWARE: Use target_receipt_date as check_date if provided
+            # This accounts for lots that will expire between today and receipt
+            check_date_for_usable = target_receipt_date if target_receipt_date else date.today()
+            
             usable_result = ShelfLifeCalculator.calculate_usable_stock(
                 lots=lots,
-                check_date=date.today(),
+                check_date=check_date_for_usable,
                 min_shelf_life_days=min_shelf_life,
                 waste_horizon_days=waste_horizon_days
             )
@@ -399,7 +430,7 @@ class OrderWorkflow:
                 
                 # Use sum of forecast over horizon as total demand
                 forecast_qty = int(sum(mc_forecast_values))
-                lead_time_demand = int(sum(mc_forecast_values[:lead_time])) if len(mc_forecast_values) >= lead_time else forecast_qty
+                lead_time_demand = int(sum(mc_forecast_values[:effective_lead_time])) if len(mc_forecast_values) >= effective_lead_time else forecast_qty
             except Exception as e:
                 # Fallback to simple forecast if MC fails
                 logging.warning(f"Monte Carlo forecast failed for SKU {sku}: {e}. Falling back to simple forecast.")
@@ -410,7 +441,7 @@ class OrderWorkflow:
         else:
             # === SIMPLE FORECAST (level × period) ===
             forecast_qty = int(daily_sales_avg * forecast_period)
-            lead_time_demand = int(daily_sales_avg * lead_time)
+            lead_time_demand = int(daily_sales_avg * effective_lead_time)
         
         S = forecast_qty + safety_stock
         
@@ -422,8 +453,36 @@ class OrderWorkflow:
             if S > shelf_life_capacity:
                 shelf_life_warning = True
         
-        # NEW IP formula: IP = usable_qty + on_order - unfulfilled_qty (usa usable stock se shelf life enabled)
-        inventory_position = usable_qty + current_stock.on_order - current_stock.unfulfilled_qty
+        # === CALENDAR-AWARE INVENTORY POSITION ===
+        # If target_receipt_date provided, use PROJECTED IP that considers:
+        # 1. Forecast sales between today and target_date
+        # 2. Orders arriving between today and target_date
+        # 3. Lots expiring between today and target_date (already in usable_qty)
+        # Otherwise, use traditional on_hand + on_order (unfiltered)
+        if target_receipt_date and transactions is not None:
+            # Build current_stock with adjusted on_hand for shelf life
+            # Use usable_qty as on_hand since it already accounts for lots expiring by target_date
+            adjusted_stock = Stock(
+                sku=sku,
+                on_hand=usable_qty,  # Already projected to target_receipt_date
+                on_order=current_stock.on_order,
+                unfulfilled_qty=current_stock.unfulfilled_qty,
+                asof_date=current_stock.asof_date
+            )
+            
+            # Use projected IP: accounts for sales between today and target
+            inventory_position = StockCalculator.projected_inventory_position(
+                sku=sku,
+                target_date=target_receipt_date,
+                current_stock=adjusted_stock,
+                transactions=transactions,
+                daily_sales_forecast=daily_sales_avg,
+                sales_records=sales_records,
+            )
+        else:
+            # Traditional: on_order unfiltered (legacy behavior)
+            inventory_position = usable_qty + current_stock.on_order - current_stock.unfulfilled_qty
+        
         unfulfilled_qty = current_stock.unfulfilled_qty
         
         # === MONTE CARLO COMPARISON (se richiesto) ===
@@ -629,7 +688,11 @@ class OrderWorkflow:
                     shelf_life_penalty_applied = True
                     shelf_life_penalty_message = penalty_msg
         
-        receipt_date = date.today() + timedelta(days=lead_time)
+        # Use target_receipt_date if provided (calendar-aware), otherwise calculate from lead_time
+        if target_receipt_date:
+            receipt_date = target_receipt_date
+        else:
+            receipt_date = date.today() + timedelta(days=effective_lead_time)
         
         notes = f"S={S} (forecast={forecast_qty}+safety={safety_stock}), IP={inventory_position}, Pack={pack_size}, MOQ={moq}, Max={max_stock}"
         if unfulfilled_qty > 0:

@@ -85,8 +85,8 @@ class SKU:
             raise ValueError("MOQ must be >= 1")
         if self.pack_size < 1:
             raise ValueError("Pack size must be >= 1")
-        if self.lead_time_days < 1 or self.lead_time_days > 365:
-            raise ValueError("Lead time must be between 1 and 365 days")
+        if self.lead_time_days < 0 or self.lead_time_days > 365:
+            raise ValueError("Lead time must be between 0 and 365 days")
         if self.review_period < 0:
             raise ValueError("Review period cannot be negative")
         if self.safety_stock < 0:

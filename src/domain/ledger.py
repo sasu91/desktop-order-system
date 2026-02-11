@@ -248,6 +248,82 @@ class StockCalculator:
         
         # IP = on_hand + on_order (filtered by date) - unfulfilled_qty
         return stock.on_hand + on_order_by_date - stock.unfulfilled_qty
+    
+    @staticmethod
+    def projected_inventory_position(
+        sku: str,
+        target_date: date,
+        current_stock: Stock,
+        transactions: List[Transaction],
+        daily_sales_forecast: float = 0.0,
+        sales_records: Optional[List[SalesRecord]] = None,
+    ) -> int:
+        """
+        Calculate projected inventory position at a future date.
+        
+        This projects stock forward from today to target_date by:
+        1. Starting with current on_hand (as-of today)
+        2. Subtracting forecast sales between today and target_date
+        3. Adding receipts (orders) that arrive between today and target_date
+        4. Filtering on_order to only include orders with receipt_date <= target_date
+        
+        Critical for calendar-aware proposals:
+        - Monday proposal should subtract Fri→Mon forecast sales
+        - Should include Saturday delivery in Monday IP
+        - Should NOT include orders arriving after Monday
+        
+        Args:
+            sku: SKU identifier
+            target_date: Future date to project to
+            current_stock: Current stock state (as-of today)
+            transactions: All ledger transactions
+            daily_sales_forecast: Average daily sales to project forward
+            sales_records: Historical sales (optional, for validation)
+        
+        Returns:
+            Projected IP = projected_on_hand + on_order(<=target) - unfulfilled_qty
+        
+        Example:
+            Today (Friday): on_hand=50
+            Forecast: 10 pz/day
+            Orders: 30 pz Saturday, 50 pz Monday
+            
+            Projected IP(Saturday) = 50 - 10 (Fri sales) + 0 (no receipts yet) = 40
+                                     + 30 (Sat order pending) = 70
+            Projected IP(Monday) = 50 - 10 (Fri) - 10 (Sat) - 10 (Sun) = 20
+                                   + 30 (Sat received) = 50
+                                   + 50 (Mon order pending) = 100
+        """
+        today = current_stock.asof_date  # Use stock's "as-of" date as reference, not system date
+        
+        # Start with current on_hand
+        projected_on_hand = current_stock.on_hand
+        
+        # Subtract forecast sales between today and target_date
+        if target_date > today and daily_sales_forecast > 0:
+            days_between = (target_date - today).days
+            forecast_sales = int(daily_sales_forecast * days_between)
+            projected_on_hand = max(0, projected_on_hand - forecast_sales)
+        
+        # Get orders by receipt date
+        pending_orders = StockCalculator.on_order_by_date(sku, transactions, target_date)
+        
+        # Add receipts that arrive between today and target_date (exclusive of target)
+        # These convert from on_order to on_hand
+        receipts_before_target = sum(
+            qty for receipt_date, qty in pending_orders.items()
+            if today < receipt_date < target_date
+        )
+        projected_on_hand += receipts_before_target
+        
+        # Count remaining on_order (orders arriving on or after target_date)
+        on_order_at_target = sum(
+            qty for receipt_date, qty in pending_orders.items()
+            if receipt_date >= target_date
+        )
+        
+        # Projected IP = projected_on_hand + on_order (arriving at/after target) - unfulfilled
+        return projected_on_hand + on_order_at_target - current_stock.unfulfilled_qty
 
 
 def calculate_sold_from_eod_stock(

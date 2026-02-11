@@ -906,13 +906,33 @@ class DesktopOrderApp:
         settings = self.csv_layer.read_settings()
         engine = settings.get("reorder_engine", {})
         
-        # Parameters row
+        # Parameters row - first line
         params_row = ttk.Frame(param_frame)
         params_row.pack(side="top", fill="x", pady=5)
         
         ttk.Label(params_row, text="Lead Time (giorni):", width=15).pack(side="left", padx=(0, 5))
         self.lead_time_var = tk.StringVar(value=str(engine.get("lead_time_days", {}).get("value", 7)))
         ttk.Entry(params_row, textvariable=self.lead_time_var, width=10).pack(side="left", padx=(0, 20))
+        
+        # Second parameter row - global receipt date
+        params_row2 = ttk.Frame(param_frame)
+        params_row2.pack(side="top", fill="x", pady=(0, 5))
+        
+        ttk.Label(params_row2, text="Data Ricevimento:", width=15).pack(side="left", padx=(0, 5))
+        self.global_receipt_date_var = tk.StringVar(value="")
+        ttk.Entry(params_row2, textvariable=self.global_receipt_date_var, width=12).pack(side="left", padx=(0, 5))
+        ttk.Label(params_row2, text="(YYYY-MM-DD, vuoto = usa calendario)", font=("Helvetica", 8), foreground="gray").pack(side="left")
+        
+        # Third parameter row - lane selector
+        params_row3 = ttk.Frame(param_frame)
+        params_row3.pack(side="top", fill="x", pady=(0, 5))
+        
+        ttk.Label(params_row3, text="Corsia Logistica:", width=15).pack(side="left", padx=(0, 5))
+        self.lane_var = tk.StringVar(value="STANDARD")
+        lane_combo = ttk.Combobox(params_row3, textvariable=self.lane_var, width=10, state="readonly")
+        lane_combo['values'] = ("STANDARD", "SATURDAY", "MONDAY")
+        lane_combo.pack(side="left", padx=(0, 5))
+        ttk.Label(params_row3, text="(Lun-Gio: STANDARD, Ven: SATURDAY/MONDAY)", font=("Helvetica", 8), foreground="gray").pack(side="left")
         
         # Buttons row with workflow guidance
         buttons_row = ttk.Frame(param_frame)
@@ -1025,6 +1045,8 @@ class DesktopOrderApp:
         sku_obj = next((s for s in self.csv_layer.read_skus() if s.sku == proposal.sku), None)
         pack_size = sku_obj.pack_size if sku_obj else 1
         
+        effective_lead_time = self._get_effective_lead_time(sku_obj)
+
         # Format details in colli where applicable
         def to_colli(pezzi, pack):
             """Convert pezzi to colli (rounded down) with remainder."""
@@ -1045,14 +1067,24 @@ class DesktopOrderApp:
         # Forecast
         details.append("═══ FORECAST ═══")
         details.append(f"Periodo: {proposal.forecast_period_days} giorni")
-        details.append(f"  (Lead Time: {sku_obj.lead_time_days if sku_obj else 0}d + Review: {sku_obj.review_period if sku_obj else 0}d)")
+        
+        # Check if this was calendar-driven (protection period) or traditional (lead+review)
+        expected_traditional = effective_lead_time + (sku_obj.review_period if sku_obj else 0)
+        if proposal.forecast_period_days != expected_traditional:
+            # Calendar-aware: show protection period
+            details.append(f"  (Protezione calendario: {proposal.forecast_period_days}d)")
+            details.append(f"  [vs tradizionale: Lead {effective_lead_time}d + Review {sku_obj.review_period if sku_obj else 0}d = {expected_traditional}d]")
+        else:
+            # Traditional: show lead+review breakdown
+            details.append(f"  (Lead Time: {effective_lead_time}d + Review: {sku_obj.review_period if sku_obj else 0}d)")
+        
         details.append(f"Media vendite giornaliere: {proposal.daily_sales_avg:.2f} pz/gg")
         details.append(f"Forecast qty: {to_colli(proposal.forecast_qty, pack_size)}")
         details.append("")
         
         # Lead Time Demand
         details.append("═══ LEAD TIME DEMAND ═══")
-        details.append(f"Lead Time: {sku_obj.lead_time_days if sku_obj else 0} giorni")
+        details.append(f"Lead Time: {effective_lead_time} giorni")
         details.append(f"Domanda in Lead Time: {to_colli(proposal.lead_time_demand, pack_size)}")
         details.append("")
         
@@ -1247,6 +1279,43 @@ class DesktopOrderApp:
         # Update workflow lead time
         self.order_workflow.lead_time_days = lead_time
         
+        # === CALENDAR-AWARE RECEIPT DATE & PROTECTION PERIOD ===
+        # Determine target receipt date and protection period using calendar or manual override
+        from ..domain.calendar import Lane, next_receipt_date, calculate_protection_period_days
+        
+        order_date = date.today()
+        global_receipt_date_str = self.global_receipt_date_var.get().strip()
+        lane_str = self.lane_var.get()
+        
+        # Parse lane
+        try:
+            lane = Lane[lane_str] if lane_str else Lane.STANDARD
+        except KeyError:
+            lane = Lane.STANDARD
+        
+        # Determine target receipt date and protection period
+        if global_receipt_date_str:
+            # Manual override: use provided receipt date
+            try:
+                target_receipt_date = date.fromisoformat(global_receipt_date_str)
+                # Calculate protection period as (target - today) or use review period as fallback
+                protection_period = max(1, (target_receipt_date - order_date).days)
+            except ValueError:
+                # Invalid format: fallback to calendar
+                target_receipt_date = next_receipt_date(order_date, lane)
+                protection_period = calculate_protection_period_days(order_date, lane)
+        else:
+            # Use calendar logic
+            try:
+                target_receipt_date = next_receipt_date(order_date, lane)
+                protection_period = calculate_protection_period_days(order_date, lane)
+            except ValueError as e:
+                # Invalid lane for current day (e.g., SATURDAY on Monday): fallback to STANDARD
+                logger.warning(f"Lane {lane} invalid for {order_date}: {e}. Using STANDARD.")
+                lane = Lane.STANDARD
+                target_receipt_date = next_receipt_date(order_date, lane)
+                protection_period = calculate_protection_period_days(order_date, lane)
+        
         # Get all SKUs
         sku_ids = self.csv_layer.get_all_sku_ids()
         skus_by_id = {sku.sku: sku for sku in self.csv_layer.read_skus()}
@@ -1403,6 +1472,7 @@ class DesktopOrderApp:
                         self.oos_boost_preferences[sku_id] = None
             
             # Generate proposal (pass sku_obj for pack_size, MOQ, lead_time, review_period, safety_stock, max_stock)
+            # CALENDAR-AWARE: pass target_receipt_date and protection_period for inventory position calculation
             proposal = self.order_workflow.generate_proposal(
                 sku=sku_id,
                 description=description,
@@ -1411,7 +1481,12 @@ class DesktopOrderApp:
                 sku_obj=sku_obj,
                 oos_days_count=oos_days_count,
                 oos_boost_percent=oos_boost_percent,
+                target_receipt_date=target_receipt_date,
+                protection_period_days=protection_period,
+                transactions=transactions,
+                sales_records=sales_records,
             )
+            
             self.current_proposals.append(proposal)
         
         # Populate table
@@ -1565,49 +1640,53 @@ class DesktopOrderApp:
         
         return (result.get(), estimate_date, estimate_colli)
     
+    def _get_effective_lead_time(self, sku_obj):
+        """Return SKU lead time if set, otherwise global lead time."""
+        if sku_obj and sku_obj.lead_time_days > 0:
+            return sku_obj.lead_time_days
+        return self.order_workflow.lead_time_days
+
+    def _build_proposal_row_values(self, proposal):
+        """Build treeview row values for a proposal."""
+        sku_obj = next((s for s in self.csv_layer.read_skus() if s.sku == proposal.sku), None)
+        pack_size = sku_obj.pack_size if sku_obj else 1
+
+        colli_proposti = proposal.proposed_qty // pack_size if pack_size > 0 else proposal.proposed_qty
+
+        mc_comparison_display = ""
+        if proposal.mc_method_used == "monte_carlo":
+            stat_label = f"P{proposal.mc_output_percentile}" if proposal.mc_output_stat == "percentile" else "Media"
+            mc_comparison_display = f"MC: {stat_label}"
+        elif proposal.mc_comparison_qty is not None:
+            stat_label = f"P{proposal.mc_output_percentile}" if proposal.mc_output_stat == "percentile" else "Media"
+            mc_comparison_display = f"Confronto: {stat_label} ({proposal.mc_comparison_qty} pz)"
+
+        usable_stock_display = f"{proposal.usable_stock}/{proposal.current_on_hand}" if proposal.usable_stock < proposal.current_on_hand else str(proposal.current_on_hand)
+        waste_risk_display = f"{proposal.waste_risk_percent:.1f}%" if proposal.waste_risk_percent > 0 else ""
+        shelf_penalty_display = proposal.shelf_life_penalty_message if proposal.shelf_life_penalty_applied else ""
+
+        return (
+            proposal.sku,
+            proposal.description,
+            pack_size,
+            usable_stock_display,
+            waste_risk_display,
+            colli_proposti,
+            proposal.proposed_qty,
+            shelf_penalty_display,
+            mc_comparison_display,
+            proposal.receipt_date.isoformat() if proposal.receipt_date else "",
+        )
+
     def _refresh_proposal_table(self):
         """Refresh proposals table."""
         self.proposal_treeview.delete(*self.proposal_treeview.get_children())
         
         for proposal in self.current_proposals:
-            # Get SKU object for pack_size
-            sku_obj = next((s for s in self.csv_layer.read_skus() if s.sku == proposal.sku), None)
-            pack_size = sku_obj.pack_size if sku_obj else 1
-            
-            # Calculate colli from pezzi
-            colli_proposti = proposal.proposed_qty // pack_size if pack_size > 0 else proposal.proposed_qty
-            
-            # MC Info column: show method/statistic with qty
-            mc_comparison_display = ""
-            if proposal.mc_method_used == "monte_carlo":
-                # MC is main forecast method
-                stat_label = f"P{proposal.mc_output_percentile}" if proposal.mc_output_stat == "percentile" else "Media"
-                mc_comparison_display = f"MC: {stat_label}"
-            elif proposal.mc_comparison_qty is not None:
-                # MC is comparison (simple is main method)
-                stat_label = f"P{proposal.mc_output_percentile}" if proposal.mc_output_stat == "percentile" else "Media"
-                mc_comparison_display = f"Confronto: {stat_label} ({proposal.mc_comparison_qty} pz)"
-            
-            # Shelf life columns
-            usable_stock_display = f"{proposal.usable_stock}/{proposal.current_on_hand}" if proposal.usable_stock < proposal.current_on_hand else str(proposal.current_on_hand)
-            waste_risk_display = f"{proposal.waste_risk_percent:.1f}%" if proposal.waste_risk_percent > 0 else ""
-            shelf_penalty_display = proposal.shelf_life_penalty_message if proposal.shelf_life_penalty_applied else ""
-            
             self.proposal_treeview.insert(
                 "",
                 "end",
-                values=(
-                    proposal.sku,
-                    proposal.description,
-                    pack_size,
-                    usable_stock_display,
-                    waste_risk_display,
-                    colli_proposti,
-                    proposal.proposed_qty,
-                    shelf_penalty_display,
-                    mc_comparison_display,
-                    proposal.receipt_date.isoformat() if proposal.receipt_date else "",
-                ),
+                values=self._build_proposal_row_values(proposal),
             )
     
     def _refresh_order_stock_data(self):
@@ -1620,26 +1699,43 @@ class DesktopOrderApp:
         self.proposal_treeview.delete(*self.proposal_treeview.get_children())
     
     def _on_proposal_double_click(self, event):
-        """Handle double-click on proposal row to edit Proposed Qty (in colli)."""
+        """Handle double-click on proposal row to edit proposed qty or receipt date."""
         selected = self.proposal_treeview.selection()
         if not selected:
             return
-        
+
+        column_id = self.proposal_treeview.identify_column(event.x)
+        if not column_id:
+            return
+
+        try:
+            column_index = int(column_id.replace("#", "")) - 1
+        except ValueError:
+            return
+
+        columns = self.proposal_treeview["columns"]
+        if column_index < 0 or column_index >= len(columns):
+            return
+
+        column_name = columns[column_index]
+
         item = self.proposal_treeview.item(selected[0])
         values = item["values"]
         sku = values[0]
-        
-        # Find proposal
+
         proposal = next((p for p in self.current_proposals if p.sku == sku), None)
         if not proposal:
             return
-        
-        # Create edit dialog
-        self._edit_proposed_qty_dialog(proposal, selected[0])
+
+        if column_name == "Receipt Date":
+            self._edit_receipt_date_dialog(proposal, selected[0])
+            return
+
+        if column_name == "Colli Proposti":
+            self._edit_proposed_qty_dialog(proposal, selected[0])
     
     def _edit_proposed_qty_dialog(self, proposal, tree_item_id):
         """Show dialog to edit proposed quantity in colli."""
-        # Get SKU object for pack_size
         sku_obj = next((s for s in self.csv_layer.read_skus() if s.sku == proposal.sku), None)
         pack_size = sku_obj.pack_size if sku_obj else 1
         
@@ -1680,17 +1776,10 @@ class DesktopOrderApp:
                 # Update proposal (store in pezzi)
                 proposal.proposed_qty = new_pezzi
                 
-                # Update tree item (show colli)
+                # Update tree item
                 self.proposal_treeview.item(
                     tree_item_id,
-                    values=(
-                        proposal.sku,
-                        proposal.description,
-                        pack_size,
-                        new_colli,
-                        new_pezzi,
-                        proposal.receipt_date.isoformat() if proposal.receipt_date else "",
-                    ),
+                    values=self._build_proposal_row_values(proposal),
                 )
                 
                 popup.destroy()
@@ -1701,6 +1790,50 @@ class DesktopOrderApp:
         button_frame = ttk.Frame(form_frame)
         button_frame.pack(fill="x")
         ttk.Button(button_frame, text="Salva", command=save_qty).pack(side="right", padx=5)
+        ttk.Button(button_frame, text="Annulla", command=popup.destroy).pack(side="right", padx=5)
+
+    def _edit_receipt_date_dialog(self, proposal, tree_item_id):
+        """Show dialog to edit receipt date for a proposal."""
+        popup = tk.Toplevel(self.root)
+        popup.title(f"Modifica Data Ricevimento - {proposal.sku}")
+        popup.geometry("450x220")
+        popup.resizable(False, False)
+        popup.transient(self.root)
+        popup.grab_set()
+
+        form_frame = ttk.Frame(popup, padding=20)
+        form_frame.pack(fill="both", expand=True)
+
+        ttk.Label(form_frame, text=f"SKU: {proposal.sku}", font=("Helvetica", 10, "bold")).pack(anchor="w", pady=5)
+        ttk.Label(form_frame, text=f"Descrizione: {proposal.description}").pack(anchor="w", pady=5)
+        ttk.Label(form_frame, text="Data Ricevimento (YYYY-MM-DD, vuoto=default):").pack(anchor="w", pady=(15, 5))
+
+        current_date = proposal.receipt_date.isoformat() if proposal.receipt_date else ""
+        receipt_date_var = tk.StringVar(value=current_date)
+        date_entry = ttk.Entry(form_frame, textvariable=receipt_date_var, width=20)
+        date_entry.pack(anchor="w", pady=(0, 15))
+        date_entry.focus()
+
+        def save_date():
+            date_str = receipt_date_var.get().strip()
+            if not date_str:
+                proposal.receipt_date = None
+            else:
+                try:
+                    proposal.receipt_date = date.fromisoformat(date_str)
+                except ValueError:
+                    messagebox.showerror("Errore di Validazione", "Formato data non valido. Usa YYYY-MM-DD.", parent=popup)
+                    return
+
+            self.proposal_treeview.item(
+                tree_item_id,
+                values=self._build_proposal_row_values(proposal),
+            )
+            popup.destroy()
+
+        button_frame = ttk.Frame(form_frame)
+        button_frame.pack(fill="x")
+        ttk.Button(button_frame, text="Salva", command=save_date).pack(side="right", padx=5)
         ttk.Button(button_frame, text="Annulla", command=popup.destroy).pack(side="right", padx=5)
         
         # Bind Enter to save
@@ -3731,7 +3864,7 @@ class DesktopOrderApp:
         add_field_row(content_order, 1, "Confezione (Pack Size):", "Multiplo arrotondamento colli", pack_size_var, "entry")
         
         lead_time_var = tk.StringVar(value=str(current_sku.lead_time_days) if current_sku else "7")
-        add_field_row(content_order, 2, "Lead Time (giorni):", "Tempo attesa ordine→ricezione", lead_time_var, "entry")
+        add_field_row(content_order, 2, "Lead Time (giorni):", "Tempo attesa ordine→ricezione (0=globale)", lead_time_var, "entry")
         
         review_period_var = tk.StringVar(value=str(current_sku.review_period) if current_sku else "7")
         add_field_row(content_order, 3, "Periodo Revisione (giorni):", "Finestra revisione target S", review_period_var, "entry")
@@ -3913,8 +4046,8 @@ class DesktopOrderApp:
             messagebox.showerror("Errore di Validazione", "Pack Size deve essere almeno 1.", parent=popup)
             return
         
-        if lead_time_days < 1:
-            messagebox.showerror("Errore di Validazione", "Lead Time deve essere almeno 1 giorno.", parent=popup)
+        if lead_time_days < 0:
+            messagebox.showerror("Errore di Validazione", "Lead Time non può essere negativo.", parent=popup)
             return
         
         if max_stock < 1:
