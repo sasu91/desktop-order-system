@@ -20,6 +20,12 @@ from datetime import date, timedelta
 from typing import List, Dict, Any, Optional
 import statistics
 
+# Import is_day_censored for baseline filtering
+try:
+    from src.domain.ledger import is_day_censored
+except ImportError:
+    from domain.ledger import is_day_censored
+
 
 def fit_forecast_model(
     history: List[Dict[str, Any]],
@@ -406,6 +412,224 @@ def quick_forecast(
         "model": model,
         "stats": stats,
     }
+
+
+# ======================================================================
+# BASELINE FORECAST (NON-PROMO, NON-CENSORED TRAINING)
+# ======================================================================
+
+def baseline_forecast(
+    sku_id: str,
+    horizon_dates: List[date],
+    sales_records: List[Any],  # List[SalesRecord]
+    transactions: List[Any],  # List[Transaction]
+    asof_date: Optional[date] = None,
+    alpha: float = 0.3,
+    min_samples_for_dow: int = 14,
+    alpha_boost_for_censored: float = 0.0,
+) -> Dict[date, float]:
+    """
+    Generate baseline demand forecast trained ONLY on non-promo, non-censored days.
+    
+    This function represents the "normal" demand without promotional uplift.
+    Training data is filtered to exclude:
+    - Days with promo_flag=1 (promotional periods)
+    - Days that are censored (OOS/stockout events detected by is_day_censored)
+    
+    The baseline forecast is generated for ALL dates in horizon_dates,
+    regardless of whether those future dates have promos scheduled or not.
+    This allows comparison of actual forecast vs baseline to measure promo impact.
+    
+    Args:
+        sku_id: SKU identifier
+        horizon_dates: List of future dates to forecast (sorted, oldest first)
+        sales_records: List of SalesRecord objects (must have .sku, .date, .qty_sold, .promo_flag)
+        transactions: List of Transaction objects (for censored day detection)
+        asof_date: AsOf date for stock calculation in censoring logic (defaults to today)
+        alpha: Smoothing parameter for exponential moving average (0 < alpha <= 1)
+        min_samples_for_dow: Minimum samples needed to compute DOW factors
+        alpha_boost_for_censored: Increase alpha for SKUs with censored days
+    
+    Returns:
+        Dict[date, float]: Mapping of each date in horizon_dates to baseline forecast value
+                          (non-negative floats, representing expected daily demand)
+    
+    Example:
+        >>> from datetime import date, timedelta
+        >>> horizon = [date.today() + timedelta(days=i) for i in range(1, 8)]
+        >>> baseline = baseline_forecast(
+        ...     sku_id="SKU001",
+        ...     horizon_dates=horizon,
+        ...     sales_records=sales,
+        ...     transactions=txns,
+        ... )
+        >>> baseline[horizon[0]]  # Baseline forecast for first day
+        12.5
+    
+    Invariant Test:
+        If promo_calendar is empty and all sales have promo_flag=0,
+        then final forecast (with promo enrichment) MUST equal baseline forecast.
+    """
+    if asof_date is None:
+        asof_date = date.today()
+    
+    # Filter sales records for this SKU
+    sku_sales = [s for s in sales_records if s.sku == sku_id]
+    
+    # Build training dataset: exclude promo_flag=1 and censored days
+    training_history = []
+    
+    for sale in sku_sales:
+        # Skip promotional periods
+        if hasattr(sale, 'promo_flag') and sale.promo_flag == 1:
+            continue
+        
+        # Skip censored days (OOS/stockout)
+        is_censored, _reason = is_day_censored(
+            sku=sku_id,
+            check_date=sale.date,
+            transactions=transactions,
+            sales_records=sales_records,
+        )
+        if is_censored:
+            continue
+        
+        # Add to training set
+        training_history.append({
+            "date": sale.date,
+            "qty_sold": sale.qty_sold,
+        })
+    
+    # Sort training history by date (fit_forecast_model expects chronological order)
+    training_history.sort(key=lambda x: x["date"])
+    
+    # Fit model on baseline (non-promo, non-censored) data
+    model_state = fit_forecast_model(
+        history=training_history,
+        alpha=alpha,
+        min_samples_for_dow=min_samples_for_dow,
+        censored_flags=None,  # Already filtered out censored days
+        alpha_boost_for_censored=alpha_boost_for_censored,
+    )
+    
+    # Generate baseline forecast for each date in horizon
+    baseline_predictions = {}
+    
+    for forecast_date in horizon_dates:
+        baseline_value = predict_single_day(model_state, forecast_date)
+        baseline_predictions[forecast_date] = baseline_value
+    
+    return baseline_predictions
+
+
+def baseline_forecast_mc(
+    sku_id: str,
+    horizon_dates: List[date],
+    sales_records: List[Any],  # List[SalesRecord]
+    transactions: List[Any],  # List[Transaction]
+    asof_date: Optional[date] = None,
+    distribution: str = "empirical",
+    n_simulations: int = 1000,
+    random_seed: int = 42,
+    output_stat: str = "mean",
+    output_percentile: int = 80,
+    expected_waste_rate: float = 0.0,
+) -> Dict[date, float]:
+    """
+    Generate baseline demand forecast using Monte Carlo simulation.
+    
+    Similar to baseline_forecast() but uses Monte Carlo sampling instead of
+    deterministic Level+DOW model. Training data is filtered identically:
+    - Exclude promo_flag=1 (promotional periods)
+    - Exclude censored days (OOS/stockout events)
+    
+    Args:
+        sku_id: SKU identifier
+        horizon_dates: List of future dates to forecast (sorted, oldest first)
+        sales_records: List of SalesRecord objects
+        transactions: List of Transaction objects (for censored day detection)
+        asof_date: AsOf date for stock calculation in censoring logic (defaults to today)
+        distribution: Distribution type ("empirical", "normal", "lognormal", "residuals")
+        n_simulations: Number of Monte Carlo simulation runs
+        random_seed: Random seed for reproducibility
+        output_stat: Aggregation method ("mean", "median", "percentile")
+        output_percentile: Percentile value if output_stat="percentile" (1-99)
+        expected_waste_rate: Expected waste rate due to shelf life (0.0-1.0)
+    
+    Returns:
+        Dict[date, float]: Mapping of each date in horizon_dates to baseline forecast value
+    
+    Example:
+        >>> horizon = [date.today() + timedelta(days=i) for i in range(1, 8)]
+        >>> baseline_mc = baseline_forecast_mc(
+        ...     sku_id="SKU001",
+        ...     horizon_dates=horizon,
+        ...     sales_records=sales,
+        ...     transactions=txns,
+        ...     distribution="empirical",
+        ...     n_simulations=1000,
+        ... )
+        >>> baseline_mc[horizon[0]]
+        12.8
+    """
+    if asof_date is None:
+        asof_date = date.today()
+    
+    # Filter sales records for this SKU
+    sku_sales = [s for s in sales_records if s.sku == sku_id]
+    
+    # Build training dataset: exclude promo_flag=1 and censored days
+    training_history = []
+    
+    for sale in sku_sales:
+        # Skip promotional periods
+        if hasattr(sale, 'promo_flag') and sale.promo_flag == 1:
+            continue
+        
+        # Skip censored days (OOS/stockout)
+        is_censored, _reason = is_day_censored(
+            sku=sku_id,
+            check_date=sale.date,
+            transactions=transactions,
+            sales_records=sales_records,
+        )
+        if is_censored:
+            continue
+        
+        # Add to training set
+        training_history.append({
+            "date": sale.date,
+            "qty_sold": sale.qty_sold,
+        })
+    
+    # Sort training history by date
+    training_history.sort(key=lambda x: x["date"])
+    
+    # Run Monte Carlo forecast on baseline data
+    horizon_days = len(horizon_dates)
+    
+    mc_forecast_list = monte_carlo_forecast(
+        history=training_history,
+        horizon_days=horizon_days,
+        distribution=distribution,
+        n_simulations=n_simulations,
+        random_seed=random_seed,
+        output_stat=output_stat,
+        output_percentile=output_percentile,
+        expected_waste_rate=expected_waste_rate,
+    )
+    
+    # Map forecast list to dates
+    baseline_predictions = {}
+    
+    for i, forecast_date in enumerate(horizon_dates):
+        if i < len(mc_forecast_list):
+            baseline_predictions[forecast_date] = mc_forecast_list[i]
+        else:
+            # Fallback in case of mismatch
+            baseline_predictions[forecast_date] = 0.0
+    
+    return baseline_predictions
 
 
 # ======================================================================
