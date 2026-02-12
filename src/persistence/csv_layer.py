@@ -25,8 +25,8 @@ class CSVLayer:
         "skus.csv": ["sku", "description", "ean", "moq", "pack_size", "lead_time_days", 
                      "review_period", "safety_stock", "shelf_life_days", "min_shelf_life_days",
                      "waste_penalty_mode", "waste_penalty_factor", "waste_risk_threshold",
-                     "max_stock", "reorder_point", "demand_variability", "oos_boost_percent", 
-                     "oos_detection_mode", "oos_popup_preference", "forecast_method",
+                     "max_stock", "reorder_point", "demand_variability", "category", "department",
+                     "oos_boost_percent", "oos_detection_mode", "oos_popup_preference", "forecast_method",
                      "mc_distribution", "mc_n_simulations", "mc_random_seed", "mc_output_stat",
                      "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days", "in_assortment"],
         "transactions.csv": ["date", "sku", "event", "qty", "receipt_date", "note"],
@@ -127,6 +127,8 @@ class CSVLayer:
                     max_stock=int(row.get("max_stock", "999")),
                     reorder_point=int(row.get("reorder_point", "10")),
                     demand_variability=demand_var,
+                    category=row.get("category", "").strip(),
+                    department=row.get("department", "").strip(),
                     oos_boost_percent=float(row.get("oos_boost_percent", "0")),
                     oos_detection_mode=row.get("oos_detection_mode", "").strip(),
                     oos_popup_preference=row.get("oos_popup_preference", "ask").strip() or "ask",
@@ -201,6 +203,8 @@ class CSVLayer:
                     max_stock=sku.max_stock,
                     reorder_point=sku.reorder_point,
                     demand_variability=classified_variability,  # Auto-classified
+                    category=sku.category,
+                    department=sku.department,
                     oos_boost_percent=sku.oos_boost_percent,
                     oos_detection_mode=sku.oos_detection_mode,
                     oos_popup_preference=sku.oos_popup_preference,
@@ -234,6 +238,8 @@ class CSVLayer:
             max_stock=defaults.get("max_stock", sku.max_stock) if sku.max_stock == 999 else sku.max_stock,
             reorder_point=defaults.get("reorder_point", sku.reorder_point) if sku.reorder_point == 10 else sku.reorder_point,
             demand_variability=DemandVariability[defaults.get("demand_variability", sku.demand_variability.value)] if sku.demand_variability == DemandVariability.STABLE else sku.demand_variability,
+            category=sku.category,
+            department=sku.department,
             shelf_life_days=sku.shelf_life_days,
             # Shelf life operational params (no auto-apply defaults for now)
             min_shelf_life_days=sku.min_shelf_life_days,
@@ -271,6 +277,8 @@ class CSVLayer:
             "max_stock": str(final_sku.max_stock),
             "reorder_point": str(final_sku.reorder_point),
             "demand_variability": final_sku.demand_variability.value,
+            "category": final_sku.category,
+            "department": final_sku.department,
             "oos_boost_percent": str(final_sku.oos_boost_percent),
             "oos_detection_mode": final_sku.oos_detection_mode,
             "oos_popup_preference": final_sku.oos_popup_preference,
@@ -1066,6 +1074,48 @@ class CSVLayer:
                 "stock_unit_price": {
                     "value": 10,
                     "description": "Prezzo unitario medio per calcolo valore stock"
+                }
+            },
+            "promo_uplift": {
+                "min_uplift": {
+                    "value": 1.0,
+                    "description": "Guardrail minimo per uplift factor (clipping inferiore)"
+                },
+                "max_uplift": {
+                    "value": 3.0,
+                    "description": "Guardrail massimo per uplift factor (clipping superiore)"
+                },
+                "min_events_sku": {
+                    "value": 3,
+                    "description": "Numero minimo di eventi promo per SKU per evitare pooling"
+                },
+                "min_valid_days_sku": {
+                    "value": 7,
+                    "description": "Numero minimo giorni validi totali per SKU per evitare pooling"
+                },
+                "min_events_category": {
+                    "value": 5,
+                    "description": "Numero minimo eventi promo totali in category per pooling affidabile"
+                },
+                "min_events_department": {
+                    "value": 10,
+                    "description": "Numero minimo eventi promo totali in department per pooling affidabile"
+                },
+                "winsorize_trim_percent": {
+                    "value": 10,
+                    "description": "Percentuale trim winsorization (10 = trim 10% sopra e sotto)"
+                },
+                "denominator_epsilon": {
+                    "value": 0.1,
+                    "description": "Epsilon per evitare divisione per zero nel calcolo uplift_event"
+                },
+                "confidence_threshold_a": {
+                    "value": 3,
+                    "description": "Minimo eventi SKU per confidence A (dati SKU robusti)"
+                },
+                "confidence_threshold_b": {
+                    "value": 5,
+                    "description": "Minimo eventi pooled per confidence B (category/department)"
                 }
             }
         }

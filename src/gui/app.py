@@ -44,6 +44,7 @@ except ImportError:
 from ..persistence.csv_layer import CSVLayer
 from ..domain.ledger import StockCalculator, validate_ean
 from ..domain.models import SKU, EventType, OrderProposal, Stock, Transaction, PromoWindow
+from ..domain.promo_uplift import estimate_uplift, UpliftReport
 from ..workflows.order import OrderWorkflow, calculate_daily_sales_average
 from ..workflows.receiving import ExceptionWorkflow
 from ..workflows.receiving_v2 import ReceivingWorkflow
@@ -4999,6 +5000,60 @@ class DesktopOrderApp:
         self.promo_treeview.tag_configure("expired", foreground="gray")
         self.promo_treeview.tag_configure("active", background="#d4edda", foreground="green")
         self.promo_treeview.tag_configure("future", foreground="blue")
+        
+        # === UPLIFT REPORT SECTION ===
+        uplift_section = ttk.LabelFrame(main_frame, text="📊 Analisi Uplift Promo (Stima Fattore Uplift per SKU)", padding=10)
+        uplift_section.pack(side="bottom", fill="both", expand=False, pady=(15, 0))
+        
+        # Controls for uplift report
+        uplift_controls_frame = ttk.Frame(uplift_section)
+        uplift_controls_frame.pack(side="top", fill="x", pady=(0, 10))
+        
+        ttk.Label(uplift_controls_frame, text="Report Uplift (basato su eventi storici)", font=("Helvetica", 10, "bold")).pack(side="left", padx=5)
+        ttk.Button(uplift_controls_frame, text="🔄 Calcola Report Uplift", command=self._refresh_uplift_report).pack(side="left", padx=20)
+        
+        # Filter for uplift table
+        ttk.Label(uplift_controls_frame, text="Filtra SKU:").pack(side="left", padx=(20, 5))
+        self.uplift_filter_var = tk.StringVar()
+        self.uplift_filter_var.trace('w', lambda *args: self._filter_uplift_table())
+        ttk.Entry(uplift_controls_frame, textvariable=self.uplift_filter_var, width=20).pack(side="left", padx=5)
+        
+        # Uplift report table (TreeView)
+        uplift_table_frame = ttk.Frame(uplift_section)
+        uplift_table_frame.pack(fill="both", expand=True)
+        
+        uplift_scrollbar = ttk.Scrollbar(uplift_table_frame)
+        uplift_scrollbar.pack(side="right", fill="y")
+        
+        self.uplift_treeview = ttk.Treeview(
+            uplift_table_frame,
+            columns=("SKU", "Eventi", "Uplift", "Confidence", "Pooling", "Giorni Validi"),
+            height=8,
+            yscrollcommand=uplift_scrollbar.set,
+        )
+        uplift_scrollbar.config(command=self.uplift_treeview.yview)
+        
+        self.uplift_treeview.column("#0", width=0, stretch=tk.NO)
+        self.uplift_treeview.column("SKU", anchor=tk.W, width=120)
+        self.uplift_treeview.column("Eventi", anchor=tk.CENTER, width=80)
+        self.uplift_treeview.column("Uplift", anchor=tk.CENTER, width=100)
+        self.uplift_treeview.column("Confidence", anchor=tk.CENTER, width=100)
+        self.uplift_treeview.column("Pooling", anchor=tk.W, width=150)
+        self.uplift_treeview.column("Giorni Validi", anchor=tk.CENTER, width=120)
+        
+        self.uplift_treeview.heading("SKU", text="SKU", anchor=tk.W)
+        self.uplift_treeview.heading("Eventi", text="N. Eventi", anchor=tk.CENTER)
+        self.uplift_treeview.heading("Uplift", text="Uplift Finale", anchor=tk.CENTER)
+        self.uplift_treeview.heading("Confidence", text="Confidence", anchor=tk.CENTER)
+        self.uplift_treeview.heading("Pooling", text="Pooling Source", anchor=tk.W)
+        self.uplift_treeview.heading("Giorni Validi", text="Totale Giorni", anchor=tk.CENTER)
+        
+        self.uplift_treeview.pack(fill="both", expand=True)
+        
+        # Tag for confidence levels
+        self.uplift_treeview.tag_configure("confidence_A", foreground="green", font=("Helvetica", 9, "bold"))
+        self.uplift_treeview.tag_configure("confidence_B", foreground="orange")
+        self.uplift_treeview.tag_configure("confidence_C", foreground="red")
     
     def _build_settings_tab(self):
         """Build Settings tab for reorder engine configuration."""
@@ -6544,6 +6599,89 @@ class DesktopOrderApp:
     def _filter_promo_table(self):
         """Filter promo table by SKU."""
         self._refresh_promo_tab()
+    
+    def _refresh_uplift_report(self):
+        """Calculate and display uplift estimation report for all SKUs with promo events."""
+        try:
+            # Clear all items
+            for item in self.uplift_treeview.get_children():
+                self.uplift_treeview.delete(item)
+            
+            # Read data
+            all_skus = self.csv_layer.read_skus()
+            promo_windows = self.csv_layer.read_promo_calendar()
+            sales_records = self.csv_layer.read_sales()
+            transactions = self.csv_layer.read_transactions()
+            settings = self.csv_layer.read_settings()
+            
+            # Get filter text
+            filter_text = self.uplift_filter_var.get().strip().lower()
+            
+            # Calculate uplift for each SKU that has promo windows
+            skus_with_promo = set(w.sku for w in promo_windows)
+            
+            for sku_id in sorted(skus_with_promo):
+                # Apply SKU filter
+                if filter_text and filter_text not in sku_id.lower():
+                    continue
+                
+                # Estimate uplift
+                try:
+                    report = estimate_uplift(
+                        sku_id=sku_id,
+                        all_skus=all_skus,
+                        promo_windows=promo_windows,
+                        sales_records=sales_records,
+                        transactions=transactions,
+                        settings=settings,
+                    )
+                    
+                    # Format uplift with 2 decimals
+                    uplift_display = f"{report.uplift_factor:.2f}x"
+                    
+                    # Determine tag for confidence color
+                    tag = f"confidence_{report.confidence}"
+                    
+                    # Insert row
+                    self.uplift_treeview.insert(
+                        "",
+                        "end",
+                        values=(
+                            report.sku,
+                            report.n_events,
+                            uplift_display,
+                            report.confidence,
+                            report.pooling_source,
+                            report.n_valid_days_total
+                        ),
+                        tags=(tag,)
+                    )
+                
+                except Exception as e:
+                    logging.error(f"Uplift estimation failed for {sku_id}: {e}")
+                    # Show row with error
+                    self.uplift_treeview.insert(
+                        "",
+                        "end",
+                        values=(
+                            sku_id,
+                            0,
+                            "Error",
+                            "C",
+                            str(e)[:40],
+                            0
+                        ),
+                        tags=("confidence_C",)
+                    )
+            
+            messagebox.showinfo("Report Completato", f"Report uplift calcolato per {len(skus_with_promo)} SKU con eventi promo.")
+        
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile generare report uplift:\n{str(e)}")
+    
+    def _filter_uplift_table(self):
+        """Filter uplift report table by SKU."""
+        self._refresh_uplift_report()
 
 
 def main():

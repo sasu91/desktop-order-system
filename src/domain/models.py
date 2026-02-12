@@ -57,6 +57,11 @@ class SKU:
     max_stock: int = 999            # Maximum stock level
     reorder_point: int = 10         # Reorder trigger point
     demand_variability: DemandVariability = DemandVariability.STABLE
+    
+    # Hierarchical classification (for uplift pooling fallback)
+    category: str = ""              # Category code (e.g., "DAIRY", "BAKERY", "PRODUCE")
+    department: str = ""            # Department code (e.g., "FRESH", "DRY", "FROZEN")
+    
     oos_boost_percent: float = 0.0  # OOS boost percentage (0-100, 0 = use global setting)
     oos_detection_mode: str = ""  # OOS detection mode: "strict", "relaxed", or "" (use global)
     oos_popup_preference: str = "ask"  # OOS popup behavior: "ask", "always_yes", "always_no"
