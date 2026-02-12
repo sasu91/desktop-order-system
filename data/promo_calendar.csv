@@ -1,0 +1,4 @@
+sku,start_date,end_date,store_id,promo_flag
+SKU001,2026-02-10,2026-02-16,,1
+SKU002,2026-03-01,2026-03-07,,1
+SKU001,2026-03-10,2026-03-15,STORE_B,1

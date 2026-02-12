@@ -222,10 +222,62 @@ class SalesRecord:
     date: Date
     sku: str
     qty_sold: int
+    promo_flag: int = 0  # 0 = no promo, 1 = promo day (binary flag)
     
     def __post_init__(self):
         if self.qty_sold < 0:
             raise ValueError("qty_sold cannot be negative")
+        if self.promo_flag not in [0, 1]:
+            raise ValueError("promo_flag must be 0 or 1")
+
+
+@dataclass(frozen=True)
+class PromoWindow:
+    """
+    Promo window for calendar planning.
+    
+    Represents a promotional period for a SKU with start/end dates (inclusive).
+    Does NOT include price, discount%, promo type, or visibility flags.
+    """
+    sku: str
+    start_date: Date
+    end_date: Date
+    store_id: Optional[str] = None  # Optional store identifier (for multi-store support)
+    promo_flag: int = 1  # Always 1 (promo active), included for consistency
+    
+    def __post_init__(self):
+        if not self.sku or not self.sku.strip():
+            raise ValueError("sku cannot be empty")
+        if self.start_date > self.end_date:
+            raise ValueError(f"start_date ({self.start_date}) cannot be after end_date ({self.end_date})")
+        if self.promo_flag != 1:
+            raise ValueError("promo_flag must be 1 for PromoWindow")
+    
+    def contains_date(self, check_date: Date) -> bool:
+        """Check if date falls within promo window (inclusive)."""
+        return self.start_date <= check_date <= self.end_date
+    
+    def overlaps_with(self, other: 'PromoWindow') -> bool:
+        """
+        Check if this promo window overlaps with another.
+        
+        Args:
+            other: Another PromoWindow for the same SKU
+        
+        Returns:
+            True if windows overlap (inclusive boundaries)
+        """
+        if self.sku != other.sku:
+            return False
+        if self.store_id != other.store_id:
+            return False  # Different stores, no overlap
+        
+        # Check overlap: NOT (A.end < B.start OR B.end < A.start)
+        return not (self.end_date < other.start_date or other.end_date < self.start_date)
+    
+    def duration_days(self) -> int:
+        """Return duration of promo window in days (inclusive)."""
+        return (self.end_date - self.start_date).days + 1
 
 
 @dataclass

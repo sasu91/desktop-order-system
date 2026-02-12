@@ -43,11 +43,12 @@ except ImportError:
 
 from ..persistence.csv_layer import CSVLayer
 from ..domain.ledger import StockCalculator, validate_ean
-from ..domain.models import SKU, EventType, OrderProposal, Stock, Transaction
+from ..domain.models import SKU, EventType, OrderProposal, Stock, Transaction, PromoWindow
 from ..workflows.order import OrderWorkflow, calculate_daily_sales_average
 from ..workflows.receiving import ExceptionWorkflow
 from ..workflows.receiving_v2 import ReceivingWorkflow
 from ..workflows.daily_close import DailyCloseWorkflow
+from .. import promo_calendar
 from .widgets import AutocompleteEntry
 from .collapsible_frame import CollapsibleFrame
 from ..utils.logging_config import setup_logging, get_logger
@@ -120,7 +121,6 @@ class DesktopOrderApp:
             "order": "📋 Ordini",
             "receiving": "📥 Ricevimenti",
             "exception": "⚠️ Eccezioni",
-            "expiry": "⏰ Scadenze",
             "dashboard": "📊 Dashboard",
             "admin": "🔧 Gestione SKU",
             "settings": "⚙️ Impostazioni"
@@ -176,6 +176,7 @@ class DesktopOrderApp:
         self.receiving_tab = ttk.Frame(self.notebook)
         self.exception_tab = ttk.Frame(self.notebook)
         self.expiry_tab = ttk.Frame(self.notebook)  # NEW: Expiry tracking tab
+        self.promo_tab = ttk.Frame(self.notebook)  # NEW: Promo calendar tab
         self.admin_tab = ttk.Frame(self.notebook)
         self.settings_tab = ttk.Frame(self.notebook)
         
@@ -186,12 +187,13 @@ class DesktopOrderApp:
             "receiving": self.receiving_tab,
             "exception": self.exception_tab,
             "expiry": self.expiry_tab,  # NEW
+            "promo": self.promo_tab,  # NEW
             "dashboard": self.dashboard_tab,
             "admin": self.admin_tab,
             "settings": self.settings_tab
         }
         
-        # Update tab_map with expiry tab
+        # Update tab_map with expiry and promo tabs
         self.tab_map = {
             "dashboard": "📊 Dashboard",
             "stock": "📦 Stock",
@@ -199,6 +201,7 @@ class DesktopOrderApp:
             "receiving": "📥 Ricevimento",
             "exception": "⚠️ Eccezioni",
             "expiry": "⏰ Scadenze",  # NEW
+            "promo": "📅 Calendario Promo",  # NEW
             "admin": "🔧 Admin",
             "settings": "⚙️ Impostazioni"
         }
@@ -217,6 +220,7 @@ class DesktopOrderApp:
         self._build_receiving_tab()
         self._build_exception_tab()
         self._build_expiry_tab()  # NEW
+        self._build_promo_tab()  # NEW
         self._build_admin_tab()
         self._build_settings_tab()
     
@@ -4864,7 +4868,137 @@ class DesktopOrderApp:
         self._refresh_receiving_history()
         self._refresh_admin_tab()
         self._refresh_exception_tab()
+        self._refresh_promo_tab()
         self._refresh_settings_tab()
+    
+    def _build_promo_tab(self):
+        """Build Promo Calendar tab (add/edit/remove promotional windows)."""
+        main_frame = ttk.Frame(self.promo_tab)
+        main_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # Title
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(side="top", fill="x", pady=(0, 10))
+        ttk.Label(title_frame, text="📅 Calendario Promo", font=("Helvetica", 14, "bold")).pack(side="left")
+        ttk.Label(title_frame, text="(Gestisci periodi promozionali per SKU)", font=("Helvetica", 9, "italic"), foreground="gray").pack(side="left", padx=(10, 0))
+        
+        # === PROMO WINDOW ENTRY FORM ===
+        form_frame = ttk.LabelFrame(main_frame, text="Aggiungi Finestra Promo (campi obbligatori marcati con *)", padding=15)
+        form_frame.pack(side="top", fill="x", pady=(0, 10))
+        
+        # Grid configuration
+        form_frame.columnconfigure(1, weight=1)
+        form_frame.columnconfigure(3, weight=1)
+        
+        # ROW 0: SKU (obbligatorio)
+        ttk.Label(form_frame, text="SKU: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=0, column=0, sticky="e", padx=(0, 8), pady=8)
+        self.promo_sku_var = tk.StringVar()
+        
+        # Autocomplete per SKU
+        self.promo_sku_entry = AutocompleteEntry(
+            form_frame,
+            textvariable=self.promo_sku_var,
+            items_callback=self._filter_promo_sku_items,
+            width=35,
+        )
+        self.promo_sku_entry.grid(row=0, column=1, sticky="w", pady=8)
+        self.promo_sku_var.trace('w', lambda *args: self._validate_promo_form())
+        
+        # ROW 0 col 2: Store ID (opzionale)
+        ttk.Label(form_frame, text="Store ID:", font=("Helvetica", 9)).grid(row=0, column=2, sticky="e", padx=(20, 8), pady=8)
+        self.promo_store_var = tk.StringVar()
+        ttk.Entry(form_frame, textvariable=self.promo_store_var, width=15).grid(row=0, column=3, sticky="w", pady=8)
+        ttk.Label(form_frame, text="(vuoto = tutti i negozi)", font=("Helvetica", 8, "italic"), foreground="#777").grid(row=0, column=4, sticky="w", padx=(5, 0), pady=8)
+        
+        # ROW 1: Data Inizio (obbligatorio)
+        ttk.Label(form_frame, text="Data Inizio: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=1, column=0, sticky="e", padx=(0, 8), pady=8)
+        self.promo_start_var = tk.StringVar(value=date.today().isoformat())
+        if TKCALENDAR_AVAILABLE:
+            DateEntry(  # type: ignore[misc]
+                form_frame,
+                textvariable=self.promo_start_var,
+                width=12,
+                date_pattern="yyyy-mm-dd",
+            ).grid(row=1, column=1, sticky="w", pady=8)
+        else:
+            ttk.Entry(form_frame, textvariable=self.promo_start_var, width=15).grid(row=1, column=1, sticky="w", pady=8)
+        self.promo_start_var.trace('w', lambda *args: self._validate_promo_form())
+        
+        # ROW 1 col 2: Data Fine (obbligatorio)
+        ttk.Label(form_frame, text="Data Fine: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=1, column=2, sticky="e", padx=(20, 8), pady=8)
+        self.promo_end_var = tk.StringVar(value=(date.today() + timedelta(days=7)).isoformat())
+        if TKCALENDAR_AVAILABLE:
+            DateEntry(  # type: ignore[misc]
+                form_frame,
+                textvariable=self.promo_end_var,
+                width=12,
+                date_pattern="yyyy-mm-dd",
+            ).grid(row=1, column=3, sticky="w", pady=8)
+        else:
+            ttk.Entry(form_frame, textvariable=self.promo_end_var, width=15).grid(row=1, column=3, sticky="w", pady=8)
+        self.promo_end_var.trace('w', lambda *args: self._validate_promo_form())
+        
+        # ROW 2: Buttons
+        button_frame = ttk.Frame(form_frame)
+        button_frame.grid(row=2, column=0, columnspan=5, sticky="w", pady=(10, 0))
+        
+        self.promo_submit_btn = ttk.Button(button_frame, text="✓ Aggiungi Promo", command=self._add_promo_window, state="disabled")
+        self.promo_submit_btn.pack(side="left", padx=5)
+        ttk.Button(button_frame, text="✗ Cancella Modulo", command=self._clear_promo_form).pack(side="left", padx=5)
+        
+        # Validation status label
+        self.promo_validation_label = ttk.Label(button_frame, text="", font=("Helvetica", 8), foreground="#d9534f")
+        self.promo_validation_label.pack(side="left", padx=15)
+        
+        # === PROMO WINDOWS TABLE ===
+        table_controls_frame = ttk.Frame(main_frame)
+        table_controls_frame.pack(side="top", fill="x", pady=(0, 5))
+        
+        ttk.Label(table_controls_frame, text="Finestre Promo Esistenti", font=("Helvetica", 11, "bold")).pack(side="left", padx=5)
+        ttk.Button(table_controls_frame, text="🗑️ Rimuovi Selezionata", command=self._remove_promo_window).pack(side="left", padx=20)
+        ttk.Button(table_controls_frame, text="🔄 Aggiorna", command=self._refresh_promo_tab).pack(side="left", padx=5)
+        
+        # Search filter
+        ttk.Label(table_controls_frame, text="Filtra SKU:").pack(side="left", padx=(20, 5))
+        self.promo_filter_var = tk.StringVar()
+        self.promo_filter_var.trace('w', lambda *args: self._filter_promo_table())
+        ttk.Entry(table_controls_frame, textvariable=self.promo_filter_var, width=20).pack(side="left", padx=5)
+        
+        table_frame = ttk.Frame(main_frame)
+        table_frame.pack(fill="both", expand=True)
+        
+        scrollbar = ttk.Scrollbar(table_frame)
+        scrollbar.pack(side="right", fill="y")
+        
+        self.promo_treeview = ttk.Treeview(
+            table_frame,
+            columns=("SKU", "Data Inizio", "Data Fine", "Durata", "Store ID", "Stato"),
+            height=15,
+            yscrollcommand=scrollbar.set,
+        )
+        scrollbar.config(command=self.promo_treeview.yview)
+        
+        self.promo_treeview.column("#0", width=0, stretch=tk.NO)
+        self.promo_treeview.column("SKU", anchor=tk.W, width=120)
+        self.promo_treeview.column("Data Inizio", anchor=tk.CENTER, width=110)
+        self.promo_treeview.column("Data Fine", anchor=tk.CENTER, width=110)
+        self.promo_treeview.column("Durata", anchor=tk.CENTER, width=80)
+        self.promo_treeview.column("Store ID", anchor=tk.CENTER, width=100)
+        self.promo_treeview.column("Stato", anchor=tk.CENTER, width=120)
+        
+        self.promo_treeview.heading("SKU", text="SKU", anchor=tk.W)
+        self.promo_treeview.heading("Data Inizio", text="Data Inizio", anchor=tk.CENTER)
+        self.promo_treeview.heading("Data Fine", text="Data Fine", anchor=tk.CENTER)
+        self.promo_treeview.heading("Durata", text="Durata (gg)", anchor=tk.CENTER)
+        self.promo_treeview.heading("Store ID", text="Store ID", anchor=tk.CENTER)
+        self.promo_treeview.heading("Stato", text="Stato", anchor=tk.CENTER)
+        
+        self.promo_treeview.pack(fill="both", expand=True)
+        
+        # Tag for expired/active/future windows
+        self.promo_treeview.tag_configure("expired", foreground="gray")
+        self.promo_treeview.tag_configure("active", background="#d4edda", foreground="green")
+        self.promo_treeview.tag_configure("future", foreground="blue")
     
     def _build_settings_tab(self):
         """Build Settings tab for reorder engine configuration."""
@@ -5817,24 +5951,15 @@ class DesktopOrderApp:
         Returns:
             List of tab IDs in saved order (or default order if not saved)
         """
-        default_order = ["stock", "order", "receiving", "exception", "expiry", "dashboard", "admin", "settings"]
+        default_order = ["stock", "order", "receiving", "exception", "expiry", "promo", "dashboard", "admin", "settings"]
         
         try:
             settings = self.csv_layer.read_settings()
             if "ui" in settings and "tab_order" in settings["ui"]:
                 saved_order = settings["ui"]["tab_order"]
-                # Validate saved order: allow subset for backward compatibility
-                saved_set = set(saved_order)
-                default_set = set(default_order)
-                
-                # If saved order has all tabs or is a valid subset, use it
-                if saved_set.issubset(default_set):
-                    # Merge: preserve saved order + append missing tabs
-                    merged = [tab for tab in saved_order if tab in default_set]
-                    for tab in default_order:
-                        if tab not in merged:
-                            merged.append(tab)
-                    return merged
+                # Validate saved order (must contain all tab IDs)
+                if set(saved_order) == set(default_order) and len(saved_order) == len(default_order):
+                    return saved_order
         except:
             pass
         
@@ -6178,6 +6303,247 @@ class DesktopOrderApp:
         except Exception as e:
             logger.error(f"Failed to reload calendar: {str(e)}", exc_info=True)
             messagebox.showwarning("Avviso", f"Calendario non ricaricato: {str(e)}")
+    
+    # === PROMO CALENDAR TAB METHODS ===
+    
+    def _filter_promo_sku_items(self, typed_text: str) -> list:
+        """Filter SKU items for promo autocomplete."""
+        if not typed_text:
+            return []
+        
+        all_skus = self.csv_layer.get_all_sku_ids()
+        typed_lower = typed_text.lower()
+        return [sku for sku in all_skus if typed_lower in sku.lower()]
+    
+    def _validate_promo_form(self):
+        """Validate promo form and enable/disable submit button."""
+        try:
+            # Get form values
+            sku = self.promo_sku_var.get().strip()
+            start_str = self.promo_start_var.get().strip()
+            end_str = self.promo_end_var.get().strip()
+            
+            # Check required fields
+            if not sku:
+                self.promo_validation_label.config(text="SKU obbligatorio")
+                self.promo_submit_btn.config(state="disabled")
+                return
+            
+            if not start_str or not end_str:
+                self.promo_validation_label.config(text="Date obbligatorie")
+                self.promo_submit_btn.config(state="disabled")
+                return
+            
+            # Validate SKU exists
+            all_skus = self.csv_layer.get_all_sku_ids()
+            if sku not in all_skus:
+                self.promo_validation_label.config(text="SKU non valido")
+                self.promo_submit_btn.config(state="disabled")
+                return
+            
+            # Validate dates
+            try:
+                start_date = date.fromisoformat(start_str)
+                end_date = date.fromisoformat(end_str)
+            except ValueError:
+                self.promo_validation_label.config(text="Formato data non valido (YYYY-MM-DD)")
+                self.promo_submit_btn.config(state="disabled")
+                return
+            
+            # Check end >= start
+            if end_date < start_date:
+                self.promo_validation_label.config(text="Data fine deve essere >= data inizio")
+                self.promo_submit_btn.config(state="disabled")
+                return
+            
+            # All validations passed
+            self.promo_validation_label.config(text="✓ Pronto per invio", foreground="green")
+            self.promo_submit_btn.config(state="normal")
+        
+        except Exception as e:
+            self.promo_validation_label.config(text=f"Errore: {str(e)}", foreground="#d9534f")
+            self.promo_submit_btn.config(state="disabled")
+    
+    def _add_promo_window(self):
+        """Add promo window with automatic overlap merge (user preference)."""
+        try:
+            # Get form values
+            sku = self.promo_sku_var.get().strip()
+            start_date_obj = date.fromisoformat(self.promo_start_var.get().strip())
+            end_date_obj = date.fromisoformat(self.promo_end_var.get().strip())
+            store_id = self.promo_store_var.get().strip() or None
+            
+            # Create PromoWindow
+            new_window = PromoWindow(
+                sku=sku,
+                start_date=start_date_obj,
+                end_date=end_date_obj,
+                store_id=store_id,
+                promo_flag=1  # Always 1 for active promo
+            )
+            
+            # Add with automatic overlap merge (user preference: merge automatically)
+            success = promo_calendar.add_promo_window(
+                csv_layer=self.csv_layer,
+                window=new_window,
+                allow_overlap=True  # User preference: auto-merge by allowing overlap
+            )
+            
+            if not success:
+                messagebox.showwarning("Sovrapposizione", "La finestra promo si sovrappone con una esistente e non è stata aggiunta.")
+                return
+            
+            # Auto-sync sales with promo calendar (user preference)
+            promo_calendar.enrich_sales_with_promo_calendar(csv_layer=self.csv_layer)
+            
+            # Refresh table
+            self._refresh_promo_tab()
+            
+            # Clear form
+            self._clear_promo_form()
+            
+            messagebox.showinfo("Successo", f"Finestra promo aggiunta per {sku} dal {start_date_obj} al {end_date_obj}!")
+            
+            # Log operation
+            self.csv_layer.log_audit(
+                operation="PROMO_WINDOW_ADD",
+                details=f"Added promo window: {sku} from {start_date_obj} to {end_date_obj}",
+                sku=sku
+            )
+        
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile aggiungere finestra promo:\n{str(e)}")
+    
+    def _remove_promo_window(self):
+        """Remove selected promo window with confirmation."""
+        try:
+            # Get selected item
+            selected = self.promo_treeview.selection()
+            if not selected:
+                messagebox.showwarning("Nessuna Selezione", "Seleziona una finestra promo da rimuovere.")
+                return
+            
+            # Get window details from treeview
+            item = self.promo_treeview.item(selected[0])
+            values = item["values"]
+            sku = values[0]
+            start_str = values[1]
+            end_str = values[2]
+            store_id_display = values[4]
+            
+            # Parse dates
+            start_date_obj = date.fromisoformat(start_str)
+            end_date_obj = date.fromisoformat(end_str)
+            store_id = None if store_id_display == "Tutti" else store_id_display
+            
+            # Confirm deletion
+            confirm = messagebox.askyesno(
+                "Conferma Rimozione",
+                f"Rimuovere finestra promo?\n\nSKU: {sku}\nPeriodo: {start_str} - {end_str}\nStore: {store_id_display}"
+            )
+            
+            if not confirm:
+                return
+            
+            # Remove window using csv_layer API
+            removed = promo_calendar.remove_promo_window(
+                csv_layer=self.csv_layer,
+                sku=sku,
+                start_date=start_date_obj,
+                end_date=end_date_obj,
+                store_id=store_id
+            )
+            
+            if removed:
+                # Auto-sync sales with promo calendar (user preference)
+                promo_calendar.enrich_sales_with_promo_calendar(csv_layer=self.csv_layer)
+                
+                # Refresh table
+                self._refresh_promo_tab()
+                
+                messagebox.showinfo("Successo", "Finestra promo rimossa con successo!")
+                
+                # Log operation
+                self.csv_layer.log_audit(
+                    operation="PROMO_WINDOW_REMOVE",
+                    details=f"Removed promo window: {sku} from {start_date_obj} to {end_date_obj}",
+                    sku=sku
+                )
+            else:
+                messagebox.showwarning("Avviso", "Finestra promo non trovata (potrebbe essere già stata rimossa).")
+        
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile rimuovere finestra promo:\n{str(e)}")
+    
+    def _clear_promo_form(self):
+        """Clear promo form fields."""
+        self.promo_sku_var.set("")
+        self.promo_start_var.set(date.today().isoformat())
+        self.promo_end_var.set((date.today() + timedelta(days=7)).isoformat())
+        self.promo_store_var.set("")
+        self.promo_validation_label.config(text="")
+        self.promo_submit_btn.config(state="disabled")
+    
+    def _refresh_promo_tab(self):
+        """Refresh promo calendar table."""
+        try:
+            # Clear all items
+            for item in self.promo_treeview.get_children():
+                self.promo_treeview.delete(item)
+            
+            # Read all promo windows
+            windows = self.csv_layer.read_promo_calendar()
+            
+            # Get filter text
+            filter_text = self.promo_filter_var.get().strip().lower()
+            
+            # Today for status calculation
+            today = date.today()
+            
+            # Populate table
+            for window in windows:
+                # Apply SKU filter
+                if filter_text and filter_text not in window.sku.lower():
+                    continue
+                
+                # Calculate duration
+                duration_days = window.duration_days()
+                
+                # Store ID display
+                store_display = window.store_id if window.store_id else "Tutti"
+                
+                # Calculate status
+                if window.end_date < today:
+                    status = "Scaduta"
+                    tag = "expired"
+                elif window.start_date <= today <= window.end_date:
+                    status = "Attiva"
+                    tag = "active"
+                else:
+                    status = "Futura"
+                    tag = "future"
+                
+                # Insert row
+                self.promo_treeview.insert(
+                    "",
+                    "end",
+                    values=(
+                        window.sku,
+                        window.start_date.isoformat(),
+                        window.end_date.isoformat(),
+                        duration_days,
+                        store_display,
+                        status
+                    ),
+                    tags=(tag,)
+                )
+        
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile aggiornare tabella promo:\n{str(e)}")
+    
+    def _filter_promo_table(self):
+        """Filter promo table by SKU."""
+        self._refresh_promo_tab()
 
 
 def main():

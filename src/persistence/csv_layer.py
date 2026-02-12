@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 
-from ..domain.models import Transaction, EventType, SKU, SalesRecord, AuditLog, DemandVariability, Lot
+from ..domain.models import Transaction, EventType, SKU, SalesRecord, AuditLog, DemandVariability, Lot, PromoWindow
 
 
 class CSVLayer:
@@ -30,11 +30,12 @@ class CSVLayer:
                      "mc_distribution", "mc_n_simulations", "mc_random_seed", "mc_output_stat",
                      "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days", "in_assortment"],
         "transactions.csv": ["date", "sku", "event", "qty", "receipt_date", "note"],
-        "sales.csv": ["date", "sku", "qty_sold"],
+        "sales.csv": ["date", "sku", "qty_sold", "promo_flag"],
         "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "qty_received", "status", "receipt_date"],
         "receiving_logs.csv": ["document_id", "receipt_id", "date", "sku", "qty_received", "receipt_date", "order_ids"],
         "audit_log.csv": ["timestamp", "operation", "sku", "details", "user"],
         "lots.csv": ["lot_id", "sku", "expiry_date", "qty_on_hand", "receipt_id", "receipt_date"],
+        "promo_calendar.csv": ["sku", "start_date", "end_date", "store_id", "promo_flag"],
     }
     
     def __init__(self, data_dir: Optional[Path] = None):
@@ -671,15 +672,20 @@ class CSVLayer:
     # ============ Sales Operations ============
     
     def read_sales(self) -> List[SalesRecord]:
-        """Read all sales from sales.csv."""
+        """Read all sales from sales.csv (with backward compatibility for promo_flag)."""
         rows = self._read_csv("sales.csv")
         sales = []
         for row in rows:
             try:
+                # Backward compatibility: promo_flag defaults to 0 if not present
+                promo_flag_str = row.get("promo_flag", "0").strip()
+                promo_flag = int(promo_flag_str) if promo_flag_str else 0
+                
                 s = SalesRecord(
                     date=date.fromisoformat(row.get("date", "")),
                     sku=row.get("sku", "").strip(),
                     qty_sold=int(row.get("qty_sold", 0)),
+                    promo_flag=promo_flag,
                 )
                 sales.append(s)
             except (ValueError, KeyError) as e:
@@ -692,6 +698,7 @@ class CSVLayer:
             "date": sale.date.isoformat(),
             "sku": sale.sku,
             "qty_sold": str(sale.qty_sold),
+            "promo_flag": str(sale.promo_flag),
         })
     
     def append_sales(self, sale: SalesRecord):
@@ -703,9 +710,73 @@ class CSVLayer:
         file_path = self.data_dir / "sales.csv"
         with open(file_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(["date", "sku", "qty_sold"])
+            writer.writerow(["date", "sku", "qty_sold", "promo_flag"])
             for sale in sales:
-                writer.writerow([sale.date.isoformat(), sale.sku, str(sale.qty_sold)])
+                writer.writerow([sale.date.isoformat(), sale.sku, str(sale.qty_sold), str(sale.promo_flag)])
+    
+    # ============ Promo Calendar Operations ============
+    
+    def read_promo_calendar(self) -> List[PromoWindow]:
+        """
+        Read promo calendar windows.
+        
+        Returns:
+            List of PromoWindow objects (sorted by start_date)
+        """
+        rows = self._read_csv("promo_calendar.csv")
+        windows = []
+        for row in rows:
+            try:
+                windows.append(PromoWindow(
+                    sku=row["sku"],
+                    start_date=date.fromisoformat(row["start_date"]),
+                    end_date=date.fromisoformat(row["end_date"]),
+                    store_id=row.get("store_id") or None,  # Empty string -> None
+                    promo_flag=int(row.get("promo_flag", 1)),
+                ))
+            except (ValueError, KeyError) as e:
+                # Skip invalid rows, log warning
+                print(f"Warning: Skipping invalid promo window row: {row}, error: {e}")
+                continue
+        
+        # Sort by start_date for consistent ordering
+        windows.sort(key=lambda w: w.start_date)
+        return windows
+    
+    def write_promo_window(self, window: PromoWindow):
+        """
+        Append a promo window to promo_calendar.csv.
+        
+        Args:
+            window: PromoWindow to add
+        """
+        self._append_csv("promo_calendar.csv", {
+            "sku": window.sku,
+            "start_date": window.start_date.isoformat(),
+            "end_date": window.end_date.isoformat(),
+            "store_id": window.store_id or "",
+            "promo_flag": str(window.promo_flag),
+        })
+    
+    def write_promo_calendar(self, windows: List[PromoWindow]):
+        """
+        Overwrite entire promo_calendar.csv with given list.
+        
+        Args:
+            windows: List of PromoWindow objects
+        """
+        file_path = self.data_dir / "promo_calendar.csv"
+        with open(file_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(["sku", "start_date", "end_date", "store_id", "promo_flag"])
+            for window in windows:
+                writer.writerow([
+                    window.sku,
+                    window.start_date.isoformat(),
+                    window.end_date.isoformat(),
+                    window.store_id or "",
+                    str(window.promo_flag),
+                ])
     
     # ============ Order Log Operations ============
     
