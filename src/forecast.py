@@ -26,6 +26,12 @@ try:
 except ImportError:
     from domain.ledger import is_day_censored
 
+# Import promo calendar for promo-adjusted forecast
+try:
+    from src.promo_calendar import is_promo, promo_windows_for_sku
+except ImportError:
+    from promo_calendar import is_promo, promo_windows_for_sku
+
 
 def fit_forecast_model(
     history: List[Dict[str, Any]],
@@ -926,3 +932,281 @@ def monte_carlo_forecast_with_stats(
         "model": model,
         "stats": stats,
     }
+
+
+# ======================================================================
+# PROMO-ADJUSTED FORECAST (BASELINE × UPLIFT)
+# ======================================================================
+
+def promo_adjusted_forecast(
+    sku_id: str,
+    horizon_dates: List[date],
+    sales_records: List[Any],  # List[SalesRecord]
+    transactions: List[Any],  # List[Transaction]
+    promo_windows: List[Any],  # List[PromoWindow]
+    all_skus: List[Any],  # List[SKU] (for category/department pooling in uplift)
+    csv_layer: Any,  # CSVLayer instance (for settings)
+    store_id: Optional[str] = None,
+    asof_date: Optional[date] = None,
+    alpha: float = 0.3,
+    min_samples_for_dow: int = 14,
+    alpha_boost_for_censored: float = 0.0,
+    settings: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Generate promo-adjusted demand forecast by applying uplift to baseline.
+    
+    This function applies promotional uplift effects to baseline demand forecasts
+    for dates that fall within promotional periods. The uplift is calculated by
+    calling estimate_uplift() from promo_uplift module.
+    
+    Optional smoothing (disabled by default) can apply progressive ramp-in/ramp-out
+    multipliers at promo calendar borders to avoid sudden demand jumps.
+    
+    Design Invariants:
+    - If promo_adjustment.enabled = false, adjusted = baseline for all dates
+    - If no promo active on date, adjusted = baseline
+    - If promo active but uplift estimation fails, adjusted = baseline (safety fallback)
+    - Smoothing only affects calendar borders (first/last N days of promo window)
+    
+    Args:
+        sku_id: SKU identifier
+        horizon_dates: List of future dates to forecast (sorted, oldest first)
+        sales_records: List of SalesRecord objects
+        transactions: List of Transaction objects
+        promo_windows: List of PromoWindow objects (for is_promo checks)
+        all_skus: List of SKU objects (for category/department lookups in uplift estimation)
+        csv_layer: CSVLayer instance (for settings loading)
+        store_id: Optional store ID for store-specific promo windows (None = global only)
+        asof_date: AsOf date for stock calculation in censoring logic (defaults to today)
+        alpha: Smoothing parameter for baseline forecast
+        min_samples_for_dow: Minimum samples for DOW factors in baseline
+        alpha_boost_for_censored: Alpha boost for SKUs with censored history
+        settings: Settings dict (defaults to csv_layer.read_settings() if None)
+    
+    Returns:
+        Dict with keys:
+            - "baseline_forecast": Dict[date, float] - baseline demand (non-promo)
+            - "adjusted_forecast": Dict[date, float] - promo-adjusted demand
+            - "promo_active": Dict[date, bool] - whether promo was active on each date
+            - "uplift_factor": Dict[date, float] - uplift factor applied (1.0 if no promo)
+            - "smoothing_multiplier": Dict[date, float] - smoothing ramp multiplier (1.0 if no smoothing)
+            - "adjustment_enabled": bool - whether promo adjustment is enabled globally
+            - "smoothing_enabled": bool - whether smoothing is enabled
+            - "uplift_report": Optional[UpliftReport] - full uplift estimation report (if promo active)
+    
+    Example:
+        >>> from datetime import date, timedelta
+        >>> horizon = [date.today() + timedelta(days=i) for i in range(1, 8)]
+        >>> all_skus = csv_layer.read_skus()
+        >>> result = promo_adjusted_forecast(
+        ...     sku_id="SKU001",
+        ...     horizon_dates=horizon,
+        ...     sales_records=sales,
+        ...     transactions=txns,
+        ...     promo_windows=promo_windows,
+        ...     all_skus=all_skus,
+        ...     csv_layer=csv_layer,
+        ... )
+        >>> result["adjusted_forecast"][horizon[0]]  # Adjusted forecast for first day
+        15.3
+        >>> result["uplift_factor"][horizon[0]]  # Uplift factor applied
+        1.22
+    """
+    if asof_date is None:
+        asof_date = date.today()
+    
+    # Load settings (promo_adjustment section)
+    if settings is None:
+        settings = csv_layer.read_settings()
+    
+    promo_adj_settings = settings.get("promo_adjustment", {})
+    adjustment_enabled = promo_adj_settings.get("enabled", {}).get("value", False)
+    smoothing_enabled = promo_adj_settings.get("smoothing_enabled", {}).get("value", False)
+    ramp_in_days = promo_adj_settings.get("ramp_in_days", {}).get("value", 0)
+    ramp_out_days = promo_adj_settings.get("ramp_out_days", {}).get("value", 0)
+    
+    # Generate baseline forecast (non-promo demand)
+    baseline_predictions = baseline_forecast(
+        sku_id=sku_id,
+        horizon_dates=horizon_dates,
+        sales_records=sales_records,
+        transactions=transactions,
+        asof_date=asof_date,
+        alpha=alpha,
+        min_samples_for_dow=min_samples_for_dow,
+        alpha_boost_for_censored=alpha_boost_for_censored,
+    )
+    
+    # Initialize result maps
+    adjusted_predictions = {}
+    promo_active_map = {}
+    uplift_factor_map = {}
+    smoothing_multiplier_map = {}
+    uplift_report = None
+    
+    # If adjustment disabled, return baseline as adjusted
+    if not adjustment_enabled:
+        for forecast_date in horizon_dates:
+            adjusted_predictions[forecast_date] = baseline_predictions[forecast_date]
+            promo_active_map[forecast_date] = False
+            uplift_factor_map[forecast_date] = 1.0
+            smoothing_multiplier_map[forecast_date] = 1.0
+        
+        return {
+            "baseline_forecast": baseline_predictions,
+            "adjusted_forecast": adjusted_predictions,
+            "promo_active": promo_active_map,
+            "uplift_factor": uplift_factor_map,
+            "smoothing_multiplier": smoothing_multiplier_map,
+            "adjustment_enabled": False,
+            "smoothing_enabled": smoothing_enabled,
+            "uplift_report": None,
+        }
+    
+    # Check if any date in horizon has promo active
+    # Filter promo_windows: if store_id=None (global only mode), exclude store-specific promos
+    filtered_promo_windows = promo_windows
+    if store_id is None:
+        # Global-only mode: exclude store-specific promo windows
+        filtered_promo_windows = [w for w in promo_windows if w.store_id is None]
+    
+    any_promo_active = False
+    for forecast_date in horizon_dates:
+        promo_active = is_promo(
+            check_date=forecast_date,
+            sku=sku_id,
+            promo_windows=filtered_promo_windows,
+            store_id=None,  # Already filtered, pass None
+        )
+        promo_active_map[forecast_date] = promo_active
+        if promo_active:
+            any_promo_active = True
+    
+    # If no promo in horizon, return baseline as adjusted
+    if not any_promo_active:
+        for forecast_date in horizon_dates:
+            adjusted_predictions[forecast_date] = baseline_predictions[forecast_date]
+            uplift_factor_map[forecast_date] = 1.0
+            smoothing_multiplier_map[forecast_date] = 1.0
+        
+        return {
+            "baseline_forecast": baseline_predictions,
+            "adjusted_forecast": adjusted_predictions,
+            "promo_active": promo_active_map,
+            "uplift_factor": uplift_factor_map,
+            "smoothing_multiplier": smoothing_multiplier_map,
+            "adjustment_enabled": True,
+            "smoothing_enabled": smoothing_enabled,
+            "uplift_report": None,
+        }
+    
+    # Estimate uplift factor (live calculation, no caching - user decision)
+    try:
+        # Import here to avoid circular dependency (promo_uplift imports baseline_forecast)
+        try:
+            from src.domain.promo_uplift import estimate_uplift
+        except ImportError:
+            from domain.promo_uplift import estimate_uplift
+        
+        uplift_report = estimate_uplift(
+            sku_id=sku_id,
+            all_skus=all_skus,
+            promo_windows=promo_windows,
+            sales_records=sales_records,
+            transactions=transactions,
+            settings=settings,
+        )
+        uplift_factor = uplift_report.uplift_factor
+    except Exception as e:
+        # Fallback: if uplift estimation fails, use 1.0 (no adjustment, return baseline)
+        import logging
+        logging.warning(f"Uplift estimation failed for SKU {sku_id}: {e}. Using uplift=1.0 (baseline).")
+        uplift_factor = 1.0
+        uplift_report = None
+    
+    # Apply uplift to each date in horizon
+    for forecast_date in horizon_dates:
+        baseline_value = baseline_predictions[forecast_date]
+        
+        # If promo not active on this date, use baseline
+        if not promo_active_map[forecast_date]:
+            adjusted_predictions[forecast_date] = baseline_value
+            uplift_factor_map[forecast_date] = 1.0
+            smoothing_multiplier_map[forecast_date] = 1.0
+            continue
+        
+        # Calculate smoothing multiplier (progressive ramp-in/ramp-out)
+        smoothing_multiplier = 1.0
+        if smoothing_enabled and (ramp_in_days > 0 or ramp_out_days > 0):
+            # Find promo window containing this date
+            promo_window = _find_promo_window_for_date(
+                forecast_date, sku_id, promo_windows, store_id
+            )
+            
+            if promo_window is not None:
+                days_from_start = (forecast_date - promo_window.start_date).days
+                days_from_end = (promo_window.end_date - forecast_date).days
+                
+                # Ramp-in: progressive increase from 0.0 to 1.0
+                if ramp_in_days > 0 and days_from_start < ramp_in_days:
+                    smoothing_multiplier = (days_from_start + 1) / (ramp_in_days + 1)
+                
+                # Ramp-out: progressive decrease from 1.0 to 0.0
+                elif ramp_out_days > 0 and days_from_end < ramp_out_days:
+                    smoothing_multiplier = (days_from_end + 1) / (ramp_out_days + 1)
+        
+        # Apply uplift and smoothing to baseline
+        adjusted_value = baseline_value * uplift_factor * smoothing_multiplier
+        
+        adjusted_predictions[forecast_date] = max(0.0, adjusted_value)
+        uplift_factor_map[forecast_date] = uplift_factor
+        smoothing_multiplier_map[forecast_date] = smoothing_multiplier
+    
+    return {
+        "baseline_forecast": baseline_predictions,
+        "adjusted_forecast": adjusted_predictions,
+        "promo_active": promo_active_map,
+        "uplift_factor": uplift_factor_map,
+        "smoothing_multiplier": smoothing_multiplier_map,
+        "adjustment_enabled": True,
+        "smoothing_enabled": smoothing_enabled,
+        "uplift_report": uplift_report,
+    }
+
+
+def _find_promo_window_for_date(
+    check_date: date,
+    sku_id: str,
+    promo_windows: List[Any],
+    store_id: Optional[str] = None,
+) -> Optional[Any]:
+    """
+    Find the promo window that contains a specific date for a SKU.
+    
+    Args:
+        check_date: Date to check
+        sku_id: SKU identifier
+        promo_windows: List of PromoWindow objects
+        store_id: Optional store ID filter (None = global only)
+    
+    Returns:
+        PromoWindow object if found, else None
+    """
+    for window in promo_windows:
+        # SKU filter
+        if window.sku != sku_id:
+            continue
+        
+        # Store filter (None = global only, per user decision)
+        if store_id is None and window.store_id is not None:
+            continue
+        if store_id is not None and window.store_id != store_id:
+            continue
+        
+        # Date range check
+        if window.start_date <= check_date <= window.end_date:
+            return window
+    
+    return None
+

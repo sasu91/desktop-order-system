@@ -963,7 +963,7 @@ class DesktopOrderApp:
         
         self.proposal_treeview = ttk.Treeview(
             proposal_frame,
-            columns=("SKU", "Description", "Pack Size", "Usable Stock", "Waste Risk %", "Colli Proposti", "Pezzi Proposti", "Shelf Penalty", "MC Comparison", "Receipt Date"),
+            columns=("SKU", "Description", "Pack Size", "Usable Stock", "Waste Risk %", "Colli Proposti", "Pezzi Proposti", "Shelf Penalty", "MC Comparison", "Promo Δ", "Receipt Date"),
             height=10,
             yscrollcommand=scrollbar.set,
         )
@@ -979,6 +979,7 @@ class DesktopOrderApp:
         self.proposal_treeview.column("Pezzi Proposti", anchor=tk.CENTER, width=100)
         self.proposal_treeview.column("Shelf Penalty", anchor=tk.CENTER, width=90)
         self.proposal_treeview.column("MC Comparison", anchor=tk.CENTER, width=110)
+        self.proposal_treeview.column("Promo Δ", anchor=tk.CENTER, width=90)
         self.proposal_treeview.column("Receipt Date", anchor=tk.CENTER, width=120)
         
         self.proposal_treeview.heading("SKU", text="SKU", anchor=tk.W)
@@ -990,6 +991,7 @@ class DesktopOrderApp:
         self.proposal_treeview.heading("Pezzi Proposti", text="Pezzi Totali", anchor=tk.CENTER)
         self.proposal_treeview.heading("Shelf Penalty", text="Penalità ⚠️", anchor=tk.CENTER)
         self.proposal_treeview.heading("MC Comparison", text="📊 MC Info", anchor=tk.CENTER)
+        self.proposal_treeview.heading("Promo Δ", text="� Promo", anchor=tk.CENTER)
         self.proposal_treeview.heading("Receipt Date", text="Data Ricevimento", anchor=tk.CENTER)
         
         self.proposal_treeview.pack(fill="both", expand=True)
@@ -1087,6 +1089,18 @@ class DesktopOrderApp:
         details.append(f"Media vendite giornaliere: {proposal.daily_sales_avg:.2f} pz/gg")
         details.append(f"Forecast qty: {to_colli(proposal.forecast_qty, pack_size)}")
         details.append("")
+        
+        # Promo Adjustment (if enabled and applied)
+        if proposal.promo_adjustment_note:
+            details.append("═══ PROMO ADJUSTMENT ═══")
+            details.append(f"Baseline forecast: {to_colli(proposal.baseline_forecast_qty, pack_size)}")
+            if proposal.promo_uplift_factor_used > 1.0:
+                details.append(f"Promo uplift: {proposal.promo_uplift_factor_used:.2f}x")
+                details.append(f"Adjusted forecast: {to_colli(proposal.promo_adjusted_forecast_qty, pack_size)}")
+                delta = proposal.promo_adjusted_forecast_qty - proposal.baseline_forecast_qty
+                details.append(f"Delta: +{to_colli(delta, pack_size)} ({(delta/proposal.baseline_forecast_qty*100):.1f}%)")
+            details.append(f"Status: {proposal.promo_adjustment_note}")
+            details.append("")
         
         # Lead Time Demand
         details.append("═══ LEAD TIME DEMAND ═══")
@@ -1671,6 +1685,15 @@ class DesktopOrderApp:
         waste_risk_display = f"{proposal.waste_risk_percent:.1f}%" if proposal.waste_risk_percent > 0 else ""
         shelf_penalty_display = proposal.shelf_life_penalty_message if proposal.shelf_life_penalty_applied else ""
 
+        # Promo delta display: show uplift factor if > 1.0, else "-"
+        promo_delta_display = ""
+        if proposal.promo_uplift_factor_used > 1.0:
+            promo_delta_display = f"📈 {proposal.promo_uplift_factor_used:.2f}x"
+        elif proposal.promo_adjustment_note and "Promo attiva" in proposal.promo_adjustment_note:
+            promo_delta_display = "⚠️ N/A"  # Promo active but uplift unavailable
+        else:
+            promo_delta_display = "-"  # No promo
+
         return (
             proposal.sku,
             proposal.description,
@@ -1681,6 +1704,7 @@ class DesktopOrderApp:
             proposal.proposed_qty,
             shelf_penalty_display,
             mc_comparison_display,
+            promo_delta_display,
             proposal.receipt_date.isoformat() if proposal.receipt_date else "",
         )
 

@@ -1117,6 +1117,24 @@ class CSVLayer:
                     "value": 5,
                     "description": "Minimo eventi pooled per confidence B (category/department)"
                 }
+            },
+            "promo_adjustment": {
+                "enabled": {
+                    "value": False,
+                    "description": "Abilita applicazione uplift promo a forecast ordini (disattivo di default)"
+                },
+                "smoothing_enabled": {
+                    "value": False,
+                    "description": "Abilita smoothing ramp-in/ramp-out ai bordi calendario promo (disattivo di default)"
+                },
+                "ramp_in_days": {
+                    "value": 0,
+                    "description": "Giorni di ramp-in progressivo all'inizio promo (0 = istantaneo)"
+                },
+                "ramp_out_days": {
+                    "value": 0,
+                    "description": "Giorni di ramp-out progressivo alla fine promo (0 = istantaneo)"
+                }
             }
         }
         

@@ -333,6 +333,12 @@ class OrderProposal:
     simulation_trigger_day: int = 0  # Giorno in cui IP scende sotto soglia (0 = oggi)
     simulation_notes: str = ""  # Note sulla simulazione
     
+    # Promo adjustment (forecast enrichment)
+    baseline_forecast_qty: int = 0  # Forecast baseline (senza promo)
+    promo_adjusted_forecast_qty: int = 0  # Forecast con uplift promo applicato
+    promo_adjustment_note: str = ""  # Spiegazione aggiustamento promo (es. "Uplift 1.25x attivo")
+    promo_uplift_factor_used: float = 1.0  # Uplift factor utilizzato (1.0 = nessun promo)
+    
     # Shelf life integration (Fase 2)
     usable_stock: int = 0  # Stock utilizzabile (shelf life >= min_shelf_life_days)
     unusable_stock: int = 0  # Stock non utilizzabile (scaduto o shelf life insufficiente)

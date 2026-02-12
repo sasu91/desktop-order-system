@@ -443,6 +443,68 @@ class OrderWorkflow:
             forecast_qty = int(daily_sales_avg * forecast_period)
             lead_time_demand = int(daily_sales_avg * effective_lead_time)
         
+        # === PROMO-ADJUSTED FORECAST (BASELINE × UPLIFT) ===
+        # Apply promotional uplift to baseline forecast if promo_adjustment enabled
+        baseline_forecast_qty = forecast_qty  # Store baseline for traceability
+        promo_adjusted_forecast_qty = forecast_qty  # Default: same as baseline
+        promo_adjustment_note = ""
+        promo_uplift_factor_used = 1.0
+        
+        # Check if promo adjustment is enabled in settings
+        promo_adj_settings = settings.get("promo_adjustment", {})
+        promo_adjustment_enabled = promo_adj_settings.get("enabled", {}).get("value", False)
+        
+        if promo_adjustment_enabled:
+            # Build horizon dates for forecast period
+            horizon_dates = [date.today() + timedelta(days=i) for i in range(1, forecast_period + 1)]
+            
+            # Load required data for promo adjustment
+            all_sales_records = self.csv_layer.read_sales()
+            all_transactions = self.csv_layer.read_transactions() if transactions is None else transactions
+            promo_windows = self.csv_layer.read_promo_calendar()
+            all_skus = self.csv_layer.read_skus()
+            
+            # Call promo_adjusted_forecast
+            try:
+                from ..forecast import promo_adjusted_forecast
+                
+                promo_result = promo_adjusted_forecast(
+                    sku_id=sku,
+                    horizon_dates=horizon_dates,
+                    sales_records=all_sales_records,
+                    transactions=all_transactions,
+                    promo_windows=promo_windows,
+                    all_skus=all_skus,
+                    csv_layer=self.csv_layer,
+                    store_id=None,  # Global promo only (user decision)
+                    settings=settings,
+                )
+                
+                # Extract adjusted forecast total (sum over horizon)
+                adjusted_total = sum(promo_result["adjusted_forecast"].values())
+                promo_adjusted_forecast_qty = int(adjusted_total)
+                
+                # Build adjustment note for traceability
+                any_promo_active = any(promo_result["promo_active"].values())
+                if any_promo_active and promo_result["uplift_report"]:
+                    uplift_factor = promo_result["uplift_report"].uplift_factor
+                    promo_uplift_factor_used = uplift_factor
+                    confidence = promo_result["uplift_report"].confidence
+                    promo_adjustment_note = f"Promo attiva: Uplift {uplift_factor:.2f}x ({confidence})"
+                    
+                    # Use adjusted forecast instead of baseline
+                    forecast_qty = promo_adjusted_forecast_qty
+                elif any_promo_active and not promo_result["uplift_report"]:
+                    # Promo active but uplift estimation failed → fallback to baseline
+                    promo_adjustment_note = "Promo attiva: Uplift non disponibile (baseline usata)"
+                else:
+                    promo_adjustment_note = "Nessuna promo attiva (baseline usata)"
+                
+            except Exception as e:
+                import logging
+                logging.warning(f"Promo adjustment failed for SKU {sku}: {e}. Using baseline forecast.")
+                promo_adjustment_note = f"Errore promo adjustment: {str(e)[:50]}..."
+        
         S = forecast_qty + safety_stock
         
         # Check shelf life warning (if shelf_life_days > 0)
@@ -767,6 +829,11 @@ class OrderWorkflow:
             simulation_used=simulation_used,
             simulation_trigger_day=simulation_trigger_day,
             simulation_notes=simulation_notes,
+            # Promo adjustment (forecast enrichment)
+            baseline_forecast_qty=baseline_forecast_qty,
+            promo_adjusted_forecast_qty=promo_adjusted_forecast_qty,
+            promo_adjustment_note=promo_adjustment_note,
+            promo_uplift_factor_used=promo_uplift_factor_used,
             # Shelf life info (Fase 2)
             usable_stock=usable_qty,
             unusable_stock=unusable_qty,
