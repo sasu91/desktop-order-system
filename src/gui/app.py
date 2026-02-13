@@ -1923,7 +1923,7 @@ class DesktopOrderApp:
         ttk.Button(button_frame, text="Annulla", command=popup.destroy).pack(side="right", padx=5)
         
         # Bind Enter to save
-        colli_entry.bind("<Return>", lambda e: save_qty())
+        date_entry.bind("<Return>", lambda e: save_date())
     
     def _confirm_orders(self):
         """Confirm all orders with qty > 0."""
@@ -5997,7 +5997,7 @@ class DesktopOrderApp:
     
     def _refresh_cannibalization_settings(self):
         """Load cannibalization settings from config into UI widgets."""
-        settings = csv_layer.read_settings()
+        settings = self.csv_layer.read_settings()
         cannib_settings = settings.get("promo_cannibalization", {})
         
         # Load enabled flag
@@ -6043,7 +6043,7 @@ class DesktopOrderApp:
             return
         
         # Prepare settings dict
-        settings = csv_layer.read_settings()
+        settings = self.csv_layer.read_settings()
         if "promo_cannibalization" not in settings:
             settings["promo_cannibalization"] = {}
         
@@ -6056,7 +6056,7 @@ class DesktopOrderApp:
         cannib["substitute_groups"] = {"value": substitute_groups}
         
         # Write settings
-        csv_layer.write_settings(settings)
+        self.csv_layer.write_settings(settings)
         messagebox.showinfo("Salvato", "Impostazioni cannibalizzazione salvate.")
     
     def _refresh_settings_tab(self):
@@ -7009,7 +7009,16 @@ class DesktopOrderApp:
             filter_text = self.cannib_filter_var.get().strip().lower()
             
             # Calculate downlift for each target SKU in each group
-            from src.domain.promo_uplift import estimate_cannibalization_downlift
+            try:
+                from src.domain.promo_uplift import estimate_cannibalization_downlift
+            except ImportError:
+                from domain.promo_uplift import estimate_cannibalization_downlift
+
+            downlift_min = cannib_settings.get("downlift_min", {}).get("value", 0.6)
+            downlift_max = cannib_settings.get("downlift_max", {}).get("value", 1.0)
+            min_events = cannib_settings.get("min_events_target_sku", {}).get("value", 2)
+            min_valid_days = cannib_settings.get("min_valid_days", {}).get("value", 7)
+            epsilon = cannib_settings.get("denominator_epsilon", {}).get("value", 0.1)
             
             for group_id, sku_list in substitute_groups.items():
                 for target_sku in sku_list:
@@ -7021,12 +7030,17 @@ class DesktopOrderApp:
                     try:
                         report = estimate_cannibalization_downlift(
                             target_sku=target_sku,
-                            group_id=group_id,
-                            all_skus=all_skus,
+                            substitute_groups=substitute_groups,
                             promo_windows=promo_windows,
                             sales_records=sales_records,
                             transactions=transactions,
-                            settings=settings,
+                            all_skus=all_skus,
+                            downlift_min=downlift_min,
+                            downlift_max=downlift_max,
+                            min_events=min_events,
+                            min_valid_days=min_valid_days,
+                            epsilon=epsilon,
+                            asof_date=date.today(),
                         )
                         
                         if report is None:
