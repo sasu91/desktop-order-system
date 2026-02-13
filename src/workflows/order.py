@@ -8,6 +8,7 @@ import logging
 from ..domain.models import Stock, OrderProposal, OrderConfirmation, Transaction, EventType, SKU, SalesRecord
 from ..persistence.csv_layer import CSVLayer
 from ..domain.ledger import StockCalculator, ShelfLifeCalculator
+from ..domain.promo_uplift import is_in_post_promo_window, estimate_post_promo_dip
 
 
 def _normalize_boost_to_fraction(boost: float) -> float:
@@ -501,7 +502,6 @@ class OrderWorkflow:
                     promo_adjustment_note = "Nessuna promo attiva (baseline usata)"
                 
             except Exception as e:
-                import logging
                 logging.warning(f"Promo adjustment failed for SKU {sku}: {e}. Using baseline forecast.")
                 promo_adjustment_note = f"Errore promo adjustment: {str(e)[:50]}..."
         
@@ -628,6 +628,220 @@ class OrderWorkflow:
             # Standard formula: proposed = max(0, S − IP)
             proposed_qty_raw = max(0, S - inventory_position)
             proposed_qty_before_rounding = proposed_qty_raw
+        
+        # === PROMO PREBUILD ANTICIPATION ===
+        # Calculate prebuild quantity if upcoming promo and this order arrives before promo start
+        promo_prebuild_enabled = False
+        promo_start_date_val = None
+        target_open_qty = 0
+        projected_stock_on_promo_start = 0
+        prebuild_delta_qty = 0
+        prebuild_qty = 0
+        prebuild_coverage_days_val = 0
+        prebuild_distribution_note = ""
+        
+        # Check if prebuild enabled in settings
+        prebuild_settings = settings.get("promo_prebuild", {})
+        prebuild_enabled_flag = prebuild_settings.get("enabled", {}).get("value", False)
+        
+        if prebuild_enabled_flag and target_receipt_date and transactions is not None:
+            # Load prebuild parameters
+            prebuild_coverage_days = prebuild_settings.get("coverage_days", {}).get("value", 0)
+            prebuild_safety_mode = prebuild_settings.get("safety_component_mode", {}).get("value", "multiplier")
+            prebuild_safety_value = prebuild_settings.get("safety_component_value", {}).get("value", 0.2)
+            prebuild_min_days_to_start = prebuild_settings.get("min_days_to_promo_start", {}).get("value", 3)
+            prebuild_max_horizon_days = prebuild_settings.get("max_prebuild_horizon_days", {}).get("value", 30)
+            
+            # Find upcoming promo for this SKU
+            # Load promo calendar
+            all_promo_windows = self.csv_layer.read_promo_calendar()
+            all_skus_list = self.csv_layer.read_skus()
+            all_sales_records = sales_records if sales_records else self.csv_layer.read_sales()
+            
+            # Filter promos for this SKU that start AFTER target_receipt_date (order arrives before promo)
+            upcoming_promos = [
+                pw for pw in all_promo_windows
+                if pw.sku == sku and pw.start_date > target_receipt_date
+            ]
+            
+            # Sort by start_date (earliest first)
+            upcoming_promos.sort(key=lambda pw: pw.start_date)
+            
+            if upcoming_promos:
+                # Use earliest upcoming promo
+                next_promo = upcoming_promos[0]
+                promo_start_candidate = next_promo.start_date
+                
+                # Validate constraints:
+                # 1. target_receipt_date must be at least min_days_to_promo_start BEFORE promo
+                # 2. promo must be within max_prebuild_horizon_days from today
+                days_to_promo_start = (promo_start_candidate - target_receipt_date).days
+                days_from_today_to_promo = (promo_start_candidate - date.today()).days
+                
+                if days_to_promo_start >= prebuild_min_days_to_start and days_from_today_to_promo <= prebuild_max_horizon_days:
+                    # Calculate target opening stock at promo start
+                    try:
+                        target_open_qty, coverage_used, forecast_total = calculate_prebuild_target(
+                            sku=sku,
+                            promo_start_date=promo_start_candidate,
+                            coverage_days=prebuild_coverage_days,
+                            safety_component_mode=prebuild_safety_mode,
+                            safety_component_value=prebuild_safety_value,
+                            promo_windows=all_promo_windows,
+                            sales_records=all_sales_records,
+                            transactions=transactions,
+                            all_skus=all_skus_list,
+                            csv_layer=self.csv_layer,
+                            settings=settings,
+                        )
+                        prebuild_coverage_days_val = coverage_used
+                        
+                        # Calculate projected stock at promo start date (OPENING stock before promo sales)
+                        # Use baseline forecast (NOT promo-adjusted) because we want stock projection BEFORE promo starts
+                        projected_stock_on_promo_start = StockCalculator.projected_inventory_position(
+                            sku=sku,
+                            target_date=promo_start_candidate,
+                            current_stock=current_stock,
+                            transactions=transactions,
+                            daily_sales_forecast=daily_sales_avg,  # Baseline, not promo-adjusted
+                            sales_records=all_sales_records,
+                        )
+                        
+                        # Calculate prebuild delta (how much MORE we need by promo start)
+                        prebuild_delta_qty = max(0, target_open_qty - projected_stock_on_promo_start)
+                        
+                        # Mark prebuild as ATTEMPTED (even if delta=0)
+                        promo_prebuild_enabled = True
+                        promo_start_date_val = promo_start_candidate
+                        
+                        if prebuild_delta_qty > 0:
+                            # Add prebuild quantity to proposal
+                            # For MVP: allocate FULL delta to THIS order (no distribution across multiple dates)
+                            # Future enhancement: distribute across multiple pre-start order opportunities
+                            prebuild_qty = prebuild_delta_qty
+                            proposed_qty_raw += prebuild_qty
+                            
+                            # Distribution note (for traceability)
+                            prebuild_distribution_note = f"Prebuild totale allocato a questo ordine (arrivo {target_receipt_date.isoformat()}, promo start {promo_start_candidate.isoformat()})"
+                        else:
+                            # Delta <= 0: no prebuild needed (projected >= target)
+                            prebuild_distribution_note = f"Prebuild non necessario: projected stock ({projected_stock_on_promo_start}) >= target ({target_open_qty})"
+                        
+                    except Exception as e:
+                        logging.warning(f"Promo prebuild calculation failed for SKU {sku}: {e}. Skipping prebuild.")
+        
+        # === END PROMO PREBUILD ===
+        
+        # === POST-PROMO GUARDRAIL (Anti-Overstock) ===
+        # If receipt_date falls within post-promo window (X days after promo end),
+        # apply cooldown factor + optional qty cap to avoid overstock from continued ordering
+        post_promo_guardrail_applied = False
+        post_promo_window_days_val = 0
+        post_promo_factor_used_val = 1.0
+        post_promo_cap_applied_val = False
+        post_promo_dip_factor_val = 1.0
+        post_promo_alert_val = ""
+        
+        # Load post-promo guardrail settings
+        post_promo_settings = settings.get("post_promo_guardrail", {})
+        post_promo_enabled = post_promo_settings.get("enabled", {}).get("value", False)
+        
+        if post_promo_enabled and target_receipt_date and transactions is not None:
+            # Load all promo calendar for post-promo detection
+            all_promo_windows = self.csv_layer.read_promo_calendar()
+            all_skus_list = self.csv_layer.read_skus()
+            all_sales_records = sales_records if sales_records else self.csv_layer.read_sales()
+            
+            # Load parameters
+            post_promo_window_days = post_promo_settings.get("window_days", {}).get("value", 7)
+            cooldown_factor = post_promo_settings.get("cooldown_factor", {}).get("value", 0.8)
+            qty_cap_enabled = post_promo_settings.get("qty_cap_enabled", {}).get("value", False)
+            qty_cap_value = post_promo_settings.get("qty_cap_value", {}).get("value", 0)
+            use_historical_dip = post_promo_settings.get("use_historical_dip", {}).get("value", False)
+            dip_min_events = post_promo_settings.get("dip_min_events", {}).get("value", 2)
+            dip_floor = post_promo_settings.get("dip_floor", {}).get("value", 0.5)
+            dip_ceiling = post_promo_settings.get("dip_ceiling", {}).get("value", 1.0)
+            shelf_life_severity_enabled = post_promo_settings.get("shelf_life_severity_enabled", {}).get("value", True)
+            
+            # Check if receipt_date falls in any post-promo window
+            active_post_promo_window = is_in_post_promo_window(
+                receipt_date=target_receipt_date,
+                promo_windows=all_promo_windows,
+                sku=sku,
+                window_days=post_promo_window_days
+            )
+            
+            if active_post_promo_window:
+                # We are in post-promo window: apply guardrail
+                post_promo_guardrail_applied = True
+                post_promo_window_days_val = post_promo_window_days
+                
+                qty_before_post_promo = proposed_qty_raw
+                
+                # Step 1: Apply cooldown factor (reduction)
+                if cooldown_factor < 1.0:
+                    proposed_qty_raw = int(proposed_qty_raw * cooldown_factor)
+                    post_promo_factor_used_val = cooldown_factor
+                
+                # Step 2: Apply historical dip factor if enabled
+                if use_historical_dip:
+                    try:
+                        dip_report = estimate_post_promo_dip(
+                            sku_id=sku,
+                            promo_windows=all_promo_windows,
+                            sales_records=all_sales_records,
+                            transactions=transactions,
+                            all_skus=all_skus_list,
+                            window_days=post_promo_window_days,
+                            min_events=dip_min_events,
+                            dip_floor=dip_floor,
+                            dip_ceiling=dip_ceiling,
+                            asof_date=date.today(),
+                        )
+                        
+                        if dip_report.confidence in ["A", "B"]:
+                            # Use dip factor from historical analysis
+                            proposed_qty_raw = int(proposed_qty_raw * dip_report.dip_factor)
+                            post_promo_dip_factor_val = dip_report.dip_factor
+                        else:
+                            # Insufficient data (confidence C) → use cooldown only
+                            post_promo_dip_factor_val = 1.0
+                    except Exception as e:
+                        logging.warning(f"Post-promo dip estimation failed for SKU {sku}: {e}. Using cooldown only.")
+                        post_promo_dip_factor_val = 1.0
+                
+                # Step 3: Apply absolute qty cap (if enabled)
+                if qty_cap_enabled and qty_cap_value > 0:
+                    if proposed_qty_raw > qty_cap_value:
+                        proposed_qty_raw = qty_cap_value
+                        post_promo_cap_applied_val = True
+                
+                # Step 4: Shelf-life severity modifier (increase reduction for short shelf life)
+                if shelf_life_severity_enabled and shelf_life_days > 0 and daily_sales_avg > 0:
+                    # Use existing waste_risk_demand_adjusted_percent thresholds
+                    waste_risk_threshold = settings.get("waste_risk_demand_adjusted_percent", {}).get("value", 15.0)
+                    
+                    # Estimate forward waste risk at receipt_date + shelf_life_days
+                    # (simplified: check if projected stock exceeds max or shelf capacity)
+                    shelf_life_capacity = int(daily_sales_avg * shelf_life_days)
+                    projected_stock_at_receipt = inventory_position + proposed_qty_raw
+                    
+                    # If projected stock > shelf_life_capacity OR > max_stock → apply additional reduction
+                    if projected_stock_at_receipt > shelf_life_capacity or projected_stock_at_receipt > max_stock:
+                        # Apply 20% additional reduction (arbitrary, can be parameterized)
+                        severity_factor = 0.8
+                        proposed_qty_raw = int(proposed_qty_raw * severity_factor)
+                        post_promo_alert_val = f"Rischio overstock post-promo: riduzione shelf-life severity applicata (projected: {projected_stock_at_receipt}, max: {max_stock})"
+                
+                # Step 5: Alert if projected stock > max_stock after all reductions
+                projected_stock_final = inventory_position + proposed_qty_raw
+                if projected_stock_final > max_stock:
+                    post_promo_alert_val = f"⚠️ RISCHIO OVERSTOCK POST PROMO: Projected stock ({projected_stock_final}) > Max stock ({max_stock})"
+                elif not post_promo_alert_val:
+                    # No shelf-life alert already set
+                    post_promo_alert_val = f"Post-promo guardrail attivo: riduzione da {qty_before_post_promo} a {proposed_qty_raw}"
+        
+        # === END POST-PROMO GUARDRAIL ===
         
         # Apply OOS boost if requested (increase proposed qty)
         # Regola "almeno +1": se boost_qty calcolato è 0 ma boost è attivo, applica +1
@@ -843,6 +1057,22 @@ class OrderWorkflow:
             expected_waste_qty=expected_waste_qty,
             shelf_life_penalty_applied=shelf_life_penalty_applied,
             shelf_life_penalty_message=shelf_life_penalty_message,
+            # Promo prebuild (anticipatory ordering)
+            promo_prebuild_enabled=promo_prebuild_enabled,
+            promo_start_date=promo_start_date_val,
+            target_open_qty=target_open_qty,
+            projected_stock_on_promo_start=projected_stock_on_promo_start,
+            prebuild_delta_qty=prebuild_delta_qty,
+            prebuild_qty=prebuild_qty,
+            prebuild_coverage_days=prebuild_coverage_days_val,
+            prebuild_distribution_note=prebuild_distribution_note,
+            # Post-promo guardrail (anti-overstock)
+            post_promo_guardrail_applied=post_promo_guardrail_applied,
+            post_promo_window_days=post_promo_window_days_val,
+            post_promo_factor_used=post_promo_factor_used_val,
+            post_promo_cap_applied=post_promo_cap_applied_val,
+            post_promo_dip_factor=post_promo_dip_factor_val,
+            post_promo_alert=post_promo_alert_val,
         )
     
     def confirm_order(
@@ -902,7 +1132,20 @@ class OrderWorkflow:
         if transactions:
             self.csv_layer.write_transactions_batch(transactions)
         
-        for confirmation in confirmations:
+        for idx, confirmation in enumerate(confirmations):
+            # Get corresponding proposal for prebuild fields
+            proposal = proposals[idx] if idx < len(proposals) else None
+            
+            # Extract prebuild fields from proposal (default to empty if not present)
+            prebuild_enabled = proposal.promo_prebuild_enabled if proposal else False
+            prebuild_start = proposal.promo_start_date.isoformat() if (proposal and proposal.promo_start_date) else None
+            prebuild_target = proposal.target_open_qty if proposal else 0
+            prebuild_projected = proposal.projected_stock_on_promo_start if proposal else 0
+            prebuild_delta = proposal.prebuild_delta_qty if proposal else 0
+            prebuild_qty_val = proposal.prebuild_qty if proposal else 0
+            prebuild_coverage = proposal.prebuild_coverage_days if proposal else 0
+            prebuild_note = proposal.prebuild_distribution_note if proposal else ""
+            
             self.csv_layer.write_order_log(
                 order_id=confirmation.order_id,
                 date_str=confirmation.date.isoformat(),
@@ -910,6 +1153,14 @@ class OrderWorkflow:
                 qty=confirmation.qty_ordered,
                 status=confirmation.status,
                 receipt_date=confirmation.receipt_date.isoformat() if confirmation.receipt_date else None,
+                promo_prebuild_enabled=prebuild_enabled,
+                promo_start_date=prebuild_start,
+                target_open_qty=prebuild_target,
+                projected_stock_on_promo_start=prebuild_projected,
+                prebuild_delta_qty=prebuild_delta,
+                prebuild_qty=prebuild_qty_val,
+                prebuild_coverage_days=prebuild_coverage,
+                prebuild_distribution_note=prebuild_note,
             )
         
         return confirmations, transactions
@@ -1064,4 +1315,87 @@ def calculate_daily_sales_average(
     oos_days_count = len(oos_days)
     
     return (avg_sales, oos_days_count)
+
+
+def calculate_prebuild_target(
+    sku: str,
+    promo_start_date: date,
+    coverage_days: int,
+    safety_component_mode: str,
+    safety_component_value: float,
+    promo_windows: List,
+    sales_records: List,
+    transactions: List,
+    all_skus: List,
+    csv_layer,
+    settings: dict,
+) -> tuple:
+    """
+    Calculate target opening stock needed at promo start for prebuild logic.
+    
+    Formula:
+        target_open = sum(adjusted_forecast[start_date : start_date + coverage_days]) + safety_component
+    
+    Where:
+        - adjusted_forecast uses promo_adjusted_forecast with uplift during promo window
+        - safety_component is either multiplier (target × value) or absolute (+ value)
+    
+    Args:
+        sku: SKU identifier
+        promo_start_date: Date when promo starts (need opening stock BY this date)
+        coverage_days: Days of promo to cover (0 = use lead_time from settings)
+        safety_component_mode: 'multiplier' or 'absolute'
+        safety_component_value: Safety component value (0.2 = 20% for multiplier, or absolute qty)
+        promo_windows: All promo windows
+        sales_records: All sales records
+        transactions: All transactions
+        all_skus: All SKU objects
+        csv_layer: CSV layer for data access
+        settings: Settings dictionary
+    
+    Returns:
+        (target_open_qty, coverage_days_used, adjusted_forecast_total)
+    """
+    from ..forecast import promo_adjusted_forecast
+    
+    # Determine coverage_days: if 0, use lead_time from settings
+    if coverage_days == 0:
+        lead_time = settings.get("reorder_engine", {}).get("lead_time_days", {}).get("value", 7)
+        coverage_days_used = lead_time
+    else:
+        coverage_days_used = coverage_days
+    
+    # Build horizon dates for coverage period: [promo_start, promo_start+1, ..., promo_start+coverage-1]
+    horizon_dates = [promo_start_date + timedelta(days=i) for i in range(coverage_days_used)]
+    
+    # Call promo_adjusted_forecast to get demand forecast during promo window
+    try:
+        promo_result = promo_adjusted_forecast(
+            sku_id=sku,
+            horizon_dates=horizon_dates,
+            sales_records=sales_records,
+            transactions=transactions,
+            promo_windows=promo_windows,
+            all_skus=all_skus,
+            csv_layer=csv_layer,
+            store_id=None,  # Global promo only
+            settings=settings,
+        )
+        
+        # Sum adjusted forecast over coverage period
+        adjusted_forecast_total = int(sum(promo_result["adjusted_forecast"].values()))
+    except Exception as e:
+        logging.warning(f"Promo adjusted forecast failed for prebuild target calculation (SKU {sku}): {e}. Using 0.")
+        adjusted_forecast_total = 0
+    
+    # Calculate safety component
+    if safety_component_mode == "absolute":
+        safety_component = int(safety_component_value)
+    else:  # "multiplier"
+        safety_component = int(adjusted_forecast_total * safety_component_value)
+    
+    # Target opening stock = forecast + safety
+    target_open_qty = adjusted_forecast_total + safety_component
+    
+    return (target_open_qty, coverage_days_used, adjusted_forecast_total)
 

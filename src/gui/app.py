@@ -1102,6 +1102,39 @@ class DesktopOrderApp:
             details.append(f"Status: {proposal.promo_adjustment_note}")
             details.append("")
         
+        # Promo Prebuild (if enabled and applied)
+        if proposal.promo_prebuild_enabled:
+            details.append("═══ PROMO PREBUILD ═══")
+            if proposal.promo_start_date:
+                details.append(f"Promo start: {proposal.promo_start_date.isoformat()}")
+            details.append(f"Coverage period: {proposal.prebuild_coverage_days} giorni")
+            details.append(f"Target opening stock: {to_colli(proposal.target_open_qty, pack_size)}")
+            details.append(f"Projected stock on promo start: {to_colli(proposal.projected_stock_on_promo_start, pack_size)}")
+            details.append(f"Delta (target - projected): {to_colli(proposal.prebuild_delta_qty, pack_size)}")
+            if proposal.prebuild_qty > 0:
+                details.append(f"✓ Prebuild qty aggiunta: {to_colli(proposal.prebuild_qty, pack_size)}")
+                if proposal.prebuild_distribution_note:
+                    details.append(f"Distribution: {proposal.prebuild_distribution_note}")
+            else:
+                details.append("Prebuild non necessario (projected >= target)")
+            details.append("")
+        
+        # Post-Promo Guardrail (if applied)
+        if proposal.post_promo_guardrail_applied:
+            details.append("═══ POST-PROMO GUARDRAIL ═══")
+            details.append(f"Finestra post-promo: {proposal.post_promo_window_days} giorni dopo end_date")
+            if proposal.post_promo_factor_used < 1.0:
+                reduction_pct = (1.0 - proposal.post_promo_factor_used) * 100
+                details.append(f"Cooldown factor: {proposal.post_promo_factor_used:.2f} (-{reduction_pct:.1f}%)")
+            if proposal.post_promo_dip_factor < 1.0:
+                dip_reduction_pct = (1.0 - proposal.post_promo_dip_factor) * 100
+                details.append(f"Dip storico: {proposal.post_promo_dip_factor:.2f} (-{dip_reduction_pct:.1f}%)")
+            if proposal.post_promo_cap_applied:
+                details.append("✓ Qty cap assoluto applicato")
+            if proposal.post_promo_alert:
+                details.append(f"⚠️ {proposal.post_promo_alert}")
+            details.append("")
+        
         # Lead Time Demand
         details.append("═══ LEAD TIME DEMAND ═══")
         details.append(f"Lead Time: {effective_lead_time} giorni")
@@ -1693,7 +1726,14 @@ class DesktopOrderApp:
             promo_delta_display = "⚠️ N/A"  # Promo active but uplift unavailable
         else:
             promo_delta_display = "-"  # No promo
-
+        
+        # Post-promo guardrail indicator (append to promo_delta_display)
+        if proposal.post_promo_guardrail_applied:
+            if proposal.post_promo_alert and "RISCHIO OVERSTOCK" in proposal.post_promo_alert:
+                promo_delta_display += " ⚠️⏳"  # Alert + post-promo
+            else:
+                promo_delta_display += " ⏳"  # Post-promo active (no alert)
+        
         return (
             proposal.sku,
             proposal.description,

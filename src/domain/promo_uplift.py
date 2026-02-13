@@ -526,3 +526,202 @@ def estimate_uplift(
         n_valid_days_total=total_valid_days_final,
         notes=f"Aggregated from {len(final_events)} events, pooling: {pooling_source}"
     )
+
+
+def is_in_post_promo_window(
+    receipt_date: date,
+    promo_windows: List[PromoWindow],
+    sku: str,
+    window_days: int
+) -> Optional[PromoWindow]:
+    """
+    Determina se receipt_date cade in una finestra post-promo (entro X giorni dopo end_date).
+    
+    Args:
+        receipt_date: Data ricevimento ordine
+        promo_windows: Tutte le finestre promo
+        sku: SKU identifier
+        window_days: Giorni finestra dopo end_date
+    
+    Returns:
+        PromoWindow se receipt_date è dentro finestra post-promo, None altrimenti
+    """
+    if window_days <= 0:
+        return None
+    
+    # Filter windows for this SKU
+    sku_windows = [w for w in promo_windows if w.sku == sku]
+    
+    for window in sku_windows:
+        post_promo_start = window.end_date + timedelta(days=1)  # Giorno dopo end_date
+        post_promo_end = window.end_date + timedelta(days=window_days)  # Ultimo giorno finestra
+        
+        if post_promo_start <= receipt_date <= post_promo_end:
+            return window
+    
+    return None
+
+
+@dataclass
+class DipEvent:
+    """Single post-promo dip event calculation (analogo UpliftEvent)."""
+    sku: str
+    promo_end_date: date
+    post_promo_start: date
+    post_promo_end: date
+    actual_sales_post: float  # Sales during post-promo window
+    baseline_pred_post: float  # Baseline prediction during post-promo window
+    dip_ratio: float  # actual_sales_post / baseline_pred_post (tipicamente < 1.0)
+    valid_days: int  # Number of non-censored days in post-promo window
+    note: str = ""
+
+
+@dataclass
+class DipReport:
+    """SKU post-promo dip estimation report."""
+    sku: str
+    dip_factor: float  # Final aggregated dip (median, clamped 0.5-1.0)
+    confidence: str  # "A", "B", or "C"
+    events_used: List[DipEvent]
+    n_events: int
+    n_valid_days_total: int
+    notes: str = ""
+
+
+def estimate_post_promo_dip(
+    sku_id: str,
+    promo_windows: List[PromoWindow],
+    sales_records: List[SalesRecord],
+    transactions: List[Transaction],
+    all_skus: List[SKU],
+    window_days: int = 7,
+    min_events: int = 2,
+    dip_floor: float = 0.5,
+    dip_ceiling: float = 1.0,
+    asof_date: Optional[date] = None,
+) -> DipReport:
+    """
+    Stima dip factor post-promo storico (analogo estimate_uplift).
+    
+    Per ogni evento promo storico:
+    - Identifica finestra post-promo: [end_date+1, end_date+window_days]
+    - Calcola dip_event = sum(actual_sales_post) / sum(baseline_pred_post)
+    - Aggrega con mediana e clamp a [dip_floor, dip_ceiling]
+    
+    Args:
+        sku_id: SKU identifier
+        promo_windows: Tutte le promo windows
+        sales_records: Tutti i sales records
+        transactions: Tutte le transactions
+        all_skus: Tutti gli SKU (per baseline_forecast)
+        window_days: Giorni finestra post-promo per analisi
+        min_events: Minimo eventi promo per stima affidabile
+        dip_floor: Clamp minimo (default 0.5)
+        dip_ceiling: Clamp massimo (default 1.0 = neutro)
+        asof_date: Data di riferimento (default: today)
+    
+    Returns:
+        DipReport con dip_factor, confidence e eventi usati
+    """
+    if asof_date is None:
+        asof_date = date.today()
+    
+    # Extract historical promo events for this SKU
+    promo_events = extract_promo_events(sku_id, promo_windows, sales_records, transactions, asof_date)
+    
+    if not promo_events:
+        # No historical promos → neutral dip
+        return DipReport(
+            sku=sku_id,
+            dip_factor=1.0,
+            confidence="C",
+            events_used=[],
+            n_events=0,
+            n_valid_days_total=0,
+            notes="No historical promo events for dip estimation"
+        )
+    
+    dip_events = []
+    
+    for promo_start, promo_end in promo_events:
+        # Define post-promo window
+        post_promo_start = promo_end + timedelta(days=1)
+        post_promo_end = promo_end + timedelta(days=window_days)
+        
+        # Skip if post-promo window extends beyond asof_date (incomplete data)
+        if post_promo_end >= asof_date:
+            continue
+        
+        # Collect sales during post-promo window (non-censored days only)
+        post_sales_map = {}
+        for sr in sales_records:
+            if sr.sku == sku_id and post_promo_start <= sr.date <= post_promo_end:
+                post_sales_map[sr.date] = sr.qty_sold
+        
+        # Compute baseline prediction for post-promo window
+        post_baseline_map = {}
+        try:
+            post_baseline_map = baseline_forecast(
+                sku_id=sku_id,
+                horizon_dates=[post_promo_start + timedelta(days=i) for i in range(window_days)],
+                sales_records=sales_records,
+                transactions=transactions,
+            )
+        except Exception as e:
+            logger.warning(f"Baseline forecast failed for post-promo dip (SKU {sku_id}, promo end {promo_end}): {e}")
+            continue
+        
+        # Filter non-censored days
+        actual_sales_post = 0.0
+        baseline_pred_post = 0.0
+        valid_days_count = 0
+        
+        for day_offset in range(window_days):
+            check_date = post_promo_start + timedelta(days=day_offset)
+            
+            # Skip censored days (OOS, out-of-assortment, etc.)
+            if is_day_censored(sku_id, check_date, transactions, sales_records):
+                continue
+            
+            actual_sales_post += post_sales_map.get(check_date, 0.0)
+            baseline_pred_post += post_baseline_map.get(check_date, 0.0)
+            valid_days_count += 1
+        
+        # Compute dip ratio
+        if baseline_pred_post > 0 and valid_days_count > 0:
+            dip_ratio = actual_sales_post / baseline_pred_post
+            dip_events.append(DipEvent(
+                sku=sku_id,
+                promo_end_date=promo_end,
+                post_promo_start=post_promo_start,
+                post_promo_end=post_promo_end,
+                actual_sales_post=actual_sales_post,
+                baseline_pred_post=baseline_pred_post,
+                dip_ratio=dip_ratio,
+                valid_days=valid_days_count,
+                note=f"Post-promo window {window_days}d after {promo_end.isoformat()}"
+            ))
+    
+    # Aggregate dip using median (più robusto agli outlier rispetto a mean)
+    if len(dip_events) >= min_events:
+        dip_ratios = [e.dip_ratio for e in dip_events]
+        dip_factor_raw = statistics.median(dip_ratios)
+        # Clamp to [dip_floor, dip_ceiling]
+        dip_factor = max(dip_floor, min(dip_ceiling, dip_factor_raw))
+        confidence = "A" if len(dip_events) >= 3 else "B"
+    else:
+        # Too few events → neutral dip
+        dip_factor = 1.0
+        confidence = "C"
+    
+    total_valid_days = sum(e.valid_days for e in dip_events)
+    
+    return DipReport(
+        sku=sku_id,
+        dip_factor=dip_factor,
+        confidence=confidence,
+        events_used=dip_events,
+        n_events=len(dip_events),
+        n_valid_days_total=total_valid_days,
+        notes=f"Aggregated from {len(dip_events)} events, median dip clamped to [{dip_floor}, {dip_ceiling}]"
+    )

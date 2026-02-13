@@ -348,6 +348,24 @@ class OrderProposal:
     expected_waste_qty: int = 0  # Quantità prevista di spreco (dopo demand consumption)
     shelf_life_penalty_applied: bool = False  # True se penalty applicato
     shelf_life_penalty_message: str = ""  # Messaggio penalty (es. "Reduced by 50%")
+    
+    # Promo prebuild (anticipatory ordering for upcoming promos)
+    promo_prebuild_enabled: bool = False  # True se prebuild attivato per questa proposta
+    promo_start_date: Optional[Date] = None  # Data inizio promo (se prebuild attivo)
+    target_open_qty: int = 0  # Target opening stock al promo start (forecast coverage + safety)
+    projected_stock_on_promo_start: int = 0  # Stock proiettato a promo start (senza prebuild)
+    prebuild_delta_qty: int = 0  # Delta grezzo (target - projected, prima vincoli)
+    prebuild_qty: int = 0  # Quantità prebuild finale (dopo pack/MOQ/max, parte di proposed_qty)
+    prebuild_coverage_days: int = 0  # Giorni forecast coverage usati per target
+    prebuild_distribution_note: str = ""  # Sintesi distribuzione (es. "Single order" o "Split 3 dates")
+    
+    # Post-promo guardrail (anti-overstock cooldown dopo fine promo)
+    post_promo_guardrail_applied: bool = False  # True se guardrail post-promo attivato
+    post_promo_window_days: int = 0  # Giorni finestra post-promo (receipt_date dentro window)
+    post_promo_factor_used: float = 1.0  # Fattore cooldown applicato (<=1.0, es. 0.8 = -20%)
+    post_promo_cap_applied: bool = False  # True se qty cap assoluto applicato
+    post_promo_dip_factor: float = 1.0  # Dip factor storico stimato (se use_historical_dip)
+    post_promo_alert: str = ""  # Alert rischio overstock (es. "Stock > max" o "Shelf-life risk")
 
 
 @dataclass

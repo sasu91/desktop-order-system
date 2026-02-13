@@ -31,7 +31,9 @@ class CSVLayer:
                      "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days", "in_assortment"],
         "transactions.csv": ["date", "sku", "event", "qty", "receipt_date", "note"],
         "sales.csv": ["date", "sku", "qty_sold", "promo_flag"],
-        "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "qty_received", "status", "receipt_date"],
+        "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "qty_received", "status", "receipt_date",
+                           "promo_prebuild_enabled", "promo_start_date", "target_open_qty", "projected_stock_on_promo_start",
+                           "prebuild_delta_qty", "prebuild_qty", "prebuild_coverage_days", "prebuild_distribution_note"],
         "receiving_logs.csv": ["document_id", "receipt_id", "date", "sku", "qty_received", "receipt_date", "order_ids"],
         "audit_log.csv": ["timestamp", "operation", "sku", "details", "user"],
         "lots.csv": ["lot_id", "sku", "expiry_date", "qty_on_hand", "receipt_id", "receipt_date"],
@@ -792,9 +794,26 @@ class CSVLayer:
         """Read order logs."""
         return self._read_csv("order_logs.csv")
     
-    def write_order_log(self, order_id: str, date_str: str, sku: str, qty: int, status: str, receipt_date: Optional[str] = None, qty_received: int = 0):
+    def write_order_log(
+        self,
+        order_id: str,
+        date_str: str,
+        sku: str,
+        qty: int,
+        status: str,
+        receipt_date: Optional[str] = None,
+        qty_received: int = 0,
+        promo_prebuild_enabled: bool = False,
+        promo_start_date: Optional[str] = None,
+        target_open_qty: int = 0,
+        projected_stock_on_promo_start: int = 0,
+        prebuild_delta_qty: int = 0,
+        prebuild_qty: int = 0,
+        prebuild_coverage_days: int = 0,
+        prebuild_distribution_note: str = "",
+    ):
         """
-        Write order log entry with expected receipt date and received quantity.
+        Write order log entry with expected receipt date, received quantity, and prebuild info.
         
         Args:
             order_id: Unique order identifier
@@ -804,6 +823,14 @@ class CSVLayer:
             status: Order status (PENDING, PARTIAL, RECEIVED)
             receipt_date: Expected receipt date (ISO format, optional)
             qty_received: Quantity already received (default 0)
+            promo_prebuild_enabled: Whether promo prebuild was applied
+            promo_start_date: Promo start date if prebuild enabled (ISO format)
+            target_open_qty: Target opening stock at promo start
+            projected_stock_on_promo_start: Projected stock at promo start
+            prebuild_delta_qty: Delta between target and projected
+            prebuild_qty: Prebuild quantity added to this order
+            prebuild_coverage_days: Coverage days for prebuild calculation
+            prebuild_distribution_note: Distribution note for prebuild logic
         """
         self._append_csv("order_logs.csv", {
             "order_id": order_id,
@@ -813,6 +840,14 @@ class CSVLayer:
             "qty_received": str(qty_received),
             "status": status,
             "receipt_date": receipt_date or "",
+            "promo_prebuild_enabled": str(promo_prebuild_enabled),
+            "promo_start_date": promo_start_date or "",
+            "target_open_qty": str(target_open_qty),
+            "projected_stock_on_promo_start": str(projected_stock_on_promo_start),
+            "prebuild_delta_qty": str(prebuild_delta_qty),
+            "prebuild_qty": str(prebuild_qty),
+            "prebuild_coverage_days": str(prebuild_coverage_days),
+            "prebuild_distribution_note": prebuild_distribution_note or "",
         })
     
     def update_order_received_qty(self, order_id: str, qty_received: int, status: str):
@@ -1134,6 +1169,74 @@ class CSVLayer:
                 "ramp_out_days": {
                     "value": 0,
                     "description": "Giorni di ramp-out progressivo alla fine promo (0 = istantaneo)"
+                }
+            },
+            "promo_prebuild": {
+                "enabled": {
+                    "value": False,
+                    "description": "Abilita prebuild anticipatorio per promo imminenti (disattivo di default)"
+                },
+                "coverage_days": {
+                    "value": 0,
+                    "description": "Giorni di copertura dalla promo start per target opening (0 = usa lead_time)"
+                },
+                "safety_component_mode": {
+                    "value": "multiplier",
+                    "description": "Modalità safety component: 'absolute' (unità fisse) o 'multiplier' (% forecast)"
+                },
+                "safety_component_value": {
+                    "value": 0.2,
+                    "description": "Valore safety component: unità se absolute, moltiplicatore se multiplier (es. 0.2 = +20%)"
+                },
+                "min_days_to_promo_start": {
+                    "value": 3,
+                    "description": "Giorni minimi a promo start per attivare prebuild (evita ordini troppo tardivi)"
+                },
+                "max_prebuild_horizon_days": {
+                    "value": 30,
+                    "description": "Orizzonte massimo per cercare opportunità prebuild (giorni prima di start)"
+                }
+            },
+            "post_promo_guardrail": {
+                "enabled": {
+                    "value": False,
+                    "description": "Abilita guardrail anti-overstock post-promo (disattivo di default)"
+                },
+                "window_days": {
+                    "value": 7,
+                    "description": "Giorni dopo promo end_date dove applicare guardrail (finestra cooldown)"
+                },
+                "cooldown_factor": {
+                    "value": 0.8,
+                    "description": "Fattore moltiplicativo <= 1.0 da applicare a qty proposta in finestra post-promo (es. 0.8 = -20%)"
+                },
+                "qty_cap_enabled": {
+                    "value": False,
+                    "description": "Abilita cap assoluto in pezzi per ordini post-promo (oltre a cooldown_factor)"
+                },
+                "qty_cap_value": {
+                    "value": 0,
+                    "description": "Cap assoluto in pezzi quando qty_cap_enabled=True (0 = nessun cap)"
+                },
+                "use_historical_dip": {
+                    "value": False,
+                    "description": "Abilita stima dip storico post-promo (analogo uplift, richiede storico eventi)"
+                },
+                "dip_min_events": {
+                    "value": 2,
+                    "description": "Minimo eventi promo storici necessari per stimare dip_factor affidabile"
+                },
+                "dip_floor": {
+                    "value": 0.5,
+                    "description": "Clamp minimo per dip_factor stimato storico (evita cali eccessivi)"
+                },
+                "dip_ceiling": {
+                    "value": 1.0,
+                    "description": "Clamp massimo per dip_factor stimato storico (tipicamente 1.0 = neutro)"
+                },
+                "shelf_life_severity_enabled": {
+                    "value": True,
+                    "description": "Aumenta severità guardrail quando SKU ha shelf-life corta (usa parametri esistenti)"
                 }
             }
         }
