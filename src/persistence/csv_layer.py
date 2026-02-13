@@ -1238,6 +1238,36 @@ class CSVLayer:
                     "value": True,
                     "description": "Aumenta severità guardrail quando SKU ha shelf-life corta (usa parametri esistenti)"
                 }
+            },
+            "promo_cannibalization": {
+                "enabled": {
+                    "value": False,
+                    "description": "Abilita downlift cannibalizzazione: riduzione forecast per SKU non-promo quando sostituti in promo"
+                },
+                "downlift_min": {
+                    "value": 0.6,
+                    "description": "Clamp minimo downlift_factor (es. 0.6 = massimo -40% riduzione)"
+                },
+                "downlift_max": {
+                    "value": 1.0,
+                    "description": "Clamp massimo downlift_factor (1.0 = neutro, nessuna riduzione)"
+                },
+                "denominator_epsilon": {
+                    "value": 0.1,
+                    "description": "Epsilon denominatore per evitare divisioni per zero nei calcoli downlift"
+                },
+                "min_events_target_sku": {
+                    "value": 2,
+                    "description": "Eventi minimi promo-driver storici per stima affidabile downlift su target SKU"
+                },
+                "min_valid_days": {
+                    "value": 7,
+                    "description": "Giorni validi totali minimi (somma su tutti eventi) per confidence alta"
+                },
+                "substitute_groups": {
+                    "value": {},
+                    "description": "Mappa gruppi sostituti: {group_id: [sku_id...]}. Esempio: {'GROUP_A': ['SKU001', 'SKU002']}"
+                }
             }
         }
         

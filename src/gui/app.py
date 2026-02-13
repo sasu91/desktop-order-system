@@ -1135,6 +1135,17 @@ class DesktopOrderApp:
                 details.append(f"⚠️ {proposal.post_promo_alert}")
             details.append("")
         
+        # Cannibalization (Downlift anti-sostituzione)
+        if proposal.cannibalization_applied:
+            details.append("═══ CANNIBALIZZAZIONE ═══")
+            details.append(f"Driver promo: {proposal.cannibalization_driver_sku}")
+            reduction_pct = (1.0 - proposal.cannibalization_downlift_factor) * 100
+            details.append(f"Downlift factor: {proposal.cannibalization_downlift_factor:.2f} (-{reduction_pct:.1f}%)")
+            details.append(f"Confidence: {proposal.cannibalization_confidence}")
+            if proposal.cannibalization_note:
+                details.append(f"Note: {proposal.cannibalization_note}")
+            details.append("")
+        
         # Lead Time Demand
         details.append("═══ LEAD TIME DEMAND ═══")
         details.append(f"Lead Time: {effective_lead_time} giorni")
@@ -1733,6 +1744,11 @@ class DesktopOrderApp:
                 promo_delta_display += " ⚠️⏳"  # Alert + post-promo
             else:
                 promo_delta_display += " ⏳"  # Post-promo active (no alert)
+        
+        # Cannibalization indicator (append downlift badge)
+        if proposal.cannibalization_applied:
+            reduction_pct = (1.0 - proposal.cannibalization_downlift_factor) * 100
+            promo_delta_display += f" 📉{reduction_pct:.0f}%"  # Downlift badge con driver
         
         return (
             proposal.sku,
@@ -5118,6 +5134,60 @@ class DesktopOrderApp:
         self.uplift_treeview.tag_configure("confidence_A", foreground="green", font=("Helvetica", 9, "bold"))
         self.uplift_treeview.tag_configure("confidence_B", foreground="orange")
         self.uplift_treeview.tag_configure("confidence_C", foreground="red")
+        
+        # === CANNIBALIZATION (DOWNLIFT) REPORT SECTION ===
+        cannib_section = ttk.LabelFrame(main_frame, text="📉 Analisi Cannibalizzazione (Downlift per Sostituti in Promo)", padding=10)
+        cannib_section.pack(side="bottom", fill="both", expand=False, pady=(15, 0))
+        
+        # Controls for cannibalization report
+        cannib_controls_frame = ttk.Frame(cannib_section)
+        cannib_controls_frame.pack(side="top", fill="x", pady=(0, 10))
+        
+        ttk.Label(cannib_controls_frame, text="Report Cannibalizzazione (riduzione forecast per target non-promo)", font=("Helvetica", 10, "bold")).pack(side="left", padx=5)
+        ttk.Button(cannib_controls_frame, text="🔄 Calcola Report Downlift", command=self._refresh_cannibalization_report).pack(side="left", padx=20)
+        
+        # Filter for cannibalization table
+        ttk.Label(cannib_controls_frame, text="Filtra SKU:").pack(side="left", padx=(20, 5))
+        self.cannib_filter_var = tk.StringVar()
+        self.cannib_filter_var.trace('w', lambda *args: self._filter_cannibalization_table())
+        ttk.Entry(cannib_controls_frame, textvariable=self.cannib_filter_var, width=20).pack(side="left", padx=5)
+        
+        # Cannibalization report table (TreeView)
+        cannib_table_frame = ttk.Frame(cannib_section)
+        cannib_table_frame.pack(fill="both", expand=True)
+        
+        cannib_scrollbar = ttk.Scrollbar(cannib_table_frame)
+        cannib_scrollbar.pack(side="right", fill="y")
+        
+        self.cannib_treeview = ttk.Treeview(
+            cannib_table_frame,
+            columns=("Target SKU", "Driver SKU", "Downlift", "Riduzione %", "Confidence", "Eventi"),
+            height=8,
+            yscrollcommand=cannib_scrollbar.set,
+        )
+        cannib_scrollbar.config(command=self.cannib_treeview.yview)
+        
+        self.cannib_treeview.column("#0", width=0, stretch=tk.NO)
+        self.cannib_treeview.column("Target SKU", anchor=tk.W, width=120)
+        self.cannib_treeview.column("Driver SKU", anchor=tk.W, width=120)
+        self.cannib_treeview.column("Downlift", anchor=tk.CENTER, width=100)
+        self.cannib_treeview.column("Riduzione %", anchor=tk.CENTER, width=100)
+        self.cannib_treeview.column("Confidence", anchor=tk.CENTER, width=100)
+        self.cannib_treeview.column("Eventi", anchor=tk.CENTER, width=80)
+        
+        self.cannib_treeview.heading("Target SKU", text="Target SKU", anchor=tk.W)
+        self.cannib_treeview.heading("Driver SKU", text="Driver Promo", anchor=tk.W)
+        self.cannib_treeview.heading("Downlift", text="Fattore Downlift", anchor=tk.CENTER)
+        self.cannib_treeview.heading("Riduzione %", text="Riduzione %", anchor=tk.CENTER)
+        self.cannib_treeview.heading("Confidence", text="Confidence", anchor=tk.CENTER)
+        self.cannib_treeview.heading("Eventi", text="N. Eventi", anchor=tk.CENTER)
+        
+        self.cannib_treeview.pack(fill="both", expand=True)
+        
+        # Tag for confidence levels
+        self.cannib_treeview.tag_configure("confidence_A", foreground="green", font=("Helvetica", 9, "bold"))
+        self.cannib_treeview.tag_configure("confidence_B", foreground="orange")
+        self.cannib_treeview.tag_configure("confidence_C", foreground="red")
     
     def _build_settings_tab(self):
         """Build Settings tab for reorder engine configuration."""
@@ -5160,6 +5230,7 @@ class DesktopOrderApp:
         self._build_shelf_life_settings_tab()
         self._build_dashboard_settings_tab()
         self._build_holidays_settings_tab()
+        self._build_promo_cannibalization_settings_tab()
         
         # Buttons
         button_frame = ttk.Frame(main_frame)
@@ -5827,6 +5898,166 @@ class DesktopOrderApp:
         
         # Load holidays
         self._refresh_holidays_table()
+    
+    def _build_promo_cannibalization_settings_tab(self):
+        """Build Promo Cannibalization (Downlift) Configuration sub-tab."""
+        tab_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(tab_frame, text="📉 Cannibalizzazione")
+        
+        # Instructions
+        instructions = ttk.Label(
+            tab_frame,
+            text="Configura riduzione forecast per SKU non-promo quando sostituti sono in promo.\n"
+                 "Gruppi sostituti: formato JSON {\"group_id\": [\"sku_1\", \"sku_2\", ...]}",
+            foreground="gray",
+            font=("Helvetica", 9, "italic"),
+            justify="left"
+        )
+        instructions.pack(fill="x", pady=(0, 10))
+        
+        # Enable checkbox
+        self.cannibalization_enabled_var = tk.BooleanVar()
+        enable_check = ttk.Checkbutton(
+            tab_frame,
+            text="✓ Abilita cannibalizzazione (downlift automatico)",
+            variable=self.cannibalization_enabled_var
+        )
+        enable_check.pack(anchor="w", pady=(0, 10))
+        
+        # Parameters frame
+        params_frame = ttk.LabelFrame(tab_frame, text="Parametri Downlift", padding=10)
+        params_frame.pack(fill="x", pady=(0, 10))
+        
+        # Downlift clamp min/max
+        ttk.Label(params_frame, text="Downlift Min (es. 0.6 = max -40%):").grid(row=0, column=0, sticky="w", padx=5, pady=2)
+        self.downlift_min_var = tk.DoubleVar(value=0.6)
+        ttk.Entry(params_frame, textvariable=self.downlift_min_var, width=10).grid(row=0, column=1, sticky="w", padx=5, pady=2)
+        
+        ttk.Label(params_frame, text="Downlift Max (es. 1.0 = neutro):").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+        self.downlift_max_var = tk.DoubleVar(value=1.0)
+        ttk.Entry(params_frame, textvariable=self.downlift_max_var, width=10).grid(row=1, column=1, sticky="w", padx=5, pady=2)
+        
+        ttk.Label(params_frame, text="Eventi minimi per stima:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
+        self.downlift_min_events_var = tk.IntVar(value=2)
+        ttk.Entry(params_frame, textvariable=self.downlift_min_events_var, width=10).grid(row=2, column=1, sticky="w", padx=5, pady=2)
+        
+        ttk.Label(params_frame, text="Giorni validi minimi:").grid(row=3, column=0, sticky="w", padx=5, pady=2)
+        self.downlift_min_valid_days_var = tk.IntVar(value=7)
+        ttk.Entry(params_frame, textvariable=self.downlift_min_valid_days_var, width=10).grid(row=3, column=1, sticky="w", padx=5, pady=2)
+        
+        # Substitute groups editor
+        groups_frame = ttk.LabelFrame(tab_frame, text="Gruppi Sostituti (JSON)", padding=10)
+        groups_frame.pack(fill="both", expand=True, pady=(0, 10))
+        
+        # Text widget for JSON editing
+        groups_text_frame = ttk.Frame(groups_frame)
+        groups_text_frame.pack(fill="both", expand=True)
+        
+        groups_scrollbar = ttk.Scrollbar(groups_text_frame)
+        groups_scrollbar.pack(side="right", fill="y")
+        
+        self.substitute_groups_text = tk.Text(
+            groups_text_frame,
+            wrap="word",
+            width=60,
+            height=12,
+            font=("Courier", 9),
+            yscrollcommand=groups_scrollbar.set
+        )
+        self.substitute_groups_text.pack(side="left", fill="both", expand=True)
+        groups_scrollbar.config(command=self.substitute_groups_text.yview)
+        
+        # Example hint
+        example_label = ttk.Label(
+            groups_frame,
+            text='Esempio: {\"GRUPPO_A\": [\"SKU001\", \"SKU002\"], \"GRUPPO_B\": [\"SKU003\", \"SKU004\", \"SKU005\"]}',
+            foreground="gray",
+            font=("Courier", 8, "italic")
+        )
+        example_label.pack(fill="x", pady=(5, 0))
+        
+        # Buttons
+        buttons_frame = ttk.Frame(tab_frame)
+        buttons_frame.pack(fill="x", pady=(5, 0))
+        
+        ttk.Button(
+            buttons_frame,
+            text="💾 Salva Cannibalizzazione",
+            command=self._save_cannibalization_settings
+        ).pack(side="left", padx=5)
+        
+        ttk.Button(
+            buttons_frame,
+            text="🔄 Ricarica",
+            command=self._refresh_cannibalization_settings
+        ).pack(side="left", padx=5)
+        
+        # Load current settings
+        self._refresh_cannibalization_settings()
+    
+    def _refresh_cannibalization_settings(self):
+        """Load cannibalization settings from config into UI widgets."""
+        settings = csv_layer.read_settings()
+        cannib_settings = settings.get("promo_cannibalization", {})
+        
+        # Load enabled flag
+        enabled = cannib_settings.get("enabled", {}).get("value", False)
+        self.cannibalization_enabled_var.set(enabled)
+        
+        # Load parameters
+        self.downlift_min_var.set(cannib_settings.get("downlift_min", {}).get("value", 0.6))
+        self.downlift_max_var.set(cannib_settings.get("downlift_max", {}).get("value", 1.0))
+        self.downlift_min_events_var.set(cannib_settings.get("min_events_target_sku", {}).get("value", 2))
+        self.downlift_min_valid_days_var.set(cannib_settings.get("min_valid_days", {}).get("value", 7))
+        
+        # Load substitute groups as formatted JSON
+        groups = cannib_settings.get("substitute_groups", {}).get("value", {})
+        self.substitute_groups_text.delete("1.0", "end")
+        import json
+        groups_json = json.dumps(groups, indent=2, ensure_ascii=False)
+        self.substitute_groups_text.insert("1.0", groups_json)
+    
+    def _save_cannibalization_settings(self):
+        """Save cannibalization settings from UI to config."""
+        import json
+        
+        # Validate substitute_groups JSON
+        groups_str = self.substitute_groups_text.get("1.0", "end-1c").strip()
+        try:
+            if groups_str:
+                substitute_groups = json.loads(groups_str)
+                if not isinstance(substitute_groups, dict):
+                    raise ValueError("Deve essere un dizionario JSON")
+                # Validate structure: {group_id: [sku...]}
+                for group_id, skus in substitute_groups.items():
+                    if not isinstance(skus, list):
+                        raise ValueError(f"Gruppo '{group_id}' deve contenere una lista di SKU")
+            else:
+                substitute_groups = {}
+        except (json.JSONDecodeError, ValueError) as e:
+            messagebox.showerror(
+                "Errore JSON",
+                f"Formato non valido per gruppi sostituti:\n{e}\n\n"
+                "Usa formato: {\"group_id\": [\"sku1\", \"sku2\"]}"
+            )
+            return
+        
+        # Prepare settings dict
+        settings = csv_layer.read_settings()
+        if "promo_cannibalization" not in settings:
+            settings["promo_cannibalization"] = {}
+        
+        cannib = settings["promo_cannibalization"]
+        cannib["enabled"] = {"value": self.cannibalization_enabled_var.get()}
+        cannib["downlift_min"] = {"value": self.downlift_min_var.get()}
+        cannib["downlift_max"] = {"value": self.downlift_max_var.get()}
+        cannib["min_events_target_sku"] = {"value": self.downlift_min_events_var.get()}
+        cannib["min_valid_days"] = {"value": self.downlift_min_valid_days_var.get()}
+        cannib["substitute_groups"] = {"value": substitute_groups}
+        
+        # Write settings
+        csv_layer.write_settings(settings)
+        messagebox.showinfo("Salvato", "Impostazioni cannibalizzazione salvate.")
     
     def _refresh_settings_tab(self):
         """Refresh settings tab with current values."""
@@ -6746,6 +6977,114 @@ class DesktopOrderApp:
     def _filter_uplift_table(self):
         """Filter uplift report table by SKU."""
         self._refresh_uplift_report()
+    
+    def _refresh_cannibalization_report(self):
+        """Calculate and display cannibalization (downlift) report for all substitute groups."""
+        try:
+            # Clear all items
+            for item in self.cannib_treeview.get_children():
+                self.cannib_treeview.delete(item)
+            
+            # Read data
+            all_skus = self.csv_layer.read_skus()
+            promo_windows = self.csv_layer.read_promo_calendar()
+            sales_records = self.csv_layer.read_sales()
+            transactions = self.csv_layer.read_transactions()
+            settings = self.csv_layer.read_settings()
+            
+            # Check if cannibalization enabled
+            cannib_settings = settings.get("promo_cannibalization", {})
+            enabled = cannib_settings.get("enabled", {}).get("value", False)
+            if not enabled:
+                messagebox.showinfo("Cannibalizzazione Disabilitata", "Attiva cannibalizzazione nelle Impostazioni per generare il report.")
+                return
+            
+            # Get substitute groups
+            substitute_groups = cannib_settings.get("substitute_groups", {}).get("value", {})
+            if not substitute_groups:
+                messagebox.showinfo("Nessun Gruppo", "Configura gruppi di sostituti nelle Impostazioni per generare il report.")
+                return
+            
+            # Get filter text
+            filter_text = self.cannib_filter_var.get().strip().lower()
+            
+            # Calculate downlift for each target SKU in each group
+            from src.domain.promo_uplift import estimate_cannibalization_downlift
+            
+            for group_id, sku_list in substitute_groups.items():
+                for target_sku in sku_list:
+                    # Apply SKU filter
+                    if filter_text and filter_text not in target_sku.lower():
+                        continue
+                    
+                    # Estimate downlift
+                    try:
+                        report = estimate_cannibalization_downlift(
+                            target_sku=target_sku,
+                            group_id=group_id,
+                            all_skus=all_skus,
+                            promo_windows=promo_windows,
+                            sales_records=sales_records,
+                            transactions=transactions,
+                            settings=settings,
+                        )
+                        
+                        if report is None:
+                            # No downlift data available
+                            continue
+                        
+                        # Only show if downlift < 1.0 (actual reduction)
+                        if report.downlift_factor >= 1.0:
+                            continue
+                        
+                        # Format downlift with 2 decimals
+                        downlift_display = f"{report.downlift_factor:.2f}x"
+                        reduction_pct = int((1.0 - report.downlift_factor) * 100)
+                        reduction_display = f"-{reduction_pct}%"
+                        
+                        # Determine tag for confidence color
+                        tag = f"confidence_{report.confidence}"
+                        
+                        # Insert row
+                        self.cannib_treeview.insert(
+                            "",
+                            "end",
+                            values=(
+                                report.target_sku,
+                                report.driver_sku,
+                                downlift_display,
+                                reduction_display,
+                                report.confidence,
+                                report.n_events,
+                            ),
+                            tags=(tag,)
+                        )
+                    
+                    except Exception as e:
+                        logging.error(f"Downlift estimation failed for {target_sku}: {e}")
+                        # Show row with error
+                        self.cannib_treeview.insert(
+                            "",
+                            "end",
+                            values=(
+                                target_sku,
+                                "Error",
+                                "N/A",
+                                "N/A",
+                                "C",
+                                0,
+                            ),
+                            tags=("confidence_C",)
+                        )
+            
+            messagebox.showinfo("Report Completato", f"Report cannibalizzazione calcolato per {len(substitute_groups)} gruppi di sostituti.")
+        
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile generare report cannibalizzazione:\n{str(e)}")
+    
+    def _filter_cannibalization_table(self):
+        """Filter cannibalization report table by SKU."""
+        self._refresh_cannibalization_report()
 
 
 def main():

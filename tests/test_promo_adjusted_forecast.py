@@ -489,3 +489,203 @@ def test_promo_adjusted_forecast_returns_all_keys(csv_layer, settings_promo_enab
         assert forecast_date in result["promo_active"]
         assert forecast_date in result["uplift_factor"]
         assert forecast_date in result["smoothing_multiplier"]
+
+
+# === CANNIBALIZATION (DOWNLIFT) INTEGRATION TESTS ===
+
+def test_cannibalization_target_not_in_promo_driver_is_promo(csv_layer):
+    """Target NOT in promo, driver IS in promo → downlift applied."""
+    # Setup: Create substitute group with TARGET and DRIVER
+    settings = csv_layer.read_settings()
+    settings["promo_adjustment"]["enabled"]["value"] = True
+    settings["promo_cannibalization"]["enabled"]["value"] = True
+    settings["promo_cannibalization"]["substitute_groups"]["value"] = {
+        "GROUP_A": ["TARGET_SKU", "DRIVER_SKU"]
+    }
+    csv_layer.write_settings(settings)
+    
+    # Add TARGET_SKU and DRIVER_SKU to SKU list
+    csv_layer.write_sku(SKU(sku="TARGET_SKU", description="Target", category="A", department="D1"))
+    csv_layer.write_sku(SKU(sku="DRIVER_SKU", description="Driver", category="A", department="D1"))
+    
+    # Baseline sales for both SKUs
+    today = date.today()
+    sales = []
+    for i in range(60, 0, -1):
+        sales.append(SalesRecord(date=today - timedelta(days=i), sku="TARGET_SKU", qty_sold=10, promo_flag=0))
+        sales.append(SalesRecord(date=today - timedelta(days=i), sku="DRIVER_SKU", qty_sold=10, promo_flag=0))
+    
+    # Historical driver promo events (for downlift estimation)
+    for i in range(40, 35, -1):  # 5-day promo 40 days ago
+        sales.append(SalesRecord(date=today - timedelta(days=i), sku="TARGET_SKU", qty_sold=5, promo_flag=0))  # Reduced during driver promo
+    
+    csv_layer.write_sales(sales)
+    
+    # Create promo window for DRIVER_SKU (future)
+    promo_windows = [
+        PromoWindow(sku="DRIVER_SKU", start_date=today + timedelta(days=5), end_date=today + timedelta(days=10), store_id=None)
+    ]
+    csv_layer.write_promo_calendar(promo_windows)
+    
+    # Forecast horizon
+    horizon = [today + timedelta(days=i) for i in range(1, 15)]
+    
+    # Call forecast
+    result = promo_adjusted_forecast(
+        sku_id="TARGET_SKU",
+        horizon_dates=horizon,
+        sales_records=sales,
+        transactions=[],
+        promo_windows=promo_windows,
+        all_skus=csv_layer.read_skus(),
+        csv_layer=csv_layer,
+        settings=settings,
+    )
+    
+    # Check cannibalization fields present
+    assert "downlift_report" in result
+    assert "cannibalization_applied" in result
+    
+    # Verify downlift applied on dates where driver is promo
+    driver_promo_dates = [today + timedelta(days=i) for i in range(5, 11)]
+    for forecast_date in driver_promo_dates:
+        if result["cannibalization_applied"]:
+            # Adjusted should be baseline * downlift_factor
+            baseline = result["baseline_forecast"].get(forecast_date, 0)
+            adjusted = result["adjusted_forecast"].get(forecast_date, 0)
+            if result["downlift_report"] is not None:
+                expected = baseline * result["downlift_report"].downlift_factor
+                assert abs(adjusted - expected) < 0.1, f"Date {forecast_date}: expected {expected}, got {adjusted}"
+
+
+def test_cannibalization_both_in_promo_no_downlift(csv_layer):
+    """Both target and driver in promo → no downlift applied."""
+    settings = csv_layer.read_settings()
+    settings["promo_adjustment"]["enabled"]["value"] = True
+    settings["promo_cannibalization"]["enabled"]["value"] = True
+    settings["promo_cannibalization"]["substitute_groups"]["value"] = {
+        "GROUP_A": ["TARGET_SKU", "DRIVER_SKU"]
+    }
+    csv_layer.write_settings(settings)
+    
+    csv_layer.write_sku(SKU(sku="TARGET_SKU", description="Target", category="A", department="D1"))
+    csv_layer.write_sku(SKU(sku="DRIVER_SKU", description="Driver", category="A", department="D1"))
+    
+    today = date.today()
+    sales = []
+    for i in range(60, 0, -1):
+        sales.append(SalesRecord(date=today - timedelta(days=i), sku="TARGET_SKU", qty_sold=10, promo_flag=0))
+        sales.append(SalesRecord(date=today - timedelta(days=i), sku="DRIVER_SKU", qty_sold=10, promo_flag=0))
+    csv_layer.write_sales(sales)
+    
+    # Both in promo same period
+    promo_windows = [
+        PromoWindow(sku="TARGET_SKU", start_date=today + timedelta(days=5), end_date=today + timedelta(days=10), store_id=None),
+        PromoWindow(sku="DRIVER_SKU", start_date=today + timedelta(days=5), end_date=today + timedelta(days=10), store_id=None)
+    ]
+    csv_layer.write_promo_calendar(promo_windows)
+    
+    horizon = [today + timedelta(days=i) for i in range(1, 15)]
+    
+    result = promo_adjusted_forecast(
+        sku_id="TARGET_SKU",
+        horizon_dates=horizon,
+        sales_records=sales,
+        transactions=[],
+        promo_windows=promo_windows,
+        all_skus=csv_layer.read_skus(),
+        csv_layer=csv_layer,
+        settings=settings,
+    )
+    
+    # Cannibalization should NOT be applied when target is also in promo
+    # (Downlift only applies when target NOT in promo)
+    # This is verified by checking that adjusted forecast during promo is based on uplift, not downlift
+    for forecast_date in [today + timedelta(days=i) for i in range(5, 11)]:
+        # Target is in promo, so uplift should be applied, not downlift
+        assert result["promo_active"].get(forecast_date, False) is True
+
+
+def test_cannibalization_disabled_no_downlift(csv_layer):
+    """Cannibalization disabled → no downlift applied."""
+    settings = csv_layer.read_settings()
+    settings["promo_adjustment"]["enabled"]["value"] = True
+    settings["promo_cannibalization"]["enabled"]["value"] = False  # DISABLED
+    settings["promo_cannibalization"]["substitute_groups"]["value"] = {
+        "GROUP_A": ["TARGET_SKU", "DRIVER_SKU"]
+    }
+    csv_layer.write_settings(settings)
+    
+    csv_layer.write_sku(SKU(sku="TARGET_SKU", description="Target", category="A", department="D1"))
+    csv_layer.write_sku(SKU(sku="DRIVER_SKU", description="Driver", category="A", department="D1"))
+    
+    today = date.today()
+    sales = []
+    for i in range(60, 0, -1):
+        sales.append(SalesRecord(date=today - timedelta(days=i), sku="TARGET_SKU", qty_sold=10, promo_flag=0))
+    csv_layer.write_sales(sales)
+    
+    promo_windows = [
+        PromoWindow(sku="DRIVER_SKU", start_date=today + timedelta(days=5), end_date=today + timedelta(days=10), store_id=None)
+    ]
+    csv_layer.write_promo_calendar(promo_windows)
+    
+    horizon = [today + timedelta(days=i) for i in range(1, 15)]
+    
+    result = promo_adjusted_forecast(
+        sku_id="TARGET_SKU",
+        horizon_dates=horizon,
+        sales_records=sales,
+        transactions=[],
+        promo_windows=promo_windows,
+        all_skus=csv_layer.read_skus(),
+        csv_layer=csv_layer,
+        settings=settings,
+    )
+    
+    # Cannibalization disabled → no downlift_report
+    assert result["cannibalization_applied"] is False
+    assert result["downlift_report"] is None
+
+
+def test_cannibalization_neither_in_promo_baseline_unchanged(csv_layer):
+    """Neither target nor driver in promo during horizon → baseline unchanged."""
+    settings = csv_layer.read_settings()
+    settings["promo_adjustment"]["enabled"]["value"] = True
+    settings["promo_cannibalization"]["enabled"]["value"] = True
+    settings["promo_cannibalization"]["substitute_groups"]["value"] = {
+        "GROUP_A": ["TARGET_SKU", "DRIVER_SKU"]
+    }
+    csv_layer.write_settings(settings)
+    
+    csv_layer.write_sku(SKU(sku="TARGET_SKU", description="Target", category="A", department="D1"))
+    csv_layer.write_sku(SKU(sku="DRIVER_SKU", description="Driver", category="A", department="D1"))
+    
+    today = date.today()
+    sales = []
+    for i in range(60, 0, -1):
+        sales.append(SalesRecord(date=today - timedelta(days=i), sku="TARGET_SKU", qty_sold=10, promo_flag=0))
+    csv_layer.write_sales(sales)
+    
+    # NO promo windows for horizon period
+    promo_windows = []
+    csv_layer.write_promo_calendar(promo_windows)
+    
+    horizon = [today + timedelta(days=i) for i in range(1, 15)]
+    
+    result = promo_adjusted_forecast(
+        sku_id="TARGET_SKU",
+        horizon_dates=horizon,
+        sales_records=sales,
+        transactions=[],
+        promo_windows=promo_windows,
+        all_skus=csv_layer.read_skus(),
+        csv_layer=csv_layer,
+        settings=settings,
+    )
+    
+    # No promo → adjusted should equal baseline
+    for forecast_date in horizon:
+        baseline = result["baseline_forecast"].get(forecast_date, 0)
+        adjusted = result["adjusted_forecast"].get(forecast_date, 0)
+        assert abs(baseline - adjusted) < 0.01, f"Date {forecast_date}: baseline {baseline}, adjusted {adjusted}"

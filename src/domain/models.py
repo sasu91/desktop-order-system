@@ -366,6 +366,13 @@ class OrderProposal:
     post_promo_cap_applied: bool = False  # True se qty cap assoluto applicato
     post_promo_dip_factor: float = 1.0  # Dip factor storico stimato (se use_historical_dip)
     post_promo_alert: str = ""  # Alert rischio overstock (es. "Stock > max" o "Shelf-life risk")
+    
+    # Promo cannibalization (downlift when substitute in promo)
+    cannibalization_applied: bool = False  # True se downlift applicato (sku non promo, driver in promo)
+    cannibalization_driver_sku: str = ""  # SKU promo che causa la riduzione
+    cannibalization_downlift_factor: float = 1.0  # Factor applicato (≤1.0, es. 0.75 = -25%)
+    cannibalization_confidence: str = ""  # A/B/C (affidabilità stima)
+    cannibalization_note: str = ""  # Dettaglio riduzione o fallback reason
 
 
 @dataclass

@@ -451,6 +451,13 @@ class OrderWorkflow:
         promo_adjustment_note = ""
         promo_uplift_factor_used = 1.0
         
+        # Cannibalization (downlift) tracking
+        cannibalization_applied_val = False
+        cannibalization_driver_sku_val = ""
+        cannibalization_downlift_factor_val = 1.0
+        cannibalization_confidence_val = ""
+        cannibalization_note_val = ""
+        
         # Check if promo adjustment is enabled in settings
         promo_adj_settings = settings.get("promo_adjustment", {})
         promo_adjustment_enabled = promo_adj_settings.get("enabled", {}).get("value", False)
@@ -500,6 +507,25 @@ class OrderWorkflow:
                     promo_adjustment_note = "Promo attiva: Uplift non disponibile (baseline usata)"
                 else:
                     promo_adjustment_note = "Nessuna promo attiva (baseline usata)"
+                
+                # === CANNIBALIZATION (DOWNLIFT) ===
+                # Track downlift se SKU non in promo ma driver gruppo in promo
+                cannibalization_applied_val = promo_result.get("cannibalization_applied", False)
+                cannibalization_driver_sku_val = ""
+                cannibalization_downlift_factor_val = 1.0
+                cannibalization_confidence_val = ""
+                cannibalization_note_val = ""
+                
+                if cannibalization_applied_val and promo_result.get("downlift_report"):
+                    downlift_rep = promo_result["downlift_report"]
+                    cannibalization_driver_sku_val = downlift_rep.driver_sku
+                    cannibalization_downlift_factor_val = downlift_rep.downlift_factor
+                    cannibalization_confidence_val = downlift_rep.confidence
+                    reduction_pct = (1.0 - downlift_rep.downlift_factor) * 100
+                    cannibalization_note_val = f"Riduzione cannibalizzazione: -{reduction_pct:.1f}% (driver: {downlift_rep.driver_sku}, confidence {downlift_rep.confidence})"
+                    
+                    # Use adjusted forecast (già ridotto da downlift in forecast.py)
+                    forecast_qty = promo_adjusted_forecast_qty
                 
             except Exception as e:
                 logging.warning(f"Promo adjustment failed for SKU {sku}: {e}. Using baseline forecast.")
@@ -1073,6 +1099,12 @@ class OrderWorkflow:
             post_promo_cap_applied=post_promo_cap_applied_val,
             post_promo_dip_factor=post_promo_dip_factor_val,
             post_promo_alert=post_promo_alert_val,
+            # Cannibalization (downlift anti-sostituzione)
+            cannibalization_applied=cannibalization_applied_val,
+            cannibalization_driver_sku=cannibalization_driver_sku_val,
+            cannibalization_downlift_factor=cannibalization_downlift_factor_val,
+            cannibalization_confidence=cannibalization_confidence_val,
+            cannibalization_note=cannibalization_note_val,
         )
     
     def confirm_order(

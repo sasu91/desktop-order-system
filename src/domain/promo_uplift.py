@@ -725,3 +725,211 @@ def estimate_post_promo_dip(
         n_valid_days_total=total_valid_days,
         notes=f"Aggregated from {len(dip_events)} events, median dip clamped to [{dip_floor}, {dip_ceiling}]"
     )
+
+
+# ========== CANNIBALIZATION (DOWNLIFT) ==========
+
+@dataclass
+class DownliftEvent:
+    """Single cannibalization downlift event (target SKU non-promo during driver SKU promo)."""
+    target_sku: str
+    driver_sku: str  # SKU promo che causa riduzione
+    driver_start: date
+    driver_end: date
+    actual_sales_target: float  # Sales target durante promo driver (non-censored days)
+    baseline_pred_target: float  # Baseline target durante promo driver
+    downlift_ratio: float  # actual / baseline (tipicamente < 1.0 se cannibalizzazione)
+    valid_days: int
+    note: str = ""
+
+
+@dataclass
+class DownliftReport:
+    """Target SKU cannibalization downlift estimation report."""
+    target_sku: str
+    driver_sku: str  # Driver principale scelto (max impatto se multipli)
+    downlift_factor: float  # Final aggregated downlift (clamped)
+    confidence: str  # "A", "B", or "C"
+    events_used: List[DownliftEvent]
+    n_events: int
+    n_valid_days_total: int
+    notes: str = ""
+
+
+def estimate_cannibalization_downlift(
+    target_sku: str,
+    substitute_groups: Dict[str, List[str]],
+    promo_windows: List[PromoWindow],
+    sales_records: List[SalesRecord],
+    transactions: List[Transaction],
+    all_skus: List[SKU],
+    downlift_min: float = 0.6,
+    downlift_max: float = 1.0,
+    min_events: int = 2,
+    min_valid_days: int = 7,
+    epsilon: float = 0.1,
+    asof_date: Optional[date] = None,
+) -> Optional[DownliftReport]:
+    """
+    Stima downlift cannibalizzazione per target SKU quando un sostituto dello stesso gruppo è in promo.
+    
+    Logic:
+    - Trova gruppo contenente target_sku
+    - Per ogni evento promo storico di un driver_sku nello stesso gruppo:
+      - Se target NON in promo durante quell'evento
+      - Calcola downlift_event = sales_target_during_driver / baseline_target_during_driver
+    - Aggrega con mediana e clamp [downlift_min, downlift_max]
+    - Se multipli driver attivi nello stesso giorno → scegli max impatto (factor minore)
+    
+    Args:
+        target_sku: SKU per cui stimare downlift
+        substitute_groups: {group_id: [sku...]}
+        promo_windows: Tutti i promo windows
+        sales_records: Tutti i sales records
+        transactions: Tutte le transactions
+        all_skus: Lista SKU (per baseline forecast)
+        downlift_min: Clamp minimo (default 0.6 = max -40%)
+        downlift_max: Clamp massimo (default 1.0 = neutro)
+        min_events: Eventi minimi per confidence alta
+        min_valid_days: Giorni validi totali minimi
+        epsilon: Epsilon denominatore
+        asof_date: Data riferimento (default today)
+    
+    Returns:
+        DownliftReport se applicabile, None se target non in gruppo o dati insufficienti
+    """
+    if asof_date is None:
+        asof_date = date.today()
+    
+    # Trova gruppo contenente target_sku
+    target_group = None
+    for group_id, skus in substitute_groups.items():
+        if target_sku in skus:
+            target_group = skus
+            break
+    
+    if not target_group or len(target_group) < 2:
+        # Target non in gruppo o gruppo troppo piccolo
+        return None
+    
+    # Trova potenziali driver (altri SKU nel gruppo)
+    potential_drivers = [s for s in target_group if s != target_sku]
+    
+    if not potential_drivers:
+        return None
+    
+    # Estrai eventi promo driver storici
+    all_downlift_events = []
+    
+    for driver_sku in potential_drivers:
+        # Eventi promo del driver
+        driver_promo_events = extract_promo_events(
+            driver_sku, promo_windows, sales_records, transactions, asof_date
+        )
+        
+        for driver_start, driver_end in driver_promo_events:
+            # Verifica se target è in promo nello stesso periodo (se sì, skip)
+            target_in_promo = False
+            for pw in promo_windows:
+                if pw.sku == target_sku and pw.start_date <= driver_end and pw.end_date >= driver_start:
+                    target_in_promo = True
+                    break
+            
+            if target_in_promo:
+                continue  # Skip: entrambi in promo, non cannibalizzazione
+            
+            # Raccogli sales target durante promo driver
+            target_sales_map = {}
+            for sr in sales_records:
+                if sr.sku == target_sku and driver_start <= sr.date <= driver_end:
+                    target_sales_map[sr.date] = sr.qty_sold
+            
+            # Baseline target durante promo driver
+            try:
+                target_baseline_map = baseline_forecast(
+                    sku_id=target_sku,
+                    horizon_dates=[driver_start + timedelta(days=i) for i in range((driver_end - driver_start).days + 1)],
+                    sales_records=sales_records,
+                    transactions=transactions,
+                )
+            except Exception as e:
+                logger.warning(f"Baseline forecast failed for downlift (target {target_sku}, driver {driver_sku}, period {driver_start}-{driver_end}): {e}")
+                continue
+            
+            # Filtra giorni censored
+            actual_sales_target = 0.0
+            baseline_pred_target = 0.0
+            valid_days_count = 0
+            
+            for day_offset in range((driver_end - driver_start).days + 1):
+                check_date = driver_start + timedelta(days=day_offset)
+                
+                if is_day_censored(target_sku, check_date, transactions, sales_records):
+                    continue
+                
+                actual_sales_target += target_sales_map.get(check_date, 0.0)
+                baseline_pred_target += target_baseline_map.get(check_date, 0.0)
+                valid_days_count += 1
+            
+            # Calcola downlift_ratio
+            if baseline_pred_target > epsilon and valid_days_count > 0:
+                downlift_ratio = actual_sales_target / baseline_pred_target
+                all_downlift_events.append(DownliftEvent(
+                    target_sku=target_sku,
+                    driver_sku=driver_sku,
+                    driver_start=driver_start,
+                    driver_end=driver_end,
+                    actual_sales_target=actual_sales_target,
+                    baseline_pred_target=baseline_pred_target,
+                    downlift_ratio=downlift_ratio,
+                    valid_days=valid_days_count,
+                    note=f"Driver {driver_sku} promo {driver_start.isoformat()}-{driver_end.isoformat()}"
+                ))
+    
+    # Aggrega downlift
+    total_valid_days = sum(e.valid_days for e in all_downlift_events)
+    
+    if len(all_downlift_events) >= min_events and total_valid_days >= min_valid_days:
+        # Usa mediana per robustezza
+        downlift_ratios = [e.downlift_ratio for e in all_downlift_events]
+        downlift_factor_raw = statistics.median(downlift_ratios)
+        downlift_factor = max(downlift_min, min(downlift_max, downlift_factor_raw))
+        
+        # Confidence
+        if len(all_downlift_events) >= 3 and total_valid_days >= 14:
+            confidence = "A"
+        elif len(all_downlift_events) >= min_events:
+            confidence = "B"
+        else:
+            confidence = "C"
+        
+        # Trova driver principale (max impatto = downlift_factor minore)
+        # Raggruppa eventi per driver e calcola mediana per driver
+        driver_impacts = {}
+        for event in all_downlift_events:
+            if event.driver_sku not in driver_impacts:
+                driver_impacts[event.driver_sku] = []
+            driver_impacts[event.driver_sku].append(event.downlift_ratio)
+        
+        # Calcola mediana per driver
+        driver_median_impacts = {
+            driver: statistics.median(ratios)
+            for driver, ratios in driver_impacts.items()
+        }
+        
+        # Scegli driver con impatto maggiore (mediana minore)
+        primary_driver = min(driver_median_impacts.keys(), key=lambda d: driver_median_impacts[d])
+        
+        return DownliftReport(
+            target_sku=target_sku,
+            driver_sku=primary_driver,
+            downlift_factor=downlift_factor,
+            confidence=confidence,
+            events_used=all_downlift_events,
+            n_events=len(all_downlift_events),
+            n_valid_days_total=total_valid_days,
+            notes=f"Aggregated from {len(all_downlift_events)} events, median downlift {downlift_factor:.2f}, driver: {primary_driver}"
+        )
+    else:
+        # Dati insufficienti → None (fallback neutro gestito da chiamante)
+        return None

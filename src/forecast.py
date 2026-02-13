@@ -1062,6 +1062,8 @@ def promo_adjusted_forecast(
             "adjustment_enabled": False,
             "smoothing_enabled": smoothing_enabled,
             "uplift_report": None,
+            "downlift_report": None,
+            "cannibalization_applied": False,
         }
     
     # Check if any date in horizon has promo active
@@ -1099,6 +1101,8 @@ def promo_adjusted_forecast(
             "adjustment_enabled": True,
             "smoothing_enabled": smoothing_enabled,
             "uplift_report": None,
+            "downlift_report": None,
+            "cannibalization_applied": False,
         }
     
     # Estimate uplift factor (live calculation, no caching - user decision)
@@ -1163,6 +1167,72 @@ def promo_adjusted_forecast(
         uplift_factor_map[forecast_date] = uplift_factor
         smoothing_multiplier_map[forecast_date] = smoothing_multiplier
     
+    # === CANNIBALIZATION (DOWNLIFT) ===
+    # Se target SKU NON in promo ma driver nello stesso gruppo È in promo, applica riduzione
+    cannibalization_settings = settings.get("promo_cannibalization", {})
+    cannibalization_enabled = cannibalization_settings.get("enabled", {}).get("value", False)
+    downlift_report = None
+    cannibalization_applied = False
+    
+    if cannibalization_enabled:
+        try:
+            # Import downlift estimator
+            try:
+                from src.domain.promo_uplift import estimate_cannibalization_downlift
+            except ImportError:
+                from domain.promo_uplift import estimate_cannibalization_downlift
+            
+            # Load cannibalization config
+            substitute_groups = cannibalization_settings.get("substitute_groups", {}).get("value", {})
+            downlift_min = cannibalization_settings.get("downlift_min", {}).get("value", 0.6)
+            downlift_max = cannibalization_settings.get("downlift_max", {}).get("value", 1.0)
+            min_events = cannibalization_settings.get("min_events_target_sku", {}).get("value", 2)
+            min_valid_days = cannibalization_settings.get("min_valid_days", {}).get("value", 7)
+            epsilon = cannibalization_settings.get("denominator_epsilon", {}).get("value", 0.1)
+            
+            # Estimate downlift
+            downlift_report = estimate_cannibalization_downlift(
+                target_sku=sku_id,
+                substitute_groups=substitute_groups,
+                promo_windows=promo_windows,
+                sales_records=sales_records,
+                transactions=transactions,
+                all_skus=all_skus,
+                downlift_min=downlift_min,
+                downlift_max=downlift_max,
+                min_events=min_events,
+                min_valid_days=min_valid_days,
+                epsilon=epsilon,
+                asof_date=asof_date,
+            )
+            
+            # Se stima riuscita, applica downlift ai giorni NON-promo dove driver È promo
+            if downlift_report and downlift_report.confidence in ["A", "B"]:
+                driver_sku = downlift_report.driver_sku
+                downlift_factor = downlift_report.downlift_factor
+                
+                for forecast_date in horizon_dates:
+                    # Applica solo se target NON in promo
+                    if not promo_active_map[forecast_date]:
+                        # Controlla se driver È in promo questa data
+                        driver_in_promo = is_promo(
+                            check_date=forecast_date,
+                            sku=driver_sku,
+                            promo_windows=filtered_promo_windows,
+                            store_id=None,
+                        )
+                        
+                        if driver_in_promo:
+                            # Applica downlift a baseline (target non in promo)
+                            baseline_value = baseline_predictions[forecast_date]
+                            adjusted_predictions[forecast_date] = max(0.0, baseline_value * downlift_factor)
+                            cannibalization_applied = True
+        
+        except Exception as e:
+            import logging
+            logging.warning(f"Cannibalization downlift failed for SKU {sku_id}: {e}. Skipping downlift.")
+            downlift_report = None
+    
     return {
         "baseline_forecast": baseline_predictions,
         "adjusted_forecast": adjusted_predictions,
@@ -1172,6 +1242,8 @@ def promo_adjusted_forecast(
         "adjustment_enabled": True,
         "smoothing_enabled": smoothing_enabled,
         "uplift_report": uplift_report,
+        "downlift_report": downlift_report,
+        "cannibalization_applied": cannibalization_applied,
     }
 
 
