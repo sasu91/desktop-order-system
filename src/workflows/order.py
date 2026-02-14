@@ -1370,6 +1370,7 @@ def calculate_daily_sales_average(
     transactions=None,
     asof_date: Optional[date] = None,
     oos_detection_mode: str = "strict",
+    return_details: bool = False,
 ) -> tuple:
     """
     Calculate average daily sales for a SKU using calendar-based approach.
@@ -1388,6 +1389,10 @@ def calculate_daily_sales_average(
     - Uses ASSORTMENT_OUT/ASSORTMENT_IN events in ledger to identify excluded periods
     - Prevents "contamination" of forecast when SKU sells residual stock while discontinued
     
+    NEW BEHAVIOR (2026-02-14):
+    - Added optional return_details parameter for KPI analysis
+    - When True, returns detailed OOS days and assortment exclusion lists
+    
     Args:
         sales_records: List of SalesRecord objects
         sku: SKU identifier
@@ -1395,11 +1400,20 @@ def calculate_daily_sales_average(
         transactions: List of Transaction objects (for OOS detection + override markers + assortment tracking)
         asof_date: As-of date for calculation (defaults to today)
         oos_detection_mode: "strict" (on_hand==0) or "relaxed" (on_hand+on_order==0)
+        return_details: If True, return detailed breakdown (default: False for backward compatibility)
     
     Returns:
-        Tuple (avg_daily_sales, oos_days_count):
-        - avg_daily_sales: Average daily sales qty (excluding OOS days + out-of-assortment periods)
-        - oos_days_count: Number of OOS days detected (after override exclusions)
+        If return_details=False (default):
+            Tuple (avg_daily_sales, oos_days_count):
+            - avg_daily_sales: Average daily sales qty (excluding OOS days + out-of-assortment periods)
+            - oos_days_count: Number of OOS days detected (after override exclusions)
+        
+        If return_details=True:
+            Tuple (avg_daily_sales, oos_days_count, oos_days_list, out_of_assortment_days_list):
+            - avg_daily_sales: Average daily sales qty
+            - oos_days_count: Number of OOS days detected
+            - oos_days_list: List of dates identified as OOS (sorted)
+            - out_of_assortment_days_list: List of dates when SKU was out of assortment (sorted)
     
     Example:
         If last 30 days have 10 days with sales, 15 days zero, 5 days OOS (3 with overrides):
@@ -1511,7 +1525,14 @@ def calculate_daily_sales_average(
     avg_sales = total_sales / valid_days if valid_days > 0 else 0.0
     oos_days_count = len(oos_days)
     
-    return (avg_sales, oos_days_count)
+    if return_details:
+        # Return detailed breakdown for KPI analysis
+        oos_days_list = sorted(list(oos_days))
+        out_of_assortment_days_list = sorted(list(out_of_assortment_days))
+        return (avg_sales, oos_days_count, oos_days_list, out_of_assortment_days_list)
+    else:
+        # Backward compatible return for existing callers
+        return (avg_sales, oos_days_count)
 
 
 def calculate_prebuild_target(

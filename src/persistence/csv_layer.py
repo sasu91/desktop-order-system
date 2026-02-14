@@ -38,6 +38,8 @@ class CSVLayer:
         "audit_log.csv": ["timestamp", "operation", "sku", "details", "user"],
         "lots.csv": ["lot_id", "sku", "expiry_date", "qty_on_hand", "receipt_id", "receipt_date"],
         "promo_calendar.csv": ["sku", "start_date", "end_date", "store_id", "promo_flag"],
+        "kpi_daily.csv": ["sku", "date", "oos_rate", "lost_sales_est", "wmape", "bias", 
+                          "fill_rate", "otif_rate", "avg_delay_days", "n_periods", "lookback_days", "mode"],
     }
     
     def __init__(self, data_dir: Optional[Path] = None):
@@ -797,6 +799,135 @@ class CSVLayer:
                     window.store_id or "",
                     str(window.promo_flag),
                 ])
+    
+    # ============ KPI Daily Operations ============
+    
+    def read_kpi_daily(self, sku: Optional[str] = None, lookback_days: Optional[int] = None) -> List[Dict]:
+        """
+        Read KPI daily snapshots.
+        
+        Args:
+            sku: Filter by SKU (optional)
+            lookback_days: Filter by lookback_days parameter used in calculation (optional)
+        
+        Returns:
+            List of KPI snapshot dicts with keys:
+            - sku, date, oos_rate, lost_sales_est, wmape, bias,
+              fill_rate, otif_rate, avg_delay_days, n_periods, lookback_days, mode
+        """
+        kpis = self._read_csv("kpi_daily.csv")
+        
+        # Apply filters
+        if sku:
+            kpis = [k for k in kpis if k.get("sku") == sku]
+        
+        if lookback_days is not None:
+            lookback_str = str(lookback_days)
+            kpis = [k for k in kpis if k.get("lookback_days") == lookback_str]
+        
+        return kpis
+    
+    def write_kpi_daily_batch(self, kpi_snapshots: List[Dict]):
+        """
+        Write a batch of KPI snapshots (overwrites existing file).
+        
+        Args:
+            kpi_snapshots: List of dicts with KPI data (sku, date, oos_rate, etc.)
+        
+        Use for bulk snapshots (e.g., "Calcola KPI" button recalculating all SKUs).
+        """
+        rows = []
+        for snapshot in kpi_snapshots:
+            rows.append({
+                "sku": snapshot.get("sku", ""),
+                "date": snapshot.get("date", ""),
+                "oos_rate": str(snapshot.get("oos_rate", "")),
+                "lost_sales_est": str(snapshot.get("lost_sales_est", "")),
+                "wmape": str(snapshot.get("wmape", "")),
+                "bias": str(snapshot.get("bias", "")),
+                "fill_rate": str(snapshot.get("fill_rate", "")),
+                "otif_rate": str(snapshot.get("otif_rate", "")),
+                "avg_delay_days": str(snapshot.get("avg_delay_days", "")),
+                "n_periods": str(snapshot.get("n_periods", "")),
+                "lookback_days": str(snapshot.get("lookback_days", "")),
+                "mode": snapshot.get("mode", ""),
+            })
+        
+        self._write_csv("kpi_daily.csv", rows)
+    
+    def upsert_kpi_snapshot(
+        self,
+        sku: str,
+        date_str: str,
+        lookback_days: int,
+        mode: str,
+        oos_rate: Optional[float] = None,
+        lost_sales_est: Optional[float] = None,
+        wmape: Optional[float] = None,
+        bias: Optional[float] = None,
+        fill_rate: Optional[float] = None,
+        otif_rate: Optional[float] = None,
+        avg_delay_days: Optional[float] = None,
+        n_periods: Optional[int] = None,
+    ):
+        """
+        Upsert a single KPI snapshot (update if exists, insert if new).
+        
+        Uniqueness key: (sku, date, lookback_days, mode)
+        
+        Args:
+            sku: SKU code
+            date_str: Snapshot date (ISO format)
+            lookback_days: Lookback period used
+            mode: OOS detection mode ("strict" or "relaxed")
+            oos_rate: OOS rate (0.0-1.0)
+            lost_sales_est: Lost sales estimate (units)
+            wmape: WMAPE percentage
+            bias: Forecast bias
+            fill_rate: Fill rate (0.0-1.0)
+            otif_rate: OTIF rate (0.0-1.0)
+            avg_delay_days: Average delay in days
+            n_periods: Number of periods analyzed
+        
+        Use for incremental daily updates.
+        """
+        # Read existing KPIs
+        existing_kpis = self._read_csv("kpi_daily.csv")
+        
+        # Find matching entry
+        matched_idx = None
+        for i, kpi in enumerate(existing_kpis):
+            if (kpi.get("sku") == sku and 
+                kpi.get("date") == date_str and
+                kpi.get("lookback_days") == str(lookback_days) and
+                kpi.get("mode") == mode):
+                matched_idx = i
+                break
+        
+        # Build new snapshot
+        new_snapshot = {
+            "sku": sku,
+            "date": date_str,
+            "oos_rate": str(oos_rate) if oos_rate is not None else "",
+            "lost_sales_est": str(lost_sales_est) if lost_sales_est is not None else "",
+            "wmape": str(wmape) if wmape is not None else "",
+            "bias": str(bias) if bias is not None else "",
+            "fill_rate": str(fill_rate) if fill_rate is not None else "",
+            "otif_rate": str(otif_rate) if otif_rate is not None else "",
+            "avg_delay_days": str(avg_delay_days) if avg_delay_days is not None else "",
+            "n_periods": str(n_periods) if n_periods is not None else "",
+            "lookback_days": str(lookback_days),
+            "mode": mode,
+        }
+        
+        # Update or insert
+        if matched_idx is not None:
+            existing_kpis[matched_idx] = new_snapshot
+        else:
+            existing_kpis.append(new_snapshot)
+        
+        # Write back
+        self._write_csv("kpi_daily.csv", existing_kpis)
     
     # ============ Order Log Operations ============
     

@@ -430,6 +430,103 @@ class DesktopOrderApp:
         self.kpi_turnover_label = ttk.Label(kpi_row2, text="Indice di Rotazione: -", font=("Helvetica", 11, "bold"))
         self.kpi_turnover_label.pack(side="left", padx=20)
         
+        # === REORDER KPI ANALYSIS ===
+        reorder_kpi_frame = ttk.LabelFrame(main_frame, text="Analisi KPI Riordino", padding=10)
+        reorder_kpi_frame.pack(side="top", fill="both", expand=False, pady=(0, 10))
+        
+        # Controls row
+        controls_row = ttk.Frame(reorder_kpi_frame)
+        controls_row.pack(side="top", fill="x", pady=(0, 10))
+        
+        # Lookback days
+        ttk.Label(controls_row, text="Periodo Analisi (giorni):").pack(side="left", padx=(0, 5))
+        self.kpi_lookback_var = tk.IntVar(value=30)
+        ttk.Spinbox(
+            controls_row,
+            from_=7,
+            to=365,
+            textvariable=self.kpi_lookback_var,
+            width=8
+        ).pack(side="left", padx=(0, 15))
+        
+        # OOS detection mode
+        ttk.Label(controls_row, text="Modalità OOS:").pack(side="left", padx=(0, 5))
+        self.kpi_mode_var = tk.StringVar(value="strict")
+        mode_combo = ttk.Combobox(
+            controls_row,
+            textvariable=self.kpi_mode_var,
+            values=["strict", "relaxed"],
+            state="readonly",
+            width=10
+        )
+        mode_combo.pack(side="left", padx=(0, 15))
+        
+        # Calculate button
+        ttk.Button(
+            controls_row,
+            text="📊 Calcola KPI",
+            command=self._calculate_kpi_all_skus,
+            style="Accent.TButton"
+        ).pack(side="left", padx=(0, 15))
+        
+        # Refresh from cache button
+        ttk.Button(
+            controls_row,
+            text="🔄 Aggiorna da Cache",
+            command=self._refresh_kpi_from_cache
+        ).pack(side="left", padx=(0, 5))
+        
+        # Info label
+        ttk.Label(
+            controls_row,
+            text="📌 Tip: Calcola KPI aggiorna la cache, Aggiorna da Cache legge i valori salvati",
+            font=("Helvetica", 8, "italic"),
+            foreground="gray"
+        ).pack(side="left", padx=(10, 0))
+        
+        # KPI Table
+        kpi_table_frame = ttk.Frame(reorder_kpi_frame)
+        kpi_table_frame.pack(side="top", fill="both", expand=True)
+        
+        kpi_scroll_y = ttk.Scrollbar(kpi_table_frame, orient="vertical")
+        kpi_scroll_y.pack(side="right", fill="y")
+        
+        kpi_scroll_x = ttk.Scrollbar(kpi_table_frame, orient="horizontal")
+        kpi_scroll_x.pack(side="bottom", fill="x")
+        
+        self.kpi_treeview = ttk.Treeview(
+            kpi_table_frame,
+            columns=("SKU", "OOS_Rate", "Lost_Sales", "WMAPE", "Bias", "Fill_Rate", "OTIF", "Delay"),
+            height=8,
+            yscrollcommand=kpi_scroll_y.set,
+            xscrollcommand=kpi_scroll_x.set,
+            show="headings"
+        )
+        kpi_scroll_y.config(command=self.kpi_treeview.yview)
+        kpi_scroll_x.config(command=self.kpi_treeview.xview)
+        
+        # Column configuration
+        self.kpi_treeview.column("SKU", anchor=tk.W, width=120)
+        self.kpi_treeview.column("OOS_Rate", anchor=tk.CENTER, width=100)
+        self.kpi_treeview.column("Lost_Sales", anchor=tk.CENTER, width=100)
+        self.kpi_treeview.column("WMAPE", anchor=tk.CENTER, width=90)
+        self.kpi_treeview.column("Bias", anchor=tk.CENTER, width=90)
+        self.kpi_treeview.column("Fill_Rate", anchor=tk.CENTER, width=100)
+        self.kpi_treeview.column("OTIF", anchor=tk.CENTER, width=90)
+        self.kpi_treeview.column("Delay", anchor=tk.CENTER, width=110)
+        
+        # Headings
+        self.kpi_treeview.heading("SKU", text="SKU", anchor=tk.W)
+        self.kpi_treeview.heading("OOS_Rate", text="OOS Rate %", anchor=tk.CENTER)
+        self.kpi_treeview.heading("Lost_Sales", text="Lost Sales Est.", anchor=tk.CENTER)
+        self.kpi_treeview.heading("WMAPE", text="WMAPE %", anchor=tk.CENTER)
+        self.kpi_treeview.heading("Bias", text="Bias", anchor=tk.CENTER)
+        self.kpi_treeview.heading("Fill_Rate", text="Fill Rate %", anchor=tk.CENTER)
+        self.kpi_treeview.heading("OTIF", text="OTIF %", anchor=tk.CENTER)
+        self.kpi_treeview.heading("Delay", text="Avg Delay (days)", anchor=tk.CENTER)
+        
+        self.kpi_treeview.pack(fill="both", expand=True)
+        
         # === CONTENT AREA (CHARTS + TABLES) ===
         content_frame = ttk.Frame(main_frame)
         content_frame.pack(fill="both", expand=True)
@@ -780,6 +877,180 @@ class DesktopOrderApp:
         self.selected_dashboard_sku = None
         self.dashboard_sku_var.set("")  # Clear entry field
         self._refresh_dashboard()
+    
+    def _calculate_kpi_all_skus(self):
+        """Calculate reorder KPIs for all SKUs and write to cache."""
+        try:
+            from ..analytics.kpi import (
+                compute_oos_kpi,
+                estimate_lost_sales,
+                compute_forecast_accuracy,
+                compute_supplier_proxy_kpi,
+            )
+            
+            # Get parameters
+            lookback_days = self.kpi_lookback_var.get()
+            mode = self.kpi_mode_var.get()
+            today = date.today()
+            
+            # Get all SKUs
+            sku_ids = self.csv_layer.get_all_sku_ids()
+            
+            if not sku_ids:
+                messagebox.showinfo("Info", "Nessun SKU disponibile per l'analisi KPI.")
+                return
+            
+            # Show progress (simplified - could add a progress bar later)
+            logger.info(f"Calculating KPIs for {len(sku_ids)} SKUs...")
+            
+            # Calculate KPIs for each SKU
+            kpi_snapshots = []
+            
+            for sku in sku_ids:
+                try:
+                    # Compute all KPIs
+                    oos_result = compute_oos_kpi(sku, lookback_days, mode, self.csv_layer, today)
+                    lost_sales_result = estimate_lost_sales(sku, lookback_days, mode, self.csv_layer, today, method="forecast")
+                    accuracy_result = compute_forecast_accuracy(sku, lookback_days, mode, self.csv_layer, today)
+                    supplier_result = compute_supplier_proxy_kpi(sku, lookback_days, self.csv_layer, today)
+                    
+                    # Build snapshot
+                    snapshot = {
+                        "sku": sku,
+                        "date": today.isoformat(),
+                        "oos_rate": oos_result.get("oos_rate"),
+                        "lost_sales_est": lost_sales_result.get("lost_units_est"),
+                        "wmape": accuracy_result.get("wmape"),
+                        "bias": accuracy_result.get("bias"),
+                        "fill_rate": supplier_result.get("fill_rate"),
+                        "otif_rate": supplier_result.get("otif_rate"),
+                        "avg_delay_days": supplier_result.get("avg_delay_days"),
+                        "n_periods": oos_result.get("n_periods"),
+                        "lookback_days": lookback_days,
+                        "mode": mode,
+                    }
+                    
+                    kpi_snapshots.append(snapshot)
+                
+                except Exception as e:
+                    logger.warning(f"KPI calculation failed for SKU {sku}: {str(e)}")
+                    continue
+            
+            # Write to cache
+            self.csv_layer.write_kpi_daily_batch(kpi_snapshots)
+            
+            logger.info(f"KPI calculation complete. {len(kpi_snapshots)} SKUs processed.")
+            
+            # Refresh display from cache
+            self._refresh_kpi_from_cache()
+            
+            messagebox.showinfo("Success", f"KPI calcolati per {len(kpi_snapshots)} SKU.\nRisultati salvati in kpi_daily.csv")
+        
+        except Exception as e:
+            logger.error(f"KPI calculation failed: {str(e)}", exc_info=True)
+            messagebox.showerror("Errore", f"Calcolo KPI fallito: {str(e)}")
+    
+    def _refresh_kpi_from_cache(self):
+        """Refresh KPI table from cached data."""
+        try:
+            # Get parameters
+            lookback_days = self.kpi_lookback_var.get()
+            mode = self.kpi_mode_var.get()
+            
+            # Read cached KPIs
+            cached_kpis = self.csv_layer.read_kpi_daily(lookback_days=lookback_days)
+            
+            # Filter by mode
+            cached_kpis = [k for k in cached_kpis if k.get("mode") == mode]
+            
+            # Clear existing table
+            self.kpi_treeview.delete(*self.kpi_treeview.get_children())
+            
+            if not cached_kpis:
+                logger.info("No cached KPI data found. Use 'Calcola KPI' to generate.")
+                return
+            
+            # Sort by SKU
+            cached_kpis.sort(key=lambda k: k.get("sku", ""))
+            
+            # Populate table
+            for kpi in cached_kpis:
+                sku = kpi.get("sku", "")
+                
+                # Format values
+                oos_rate = kpi.get("oos_rate", "")
+                if oos_rate and oos_rate != "":
+                    try:
+                        oos_rate = f"{float(oos_rate) * 100:.1f}%"
+                    except (ValueError, TypeError):
+                        oos_rate = "n/a"
+                else:
+                    oos_rate = "n/a"
+                
+                lost_sales = kpi.get("lost_sales_est", "")
+                if lost_sales and lost_sales != "":
+                    try:
+                        lost_sales = f"{float(lost_sales):.1f}"
+                    except (ValueError, TypeError):
+                        lost_sales = "n/a"
+                else:
+                    lost_sales = "n/a"
+                
+                wmape = kpi.get("wmape", "")
+                if wmape and wmape != "":
+                    try:
+                        wmape = f"{float(wmape):.1f}%"
+                    except (ValueError, TypeError):
+                        wmape = "n/a"
+                else:
+                    wmape = "n/a"
+                
+                bias = kpi.get("bias", "")
+                if bias and bias != "":
+                    try:
+                        bias = f"{float(bias):.2f}"
+                    except (ValueError, TypeError):
+                        bias = "n/a"
+                else:
+                    bias = "n/a"
+                
+                fill_rate = kpi.get("fill_rate", "")
+                if fill_rate and fill_rate != "":
+                    try:
+                        fill_rate = f"{float(fill_rate) * 100:.1f}%"
+                    except (ValueError, TypeError):
+                        fill_rate = "n/a"
+                else:
+                    fill_rate = "n/a"
+                
+                otif = kpi.get("otif_rate", "")
+                if otif and otif != "":
+                    try:
+                        otif = f"{float(otif) * 100:.1f}%"
+                    except (ValueError, TypeError):
+                        otif = "n/a"
+                else:
+                    otif = "n/a"
+                
+                delay = kpi.get("avg_delay_days", "")
+                if delay and delay != "":
+                    try:
+                        delay = f"{float(delay):.1f}"
+                    except (ValueError, TypeError):
+                        delay = "n/a"
+                else:
+                    delay = "n/a"
+                
+                # Insert row
+                self.kpi_treeview.insert("", "end", values=(
+                    sku, oos_rate, lost_sales, wmape, bias, fill_rate, otif, delay
+                ))
+            
+            logger.info(f"KPI table refreshed with {len(cached_kpis)} entries.")
+        
+        except Exception as e:
+            logger.error(f"KPI refresh from cache failed: {str(e)}", exc_info=True)
+            messagebox.showerror("Errore", f"Aggiornamento KPI fallito: {str(e)}")
     
     def _refresh_sku_detail_charts(self):
         """Refresh SKU-specific detail charts (sales 30d + stock evolution 30d) using main dashboard charts."""

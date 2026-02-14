@@ -14,6 +14,12 @@ from .target_resolver import (
     MIN_CSL,
     MAX_CSL,
 )
+from .kpi import (
+    compute_oos_kpi,
+    estimate_lost_sales,
+    compute_forecast_accuracy,
+    compute_supplier_proxy_kpi,
+)
 
 __all__ = [
     "ServiceLevelMetric",
@@ -26,4 +32,8 @@ __all__ = [
     "PERISHABLE_THRESHOLD_DAYS",
     "MIN_CSL",
     "MAX_CSL",
+    "compute_oos_kpi",
+    "estimate_lost_sales",
+    "compute_forecast_accuracy",
+    "compute_supplier_proxy_kpi",
 ]
