@@ -1056,7 +1056,7 @@ class DesktopOrderApp:
     
     def _run_closed_loop_analysis(self):
         """Execute closed-loop analysis and display results."""
-        from analytics import run_closed_loop
+        from analytics.closed_loop import run_closed_loop
         from datetime import datetime
         
         try:
@@ -3809,9 +3809,19 @@ class DesktopOrderApp:
             
             # Get KPI data for this SKU
             kpi = kpi_map.get(sku)
-            oos_rate = float(kpi.get("oos_rate", 0.0)) if kpi else 0.0
-            otif = float(kpi.get("otif_rate", 100.0)) if kpi else 100.0
-            wmape = float(kpi.get("wmape", 0.0)) if kpi else 0.0
+            
+            # Helper to safely convert KPI values to float
+            def safe_float(value, default=0.0):
+                if value is None or value == '' or value == 'None':
+                    return default
+                try:
+                    return float(value)
+                except (ValueError, TypeError):
+                    return default
+            
+            oos_rate = safe_float(kpi.get("oos_rate"), 0.0) if kpi else 0.0
+            otif = safe_float(kpi.get("otif_rate"), 100.0) if kpi else 100.0
+            wmape = safe_float(kpi.get("wmape"), 0.0) if kpi else 0.0
             
             unfulfilled = unfulfilled_map.get(sku, 0)
             shelf_life = sku_obj.shelf_life_days if sku_obj.shelf_life_days else 0
