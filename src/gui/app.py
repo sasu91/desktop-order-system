@@ -1052,6 +1052,117 @@ class DesktopOrderApp:
             logger.error(f"KPI refresh from cache failed: {str(e)}", exc_info=True)
             messagebox.showerror("Errore", f"Aggiornamento KPI fallito: {str(e)}")
     
+    def _run_closed_loop_analysis(self):
+        """Execute closed-loop analysis and display results."""
+        from analytics import run_closed_loop
+        from datetime import datetime
+        
+        try:
+            # Check if enabled
+            settings = self.csv_layer.read_settings()
+            cl_enabled = settings.get("closed_loop", {}).get("enabled", {}).get("value", False)
+            action_mode = settings.get("closed_loop", {}).get("action_mode", {}).get("value", "suggest")
+            
+            if not cl_enabled:
+                result = messagebox.askyesno(
+                    "Closed-Loop Disabilitato",
+                    "Il sistema closed-loop è disabilitato nelle impostazioni.\n\n"
+                    "Vuoi eseguire l'analisi comunque (solo report, nessuna modifica)?"
+                )
+                if not result:
+                    return
+            
+            # Confirm if action_mode is "apply"
+            if action_mode == "apply" and cl_enabled:
+                result = messagebox.askyesno(
+                    "Conferma Applicazione Automatica",
+                    "⚠️ ATTENZIONE: Modalità 'apply' attiva!\n\n"
+                    "Le modifiche suggerite verranno APPLICATE AUTOMATICAMENTE ai parametri SKU.\n\n"
+                    "Vuoi procedere con l'analisi e l'applicazione automatica?",
+                    icon="warning"
+                )
+                if not result:
+                    return
+            
+            # Run analysis
+            asof_date = datetime.now()
+            
+            logger.info(f"Running closed-loop analysis asof {asof_date.strftime('%Y-%m-%d')}")
+            report = run_closed_loop(self.csv_layer, asof_date)
+            
+            # Update treeview with results
+            self._refresh_closed_loop_results(report)
+            
+            # Show summary
+            summary_msg = (
+                f"Analisi Closed-Loop Completata\n\n"
+                f"Data Analisi: {report.asof_date}\n"
+                f"Modalità: {report.action_mode}\n"
+                f"Abilitato: {'Sì' if report.enabled else 'No'}\n\n"
+                f"SKU Processati: {report.skus_processed}\n"
+                f"SKU con Proposte: {report.skus_with_changes}\n"
+                f"SKU Bloccati (WMAPE alto): {report.skus_blocked}\n"
+            )
+            
+            if report.action_mode == "apply" and report.enabled:
+                summary_msg += f"SKU Modificati: {report.skus_applied}\n"
+            
+            messagebox.showinfo("Successo", summary_msg)
+            
+            logger.info(f"Closed-loop analysis completed: {report.skus_processed} SKUs, {report.skus_with_changes} changes, {report.skus_blocked} blocked")
+        
+        except Exception as e:
+            logger.exception("Error running closed-loop analysis")
+            messagebox.showerror("Errore", f"Errore nell'analisi closed-loop: {str(e)}")
+    
+    def _refresh_closed_loop_results(self, report):
+        """Refresh closed-loop results treeview with report data."""
+        # Clear existing rows
+        for item in self.closed_loop_treeview.get_children():
+            self.closed_loop_treeview.delete(item)
+        
+        # Populate with decisions
+        for decision in report.decisions:
+            # Format values
+            csl_current = f"{decision.current_csl:.3f}"
+            csl_suggested = f"{decision.suggested_csl:.3f}"
+            delta = f"{decision.delta_csl:+.3f}" if decision.delta_csl != 0 else "0.000"
+            
+            oos = f"{decision.oos_rate * 100:.1f}%" if decision.oos_rate is not None else "n/a"
+            wmape = f"{decision.wmape * 100:.1f}%" if decision.wmape is not None else "n/a"
+            waste = f"{decision.waste_rate * 100:.1f}%" if decision.waste_rate is not None else "n/a"
+            
+            # Translate action
+            action_map = {
+                "increase": "▲ Aumenta",
+                "decrease": "▼ Riduci",
+                "hold": "● Hold",
+                "blocked": "✖ Bloccato"
+            }
+            action_text = action_map.get(decision.action, decision.action)
+            
+            # Get tag for color
+            tag = decision.action
+            
+            # Insert row
+            self.closed_loop_treeview.insert(
+                "", "end",
+                values=(
+                    decision.sku,
+                    csl_current,
+                    csl_suggested,
+                    delta,
+                    action_text,
+                    decision.reason,
+                    oos,
+                    wmape,
+                    waste
+                ),
+                tags=(tag,)
+            )
+        
+        logger.info(f"Closed-loop results refreshed with {len(report.decisions)} decisions")
+    
     def _refresh_sku_detail_charts(self):
         """Refresh SKU-specific detail charts (sales 30d + stock evolution 30d) using main dashboard charts."""
         if not MATPLOTLIB_AVAILABLE or not self.selected_dashboard_sku:
@@ -5530,6 +5641,7 @@ class DesktopOrderApp:
         self._build_shelf_life_settings_tab()
         self._build_dashboard_settings_tab()
         self._build_service_level_settings_tab()
+        self._build_closed_loop_settings_tab()
         self._build_holidays_settings_tab()
         self._build_promo_cannibalization_settings_tab()
         
@@ -6338,6 +6450,193 @@ class DesktopOrderApp:
         
         self._create_param_rows(scrollable_frame, parameters, "service_level")
     
+    def _build_closed_loop_settings_tab(self):
+        """Build Closed-Loop KPI-Driven Tuning Configuration sub-tab."""
+        tab_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(tab_frame, text="🔄 Closed-Loop")
+        
+        # Scrollable container
+        scroll_container = ttk.Frame(tab_frame)
+        scroll_container.pack(fill="both", expand=True)
+        
+        canvas = tk.Canvas(scroll_container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Enable mouse wheel scrolling
+        def _on_mousewheel(event):
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
+        
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        
+        # Instructions
+        instructions = ttk.Label(
+            scrollable_frame,
+            text="Sistema closed-loop che usa KPI (OOS rate, forecast accuracy, waste) per proporre/applicare "
+                 "aggiustamenti controllati a target CSL per SKU. Abilita con cautela (mode='suggest' consigliato per test).",
+            foreground="gray",
+            font=("Helvetica", 9, "italic"),
+            wraplength=700,
+            justify="left"
+        )
+        instructions.pack(fill="x", pady=(0, 15))
+        
+        # Closed-Loop Parameters
+        parameters = [
+            {
+                "key": "cl_enabled",
+                "label": "✓ Abilitato",
+                "description": "Abilita closed-loop tuning automatico (False = nessun aggiustamento automatico)",
+                "type": "bool"
+            },
+            {
+                "key": "cl_review_frequency_days",
+                "label": "Frequenza Review (giorni)",
+                "description": "Ogni quanti giorni eseguire analisi closed-loop (consigliato: 7-14 giorni)",
+                "type": "int",
+                "min": 1,
+                "max": 90
+            },
+            {
+                "key": "cl_max_alpha_step_per_review",
+                "label": "Max Step CSL per Review",
+                "description": "Massimo incremento/decremento CSL per ciclo review (es. 0.02 = max ±2%)",
+                "type": "float",
+                "min": 0.001,
+                "max": 0.10
+            },
+            {
+                "key": "cl_oos_rate_threshold",
+                "label": "Soglia OOS Rate",
+                "description": "Soglia % OOS per triggerare aumento CSL (es. 0.05 = 5% stockout rate)",
+                "type": "float",
+                "min": 0.0,
+                "max": 1.0
+            },
+            {
+                "key": "cl_wmape_threshold",
+                "label": "Soglia WMAPE (Reliability)",
+                "description": "Soglia WMAPE max per forecast affidabile (blocca CSL change se superata)",
+                "type": "float",
+                "min": 0.0,
+                "max": 2.0
+            },
+            {
+                "key": "cl_waste_rate_threshold",
+                "label": "Soglia Waste Rate (Perishable)",
+                "description": "Soglia % waste per deperibili che triggera riduzione CSL (es. 0.10 = 10%)",
+                "type": "float",
+                "min": 0.0,
+                "max": 1.0
+            },
+            {
+                "key": "cl_min_waste_events",
+                "label": "Min Eventi WASTE",
+                "description": "Numero minimo eventi WASTE nel lookback per decisioni robuste waste-based",
+                "type": "int",
+                "min": 1,
+                "max": 50
+            },
+            {
+                "key": "cl_action_mode",
+                "label": "Modalità Azione",
+                "description": "Mode: 'suggest' (solo report, no auto-update) o 'apply' (aggiorna automaticamente SKU.target_csl)",
+                "type": "choice",
+                "choices": ["suggest", "apply"]
+            },
+            {
+                "key": "cl_min_csl_absolute",
+                "label": "CSL Min Assoluto",
+                "description": "Floor assoluto per CSL (hard limit, override resolver MIN_CSL)",
+                "type": "float",
+                "min": 0.01,
+                "max": 0.999
+            },
+            {
+                "key": "cl_max_csl_absolute",
+                "label": "CSL Max Assoluto",
+                "description": "Ceiling assoluto per CSL (hard limit, override resolver MAX_CSL)",
+                "type": "float",
+                "min": 0.01,
+                "max": 0.9999
+            }
+        ]
+        
+        self._create_param_rows(scrollable_frame, parameters, "closed_loop")
+        
+        # Add action button section
+        action_frame = ttk.LabelFrame(scrollable_frame, text="⚙️ Esecuzione Analisi", padding=10)
+        action_frame.pack(fill="x", pady=(20, 10))
+        
+        ttk.Label(
+            action_frame,
+            text="Esegui analisi closed-loop manualmente per visualizzare decisioni proposte:",
+            font=("Helvetica", 9)
+        ).pack(anchor="w", pady=(0, 10))
+        
+        btn_frame = ttk.Frame(action_frame)
+        btn_frame.pack(fill="x")
+        
+        ttk.Button(
+            btn_frame,
+            text="▶ Esegui Analisi Closed-Loop",
+            command=self._run_closed_loop_analysis
+        ).pack(side="left", padx=5)
+        
+        # Results treeview
+        results_frame = ttk.LabelFrame(scrollable_frame, text="📊 Risultati Ultima Analisi", padding=10)
+        results_frame.pack(fill="both", expand=True, pady=(10, 0))
+        
+        # Create treeview
+        columns = ("SKU", "CSL Attuale", "CSL Suggerito", "Delta", "Azione", "Ragione", "OOS%", "WMAPE%", "Waste%")
+        self.closed_loop_treeview = ttk.Treeview(results_frame, columns=columns, show="headings", height=12)
+        
+        # Configure columns
+        col_widths = {
+            "SKU": 100,
+            "CSL Attuale": 80,
+            "CSL Suggerito": 90,
+            "Delta": 60,
+            "Azione": 80,
+            "Ragione": 180,
+            "OOS%": 60,
+            "WMAPE%": 70,
+            "Waste%": 65
+        }
+        
+        for col in columns:
+            self.closed_loop_treeview.heading(col, text=col)
+            self.closed_loop_treeview.column(col, width=col_widths.get(col, 100), anchor="center")
+        
+        # Scrollbar for treeview
+        tree_scroll = ttk.Scrollbar(results_frame, orient="vertical", command=self.closed_loop_treeview.yview)
+        self.closed_loop_treeview.configure(yscrollcommand=tree_scroll.set)
+        
+        self.closed_loop_treeview.pack(side="left", fill="both", expand=True)
+        tree_scroll.pack(side="right", fill="y")
+        
+        # Configure tags for actions
+        self.closed_loop_treeview.tag_configure("increase", foreground="blue")
+        self.closed_loop_treeview.tag_configure("decrease", foreground="orange")
+        self.closed_loop_treeview.tag_configure("blocked", foreground="red")
+        self.closed_loop_treeview.tag_configure("hold", foreground="gray")
+    
     def _build_promo_cannibalization_settings_tab(self):
         """Build Promo Cannibalization (Downlift) Configuration sub-tab."""
         tab_frame = ttk.Frame(self.settings_notebook, padding=10)
@@ -6545,6 +6844,16 @@ class DesktopOrderApp:
                 "sl_cluster_low": ("service_level", "cluster_csl_low"),
                 "sl_cluster_seasonal": ("service_level", "cluster_csl_seasonal"),
                 "sl_cluster_perishable": ("service_level", "cluster_csl_perishable"),
+                "cl_enabled": ("closed_loop", "enabled"),
+                "cl_review_frequency_days": ("closed_loop", "review_frequency_days"),
+                "cl_max_alpha_step_per_review": ("closed_loop", "max_alpha_step_per_review"),
+                "cl_oos_rate_threshold": ("closed_loop", "oos_rate_threshold"),
+                "cl_wmape_threshold": ("closed_loop", "wmape_threshold"),
+                "cl_waste_rate_threshold": ("closed_loop", "waste_rate_threshold"),
+                "cl_min_waste_events": ("closed_loop", "min_waste_events"),
+                "cl_action_mode": ("closed_loop", "action_mode"),
+                "cl_min_csl_absolute": ("closed_loop", "min_csl_absolute"),
+                "cl_max_csl_absolute": ("closed_loop", "max_csl_absolute"),
             }
             
             # Load widget values
@@ -6615,6 +6924,16 @@ class DesktopOrderApp:
                 "sl_cluster_low": ("service_level", "cluster_csl_low"),
                 "sl_cluster_seasonal": ("service_level", "cluster_csl_seasonal"),
                 "sl_cluster_perishable": ("service_level", "cluster_csl_perishable"),
+                "cl_enabled": ("closed_loop", "enabled"),
+                "cl_review_frequency_days": ("closed_loop", "review_frequency_days"),
+                "cl_max_alpha_step_per_review": ("closed_loop", "max_alpha_step_per_review"),
+                "cl_oos_rate_threshold": ("closed_loop", "oos_rate_threshold"),
+                "cl_wmape_threshold": ("closed_loop", "wmape_threshold"),
+                "cl_waste_rate_threshold": ("closed_loop", "waste_rate_threshold"),
+                "cl_min_waste_events": ("closed_loop", "min_waste_events"),
+                "cl_action_mode": ("closed_loop", "action_mode"),
+                "cl_min_csl_absolute": ("closed_loop", "min_csl_absolute"),
+                "cl_max_csl_absolute": ("closed_loop", "max_csl_absolute"),
             }
             
             # Update settings from widgets

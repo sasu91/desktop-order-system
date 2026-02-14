@@ -20,6 +20,11 @@ from .kpi import (
     compute_forecast_accuracy,
     compute_supplier_proxy_kpi,
 )
+from .closed_loop import (
+    run_closed_loop,
+    ClosedLoopDecision,
+    ClosedLoopReport,
+)
 
 __all__ = [
     "ServiceLevelMetric",
@@ -36,4 +41,7 @@ __all__ = [
     "estimate_lost_sales",
     "compute_forecast_accuracy",
     "compute_supplier_proxy_kpi",
+    "run_closed_loop",
+    "ClosedLoopDecision",
+    "ClosedLoopReport",
 ]

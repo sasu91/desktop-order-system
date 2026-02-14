@@ -1472,6 +1472,65 @@ class CSVLayer:
                     "max": 0.9999,
                     "description": "Target CSL for PERISHABLE SKUs (shelf_life <= 7 days)"
                 }
+            },
+            "closed_loop": {
+                "enabled": {
+                    "value": False,
+                    "description": "Enable closed-loop KPI-driven parameter tuning (False = no automatic adjustments)"
+                },
+                "review_frequency_days": {
+                    "value": 7,
+                    "min": 1,
+                    "max": 90,
+                    "description": "Frequency (days) for closed-loop review cycles"
+                },
+                "max_alpha_step_per_review": {
+                    "value": 0.02,
+                    "min": 0.001,
+                    "max": 0.10,
+                    "description": "Maximum CSL adjustment step per review cycle (e.g., 0.02 = max ±2% change)"
+                },
+                "oos_rate_threshold": {
+                    "value": 0.05,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "description": "OOS rate threshold to trigger CSL increase (e.g., 0.05 = 5% stockout rate)"
+                },
+                "wmape_threshold": {
+                    "value": 0.60,
+                    "min": 0.0,
+                    "max": 2.0,
+                    "description": "WMAPE threshold for forecast reliability check (blocks CSL changes if exceeded)"
+                },
+                "waste_rate_threshold": {
+                    "value": 0.10,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "description": "Waste rate threshold for perishables to trigger CSL reduction (e.g., 0.10 = 10% waste)"
+                },
+                "min_waste_events": {
+                    "value": 3,
+                    "min": 1,
+                    "max": 50,
+                    "description": "Minimum WASTE events in lookback period for robust waste-based decisions"
+                },
+                "action_mode": {
+                    "value": "suggest",
+                    "choices": ["suggest", "apply"],
+                    "description": "Action mode: 'suggest' (report only), 'apply' (automatically update SKU.target_csl)"
+                },
+                "min_csl_absolute": {
+                    "value": 0.50,
+                    "min": 0.01,
+                    "max": 0.999,
+                    "description": "Absolute minimum CSL (hard floor, overrides resolver MIN_CSL)"
+                },
+                "max_csl_absolute": {
+                    "value": 0.999,
+                    "min": 0.01,
+                    "max": 0.9999,
+                    "description": "Absolute maximum CSL (hard ceiling, overrides resolver MAX_CSL)"
+                }
             }
         }
         
