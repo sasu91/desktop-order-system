@@ -378,6 +378,17 @@ class OrderProposal:
     cannibalization_downlift_factor: float = 1.0  # Factor applicato (≤1.0, es. 0.75 = -25%)
     cannibalization_confidence: str = ""  # A/B/C (affidabilità stima)
     cannibalization_note: str = ""  # Dettaglio riduzione o fallback reason
+    
+    # CSL-based policy (Target Service Level mode)
+    csl_policy_mode: str = ""  # "legacy" or "csl"
+    csl_alpha_target: float = 0.0  # Target service level (alpha from resolver)
+    csl_alpha_eff: float = 0.0  # Effective alpha after censored boost
+    csl_reorder_point: float = 0.0  # S (reorder point) from compute_order
+    csl_forecast_demand: float = 0.0  # μ_P (forecast demand over protection period)
+    csl_sigma_horizon: float = 0.0  # σ_P (demand uncertainty over protection period)
+    csl_z_score: float = 0.0  # z-score for target CSL
+    csl_lane: str = ""  # STANDARD, SATURDAY, or MONDAY
+    csl_n_censored: int = 0  # Number of censored periods detected
 
 
 @dataclass

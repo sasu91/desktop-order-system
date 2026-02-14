@@ -1079,6 +1079,10 @@ class CSVLayer:
                 "forecast_method": {
                     "value": "simple",
                     "auto_apply_to_new_sku": False
+                },
+                "policy_mode": {
+                    "value": "legacy",
+                    "auto_apply_to_new_sku": False
                 }
             },
             "monte_carlo": {

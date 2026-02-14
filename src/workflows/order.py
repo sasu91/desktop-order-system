@@ -9,6 +9,10 @@ from ..domain.models import Stock, OrderProposal, OrderConfirmation, Transaction
 from ..persistence.csv_layer import CSVLayer
 from ..domain.ledger import StockCalculator, ShelfLifeCalculator
 from ..domain.promo_uplift import is_in_post_promo_window, estimate_post_promo_dip
+from ..analytics.target_resolver import TargetServiceLevelResolver
+from ..domain.calendar import Lane, next_receipt_date, calculate_protection_period_days
+from ..analytics.pipeline import build_open_pipeline
+from ..replenishment_policy import compute_order, OrderConstraints
 
 
 def _normalize_boost_to_fraction(boost: float) -> float:
@@ -159,6 +163,53 @@ class OrderWorkflow:
             "horizon_mode": _get_param("mc_horizon_mode", "horizon_mode", "auto"),
             "horizon_days": _get_param("mc_horizon_days", "horizon_days", 14),
         }
+    
+    def _deduce_lane(
+        self,
+        target_receipt_date: Optional[date],
+        protection_period_days: Optional[int],
+        order_date: date
+    ) -> Lane:
+        """
+        Deduce Lane from target_receipt_date and protection_period_days.
+        
+        Uses reverse-engineering: try different lanes and see which one matches
+        the provided target_receipt_date and protection_period_days.
+        
+        Args:
+            target_receipt_date: Target receipt date (calendar-aware)
+            protection_period_days: Protection period P (calendar-aware)
+            order_date: Order date (typically today)
+        
+        Returns:
+            Lane enum (STANDARD, SATURDAY, MONDAY). Defaults to STANDARD if no match.
+        """
+        if not target_receipt_date or not protection_period_days:
+            return Lane.STANDARD
+        
+        # Try each lane and see if it produces matching results
+        for lane_candidate in [Lane.SATURDAY, Lane.MONDAY, Lane.STANDARD]:
+            try:
+                # Calculate expected receipt_date and protection_period for this lane
+                expected_receipt_date = next_receipt_date(order_date, lane_candidate)
+                expected_protection_period = calculate_protection_period_days(
+                    order_date, lane_candidate
+                )
+                
+                # Check if both match
+                if (expected_receipt_date == target_receipt_date and
+                    expected_protection_period == protection_period_days):
+                    return lane_candidate
+            except ValueError:
+                # Lane validation failed (e.g., SATURDAY from Thursday)
+                continue
+        
+        # Fallback to STANDARD if no match
+        logging.debug(
+            f"Could not deduce lane for target_receipt_date={target_receipt_date}, "
+            f"protection_period={protection_period_days}. Using STANDARD."
+        )
+        return Lane.STANDARD
 
     
     def generate_proposal(
@@ -176,6 +227,7 @@ class OrderWorkflow:
         protection_period_days: Optional[int] = None,
         transactions: Optional[List[Transaction]] = None,
         sales_records: Optional[List[SalesRecord]] = None,
+        pipeline_extra: Optional[List[dict]] = None,
     ) -> OrderProposal:
         """
         Generate order proposal based on stock and sales history.
@@ -205,6 +257,7 @@ class OrderWorkflow:
             protection_period_days: Protection period P (calendar-aware, replaces lead_time + review_period)
             transactions: All transactions (required for inventory_position calculation if target_receipt_date provided)
             sales_records: All sales records (required for inventory_position calculation if target_receipt_date provided)
+            pipeline_extra: Extra pipeline items for CSL mode (Friday dual-lane support). List of dicts with keys: receipt_date (date), qty (int). Appended to unfulfilled orders from order_logs.csv.
         
         Returns:
             OrderProposal with suggested quantity (adjusted for pack_size, MOQ, and max_stock cap)
@@ -265,6 +318,23 @@ class OrderWorkflow:
         settings = self.csv_layer.read_settings()
         global_forecast_method = settings.get("reorder_engine", {}).get("forecast_method", {}).get("value", "simple")
         mc_show_comparison = settings.get("monte_carlo", {}).get("show_comparison", {}).get("value", False)
+        
+        # === POLICY MODE SELECTION (LEGACY vs CSL) ===
+        policy_mode = settings.get("reorder_engine", {}).get("policy_mode", {}).get("value", "legacy")
+        
+        # Resolve target CSL (alpha) for CSL mode
+        target_alpha = 0.95  # Default fallback
+        if policy_mode == "csl":
+            try:
+                resolver = TargetServiceLevelResolver(settings)
+                if sku_obj:
+                    target_alpha = resolver.get_target_csl(sku_obj)
+                else:
+                    # Fallback to default CSL if no SKU object
+                    target_alpha = settings.get("service_level", {}).get("default_csl", {}).get("value", 0.95)
+            except Exception as e:
+                logging.warning(f"Failed to resolve target CSL for {sku}: {e}. Using default 0.95")
+                target_alpha = 0.95
         
         # === SHELF LIFE INTEGRATION (Fase 2/3) ===
         # Calculate usable stock BEFORE forecast to use in IP and waste_rate
@@ -634,26 +704,111 @@ class OrderWorkflow:
                 logging.warning(f"MC comparison failed for SKU {sku}: {e}")
                 mc_comparison_qty = None
         
-        # Use simulation for intermittent demand
-        if use_simulation:
-            sim_qty, sim_trigger, sim_notes = simulate_intermittent_demand(
-                daily_sales_avg=daily_sales_avg,
-                current_ip=inventory_position,
-                pack_size=pack_size,
-                lead_time=lead_time,
-                review_period=review_period,
-                moq=moq,
-                max_stock=max_stock,
-            )
-            proposed_qty_raw = sim_qty
-            simulation_used = True
-            simulation_trigger_day = sim_trigger
-            simulation_notes = sim_notes
-            proposed_qty_before_rounding = proposed_qty_raw
+        # === POLICY MODE BRANCH: CSL vs LEGACY ===
+        csl_breakdown = {}  # Store CSL calculation details
+        
+        if policy_mode == "csl":
+            # CSL mode: use compute_order from replenishment_policy.py
+            # Build open pipeline from unfulfilled orders + pipeline_extra
+            try:
+                order_date = date.today()
+                pipeline = build_open_pipeline(self.csv_layer, sku, order_date)
+                
+                # Append pipeline_extra if provided (Friday dual-lane support)
+                if pipeline_extra:
+                    pipeline.extend(pipeline_extra)
+                    # Re-sort by receipt_date
+                    pipeline.sort(key=lambda x: x["receipt_date"])
+                
+                # Deduce lane from calendar parameters
+                lane = self._deduce_lane(target_receipt_date, protection_period_days, order_date)
+                
+                # Build order constraints
+                constraints = OrderConstraints(
+                    pack_size=pack_size,
+                    moq=moq,
+                    max_stock=max_stock
+                )
+                
+                # Prepare sales history for compute_order
+                if sales_records:
+                    history = [
+                        {"date": rec.date, "qty_sold": rec.qty_sold}
+                        for rec in sales_records if rec.sku == sku
+                    ]
+                else:
+                    history = []
+                
+                # Call compute_order
+                csl_result = compute_order(
+                    sku=sku,
+                    order_date=order_date,
+                    lane=lane,
+                    alpha=target_alpha,
+                    on_hand=usable_qty,  # Use shelf-life adjusted on_hand
+                    pipeline=pipeline,
+                    constraints=constraints,
+                    history=history,
+                    window_weeks=12,  # Default 12 weeks for forecast
+                    censored_flags=None,  # TODO: integrate censored days detection
+                )
+                
+                # Extract proposed_qty_raw from CSL result
+                proposed_qty_raw = int(csl_result.get("order_final", 0))
+                proposed_qty_before_rounding = proposed_qty_raw
+                
+                # Store CSL breakdown for OrderProposal
+                csl_breakdown = {
+                    "policy_mode": "csl",
+                    "alpha_target": target_alpha,
+                    "alpha_eff": csl_result.get("alpha_eff", target_alpha),
+                    "reorder_point": csl_result.get("reorder_point", 0.0),
+                    "forecast_demand": csl_result.get("forecast_demand", 0.0),
+                    "sigma_horizon": csl_result.get("sigma_horizon", 0.0),
+                    "z_score": csl_result.get("z_score", 0.0),
+                    "lane": lane.value,
+                    "n_censored": csl_result.get("n_censored", 0),
+                }
+                
+                logging.info(
+                    f"CSL policy for {sku}: lane={lane.value}, alpha={target_alpha:.3f}, "
+                    f"S={csl_result.get('reorder_point', 0):.1f}, "
+                    f"order_final={proposed_qty_raw}"
+                )
+                
+            except Exception as e:
+                logging.error(f"CSL computation failed for {sku}: {e}. Falling back to legacy mode.")
+                # Fallback to legacy formula
+                proposed_qty_raw = max(0, S - inventory_position)
+                proposed_qty_before_rounding = proposed_qty_raw
+                csl_breakdown = {"policy_mode": "legacy_fallback"}
+        
         else:
-            # Standard formula: proposed = max(0, S − IP)
-            proposed_qty_raw = max(0, S - inventory_position)
-            proposed_qty_before_rounding = proposed_qty_raw
+            # LEGACY mode: traditional formula with optional simulation
+            csl_breakdown = {"policy_mode": "legacy"}
+            
+            # Use simulation for intermittent demand
+            if use_simulation:
+                sim_qty, sim_trigger, sim_notes = simulate_intermittent_demand(
+                    daily_sales_avg=daily_sales_avg,
+                    current_ip=inventory_position,
+                    pack_size=pack_size,
+                    lead_time=lead_time,
+                    review_period=review_period,
+                    moq=moq,
+                    max_stock=max_stock,
+                )
+                proposed_qty_raw = sim_qty
+                simulation_used = True
+                simulation_trigger_day = sim_trigger
+                simulation_notes = sim_notes
+                proposed_qty_before_rounding = proposed_qty_raw
+            else:
+                # Standard formula: proposed = max(0, S − IP)
+                proposed_qty_raw = max(0, S - inventory_position)
+                proposed_qty_before_rounding = proposed_qty_raw
+        
+        # === END POLICY MODE BRANCH ===
         
         # === PROMO PREBUILD ANTICIPATION ===
         # Calculate prebuild quantity if upcoming promo and this order arrives before promo start
@@ -1105,6 +1260,16 @@ class OrderWorkflow:
             cannibalization_downlift_factor=cannibalization_downlift_factor_val,
             cannibalization_confidence=cannibalization_confidence_val,
             cannibalization_note=cannibalization_note_val,
+            # CSL policy breakdown
+            csl_policy_mode=str(csl_breakdown.get("policy_mode", "")),
+            csl_alpha_target=float(csl_breakdown.get("alpha_target", 0.0)),
+            csl_alpha_eff=float(csl_breakdown.get("alpha_eff", 0.0)),
+            csl_reorder_point=float(csl_breakdown.get("reorder_point", 0.0)),
+            csl_forecast_demand=float(csl_breakdown.get("forecast_demand", 0.0)),
+            csl_sigma_horizon=float(csl_breakdown.get("sigma_horizon", 0.0)),
+            csl_z_score=float(csl_breakdown.get("z_score", 0.0)),
+            csl_lane=str(csl_breakdown.get("lane", "")),
+            csl_n_censored=int(csl_breakdown.get("n_censored", 0)),
         )
     
     def confirm_order(

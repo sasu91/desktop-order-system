@@ -1163,6 +1163,23 @@ class DesktopOrderApp:
         details.append(f"S = {to_colli(proposal.target_S, pack_size)}")
         details.append("")
         
+        # CSL Breakdown (if CSL mode used)
+        if proposal.csl_policy_mode == "csl":
+            details.append("═══ CSL POLICY BREAKDOWN ═══")
+            details.append(f"Policy Mode: CSL (Target Service Level)")
+            details.append(f"Lane: {proposal.csl_lane}")
+            details.append(f"Target α (CSL): {proposal.csl_alpha_target:.3f}")
+            if proposal.csl_alpha_eff != proposal.csl_alpha_target:
+                details.append(f"Effective α (after censored boost): {proposal.csl_alpha_eff:.3f}")
+            details.append(f"z-score: {proposal.csl_z_score:.2f}")
+            details.append("")
+            details.append(f"Reorder Point S: {proposal.csl_reorder_point:.1f} pz")
+            details.append(f"Forecast Demand μ_P: {proposal.csl_forecast_demand:.1f} pz")
+            details.append(f"Demand Uncertainty σ_P: {proposal.csl_sigma_horizon:.1f} pz")
+            if proposal.csl_n_censored > 0:
+                details.append(f"⚠️ Censored periods detected: {proposal.csl_n_censored}")
+            details.append("")
+        
         # Inventory Position
         details.append("═══ INVENTORY POSITION (IP) ═══")
         details.append(f"On Hand: {to_colli(proposal.current_on_hand, pack_size)}")
@@ -5385,6 +5402,13 @@ class DesktopOrderApp:
                 "choices": ["simple", "monte_carlo"]
             },
             {
+                "key": "policy_mode",
+                "label": "🎯 Modalità Policy Ordini",
+                "description": "legacy (formula classica S=forecast+safety) o csl (Target Service Level con calcolo IP ottimale)",
+                "type": "choice",
+                "choices": ["legacy", "csl"]
+            },
+            {
                 "key": "oos_boost_percent",
                 "label": "OOS Boost (%)",
                 "description": "Percentuale di incremento ordine per SKU con giorni OOS",
@@ -6219,6 +6243,7 @@ class DesktopOrderApp:
                 "reorder_point": ("reorder_engine", "reorder_point"),
                 "demand_variability": ("reorder_engine", "demand_variability"),
                 "forecast_method": ("reorder_engine", "forecast_method"),
+                "policy_mode": ("reorder_engine", "policy_mode"),
                 "oos_boost_percent": ("reorder_engine", "oos_boost_percent"),
                 "oos_lookback_days": ("reorder_engine", "oos_lookback_days"),
                 "oos_detection_mode": ("reorder_engine", "oos_detection_mode"),
@@ -6288,6 +6313,7 @@ class DesktopOrderApp:
                 "reorder_point": ("reorder_engine", "reorder_point"),
                 "demand_variability": ("reorder_engine", "demand_variability"),
                 "forecast_method": ("reorder_engine", "forecast_method"),
+                "policy_mode": ("reorder_engine", "policy_mode"),
                 "oos_boost_percent": ("reorder_engine", "oos_boost_percent"),
                 "oos_lookback_days": ("reorder_engine", "oos_lookback_days"),
                 "oos_detection_mode": ("reorder_engine", "oos_detection_mode"),
