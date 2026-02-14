@@ -1531,6 +1531,12 @@ class CSVLayer:
                     "max": 0.9999,
                     "description": "Absolute maximum CSL (hard ceiling, overrides resolver MAX_CSL)"
                 }
+            },
+            "calendar": {
+                "order_days": {
+                    "value": [0, 1, 2, 3, 4],
+                    "description": "Valid order weekdays (0=Mon ... 6=Sun)"
+                }
             }
         }
         

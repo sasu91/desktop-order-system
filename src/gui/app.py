@@ -1796,9 +1796,10 @@ class DesktopOrderApp:
         
         # === CALENDAR-AWARE RECEIPT DATE & PROTECTION PERIOD ===
         # Determine target receipt date and protection period using calendar or manual override
-        from ..domain.calendar import Lane, next_receipt_date, calculate_protection_period_days
+        from ..domain.calendar import Lane, next_receipt_date, calculate_protection_period_days, next_order_opportunity, create_calendar_with_holidays
         
         order_date = date.today()
+        calendar_config = create_calendar_with_holidays(self.csv_layer.data_dir)
         global_receipt_date_str = self.global_receipt_date_var.get().strip()
         lane_str = self.lane_var.get()
         
@@ -1817,19 +1818,57 @@ class DesktopOrderApp:
                 protection_period = max(1, (target_receipt_date - order_date).days)
             except ValueError:
                 # Invalid format: fallback to calendar
-                target_receipt_date = next_receipt_date(order_date, lane)
-                protection_period = calculate_protection_period_days(order_date, lane)
-        else:
-            # Use calendar logic
+                global_receipt_date_str = ""
+
+        if not global_receipt_date_str:
+            # Calendar logic with robust fallback for non-order days and invalid lane/day combos
+            calendar_order_date = order_date
             try:
-                target_receipt_date = next_receipt_date(order_date, lane)
-                protection_period = calculate_protection_period_days(order_date, lane)
+                target_receipt_date = next_receipt_date(calendar_order_date, lane, calendar_config)
+                protection_period = calculate_protection_period_days(calendar_order_date, lane, calendar_config)
             except ValueError as e:
-                # Invalid lane for current day (e.g., SATURDAY on Monday): fallback to STANDARD
-                logger.warning(f"Lane {lane} invalid for {order_date}: {e}. Using STANDARD.")
-                lane = Lane.STANDARD
-                target_receipt_date = next_receipt_date(order_date, lane)
-                protection_period = calculate_protection_period_days(order_date, lane)
+                try:
+                    next_valid_order_date = next_order_opportunity(order_date, calendar_config)
+                except ValueError:
+                    next_valid_order_date = order_date
+
+                if next_valid_order_date != order_date:
+                    use_next_day = messagebox.askyesno(
+                        "Giorno ordine non valido",
+                        (
+                            f"{order_date.strftime('%d/%m/%Y')} non è un giorno d'ordine valido.\n"
+                            f"Vuoi usare il prossimo giorno valido ({next_valid_order_date.strftime('%d/%m/%Y')})?\n\n"
+                            "Se scegli No, l'operazione verrà annullata."
+                        )
+                    )
+                    if not use_next_day:
+                        logger.info(
+                            f"Proposal generation cancelled by user: invalid order day {order_date}, next valid {next_valid_order_date}."
+                        )
+                        return
+                    calendar_order_date = next_valid_order_date
+                else:
+                    calendar_order_date = order_date
+
+                if lane in (Lane.SATURDAY, Lane.MONDAY) and calendar_order_date.weekday() != 4:
+                    logger.warning(
+                        f"Lane {lane} requires Friday order; next valid order date is {calendar_order_date}. Using STANDARD."
+                    )
+                    lane = Lane.STANDARD
+
+                try:
+                    target_receipt_date = next_receipt_date(calendar_order_date, lane, calendar_config)
+                    protection_period = calculate_protection_period_days(calendar_order_date, lane, calendar_config)
+                    logger.warning(
+                        f"Invalid order context for {order_date} ({e}). Using calendar_order_date={calendar_order_date}, lane={lane}."
+                    )
+                except ValueError as final_error:
+                    logger.warning(
+                        f"Calendar fallback failed ({final_error}). Forcing STANDARD lane on original order date {order_date}."
+                    )
+                    lane = Lane.STANDARD
+                    target_receipt_date = order_date + timedelta(days=max(1, int(lead_time)))
+                    protection_period = max(1, (target_receipt_date - order_date).days)
         
         # Get all SKUs
         sku_ids = self.csv_layer.get_all_sku_ids()
@@ -6851,6 +6890,33 @@ class DesktopOrderApp:
             font=("Helvetica", 9, "italic")
         )
         instructions.pack(fill="x", pady=(0, 10))
+
+        # Order weekdays selector
+        order_days_frame = ttk.LabelFrame(tab_frame, text="Giorni validi per ordine", padding=8)
+        order_days_frame.pack(fill="x", pady=(0, 10))
+
+        ttk.Label(
+            order_days_frame,
+            text="Seleziona i giorni in cui è consentito generare ordini.",
+            foreground="gray",
+            font=("Helvetica", 9, "italic")
+        ).pack(anchor="w", pady=(0, 6))
+
+        self.order_days_vars = {
+            0: tk.BooleanVar(value=True),   # Lun
+            1: tk.BooleanVar(value=True),   # Mar
+            2: tk.BooleanVar(value=True),   # Mer
+            3: tk.BooleanVar(value=True),   # Gio
+            4: tk.BooleanVar(value=True),   # Ven
+            5: tk.BooleanVar(value=False),  # Sab
+            6: tk.BooleanVar(value=False),  # Dom
+        }
+
+        days_row = ttk.Frame(order_days_frame)
+        days_row.pack(fill="x")
+
+        for weekday, label in [(0, "Lun"), (1, "Mar"), (2, "Mer"), (3, "Gio"), (4, "Ven"), (5, "Sab"), (6, "Dom")]:
+            ttk.Checkbutton(days_row, text=label, variable=self.order_days_vars[weekday]).pack(side="left", padx=(0, 10))
         
         # Holidays toolbar
         holidays_toolbar = ttk.Frame(tab_frame)
@@ -7471,6 +7537,17 @@ class DesktopOrderApp:
                     section, settings_key = param_map[first_param]
                     param_config = settings.get(section, {}).get(settings_key, {})
                     section_var.set(param_config.get("auto_apply_to_new_sku", True))
+
+            # Load configured order weekdays (0=Mon ... 6=Sun)
+            configured_days = settings.get("calendar", {}).get("order_days", {}).get("value", [0, 1, 2, 3, 4])
+            active_days = {
+                int(day)
+                for day in configured_days
+                if isinstance(day, int) or (isinstance(day, str) and str(day).isdigit())
+            }
+            if hasattr(self, "order_days_vars"):
+                for weekday, var in self.order_days_vars.items():
+                    var.set(weekday in active_days)
         
         except Exception as e:
             messagebox.showerror("Errore", f"Impossibile caricare impostazioni: {str(e)}")
@@ -7551,6 +7628,22 @@ class DesktopOrderApp:
                     "value": widget_data["value_var"].get(),
                     "auto_apply_to_new_sku": auto_apply
                 }
+
+            # Save configured order weekdays (0=Mon ... 6=Sun)
+            selected_order_days = []
+            if hasattr(self, "order_days_vars"):
+                selected_order_days = [weekday for weekday, var in self.order_days_vars.items() if var.get()]
+
+            if not selected_order_days:
+                messagebox.showerror("Errore di Validazione", "Seleziona almeno un giorno valido per ordine.")
+                return
+
+            if "calendar" not in settings:
+                settings["calendar"] = {}
+            settings["calendar"]["order_days"] = {
+                "value": sorted(selected_order_days),
+                "description": "Valid order weekdays (0=Mon ... 6=Sun)"
+            }
             
             # Write to file
             self.csv_layer.write_settings(settings)

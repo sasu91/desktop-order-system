@@ -28,6 +28,7 @@ Usage Examples:
     # P_sat < P_mon (Saturday delivery has shorter protection)
 """
 from datetime import date as Date, timedelta
+import json
 from enum import Enum
 from typing import Tuple, Optional, TYPE_CHECKING
 from dataclasses import dataclass
@@ -364,9 +365,26 @@ def create_calendar_with_holidays(data_dir) -> CalendarConfig:
         >>> # Now is_order_day() and is_delivery_day() respect holiday effects
     """
     holiday_cal = load_holiday_calendar(data_dir)
+
+    order_days = {0, 1, 2, 3, 4}
+    try:
+        from pathlib import Path
+        settings_path = Path(data_dir) / "settings.json"
+        if settings_path.exists():
+            with open(settings_path, "r", encoding="utf-8") as settings_file:
+                settings = json.load(settings_file)
+            configured_days = settings.get("calendar", {}).get("order_days", {}).get("value", None)
+            if isinstance(configured_days, list):
+                valid_days = {int(day) for day in configured_days if isinstance(day, int) or (isinstance(day, str) and day.isdigit())}
+                valid_days = {day for day in valid_days if 0 <= day <= 6}
+                if valid_days:
+                    order_days = valid_days
+    except Exception:
+        # Fallback to default Mon-Fri if settings are unavailable/invalid
+        pass
     
     return CalendarConfig(
-        order_days={0, 1, 2, 3, 4},  # Mon-Fri
+        order_days=order_days,
         delivery_days={0, 1, 2, 3, 4, 5},  # Mon-Sat
         lead_time_days=1,
         saturday_lane_lead_time=1,
