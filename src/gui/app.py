@@ -3970,6 +3970,9 @@ class DesktopOrderApp:
         demand_var = tk.StringVar(value=current_sku.demand_variability.value if current_sku else "STABLE")
         add_field_row(content_order, 8, "Variabilità Domanda:", "Livello variabilità vendite", demand_var, "combobox", choices=["STABLE", "LOW", "HIGH", "SEASONAL"])
         
+        target_csl_var = tk.StringVar(value=str(current_sku.target_csl) if current_sku else "0")
+        add_field_row(content_order, 9, "CSL Target (0-1, 0=cluster):", "0=usa cluster/globale, oppure 0.01-0.99 per override", target_csl_var, "entry")
+        
         # ===== SECTION 3: OOS (Out of Stock) =====
         section_oos = CollapsibleFrame(form_frame, title="⚠️ Out of Stock (OOS)", expanded=False)
         section_oos.pack(fill="x", pady=5)
@@ -4053,6 +4056,7 @@ class DesktopOrderApp:
                 mc_seed_var.get(), mc_output_stat_var.get(), mc_percentile_var.get(),
                 mc_horizon_mode_var.get(), mc_horizon_days_var.get(),
                 in_assortment_var.get(),
+                target_csl_var.get(),
                 current_sku
             ),
         ).pack(side="right", padx=5)
@@ -4088,6 +4092,7 @@ class DesktopOrderApp:
                         mc_seed_str, mc_output_stat_str, mc_percentile_str,
                         mc_horizon_mode_str, mc_horizon_days_str,
                         in_assortment,
+                        target_csl_str,
                         current_sku):
         """Save SKU from form."""
         # Validate inputs
@@ -4114,6 +4119,7 @@ class DesktopOrderApp:
             max_stock = int(max_stock_str)
             reorder_point = int(reorder_point_str)
             oos_boost_percent = float(oos_boost_str)
+            target_csl = float(target_csl_str)
         except ValueError:
             messagebox.showerror("Errore di Validazione", "Tutti i campi numerici devono essere numeri validi.", parent=popup)
             return
@@ -4134,6 +4140,11 @@ class DesktopOrderApp:
         
         if lead_time_days < 0:
             messagebox.showerror("Errore di Validazione", "Lead Time non può essere negativo.", parent=popup)
+            return
+        
+        # Validate target_csl range (0 = use resolver, or 0 < value < 1)
+        if target_csl < 0.0 or target_csl >= 1.0:
+            messagebox.showerror("Errore di Validazione", "CSL Target deve essere 0 (usa resolver) oppure un valore tra 0 e 1 (es. 0.95).", parent=popup)
             return
         
         if max_stock < 1:
@@ -4281,6 +4292,7 @@ class DesktopOrderApp:
                     mc_horizon_mode=mc_horizon_mode,
                     mc_horizon_days=mc_horizon_days,
                     in_assortment=in_assortment,
+                    target_csl=target_csl,
                 )
                 self.csv_layer.write_sku(new_sku)
                 
@@ -4306,7 +4318,7 @@ class DesktopOrderApp:
                     waste_risk_threshold,
                     forecast_method, mc_distribution, mc_n_simulations, mc_random_seed,
                     mc_output_stat, mc_output_percentile, mc_horizon_mode, mc_horizon_days,
-                    in_assortment
+                    in_assortment, target_csl
                 )
                 if success:
                     # Build change details
@@ -5229,6 +5241,7 @@ class DesktopOrderApp:
         self._build_expiry_alerts_settings_tab()
         self._build_shelf_life_settings_tab()
         self._build_dashboard_settings_tab()
+        self._build_service_level_settings_tab()
         self._build_holidays_settings_tab()
         self._build_promo_cannibalization_settings_tab()
         
@@ -5899,6 +5912,137 @@ class DesktopOrderApp:
         # Load holidays
         self._refresh_holidays_table()
     
+    def _build_service_level_settings_tab(self):
+        """Build Service Level Metrics & KPIs Configuration sub-tab."""
+        tab_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(tab_frame, text="🎯 Service Level")
+        
+        # Scrollable container
+        scroll_container = ttk.Frame(tab_frame)
+        scroll_container.pack(fill="both", expand=True)
+        
+        canvas = tk.Canvas(scroll_container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Enable mouse wheel scrolling
+        def _on_mousewheel(event):
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
+        
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        
+        # Instructions
+        instructions = ttk.Label(
+            scrollable_frame,
+            text="Configura metrica e parametri per calcolo Service Level (KPI). "
+                 "Nessun impatto sulla logica ordini in questa fase (solo impostazione framework).",
+            foreground="gray",
+            font=("Helvetica", 9, "italic"),
+            wraplength=700,
+            justify="left"
+        )
+        instructions.pack(fill="x", pady=(0, 15))
+        
+        # Service Level Parameters
+        parameters = [
+            {
+                "key": "sl_metric",
+                "label": "Metrica Service Level",
+                "description": "Metodo di misurazione: 'csl' (Cycle Service Level, probabilità nessun stockout) o 'fill_rate_proxy' (stima via tracciamento OOS)",
+                "type": "choice",
+                "choices": ["csl", "fill_rate_proxy"]
+            },
+            {
+                "key": "sl_default_csl",
+                "label": "CSL Target Default",
+                "description": "Livello di servizio target per CSL (es. 0.95 = 95% probabilità nessun stockout per ciclo riordino)",
+                "type": "float",
+                "min": 0.01,
+                "max": 0.9999
+            },
+            {
+                "key": "sl_fill_rate_target",
+                "label": "Fill Rate Target",
+                "description": "Target fill-rate quando si usa metrica 'fill_rate_proxy' (% domanda servita da stock, es. 0.98 = 98%)",
+                "type": "float",
+                "min": 0.01,
+                "max": 0.9999
+            },
+            {
+                "key": "sl_lookback_days",
+                "label": "Periodo Lookback (giorni)",
+                "description": "Finestra storica per calcolo KPI service level (minimo 7 giorni)",
+                "type": "int",
+                "min": 7,
+                "max": 365
+            },
+            {
+                "key": "sl_oos_mode",
+                "label": "Modalità Rilevamento OOS",
+                "description": "Strictness rilevamento OOS per KPI: 'strict' (IP=0 esatto) o 'relaxed' (sales=0 + IP basso)",
+                "type": "choice",
+                "choices": ["strict", "relaxed"]
+            },
+            {
+                "key": "sl_cluster_high",
+                "label": "CSL Target - HIGH Variability",
+                "description": "Target CSL per SKU con variabilità domanda HIGH (alta volatilità vendite)",
+                "type": "float",
+                "min": 0.01,
+                "max": 0.9999
+            },
+            {
+                "key": "sl_cluster_stable",
+                "label": "CSL Target - STABLE Variability",
+                "description": "Target CSL per SKU con variabilità domanda STABLE (vendite costanti)",
+                "type": "float",
+                "min": 0.01,
+                "max": 0.9999
+            },
+            {
+                "key": "sl_cluster_low",
+                "label": "CSL Target - LOW Variability",
+                "description": "Target CSL per SKU con variabilità domanda LOW (vendite molto basse/sporadiche)",
+                "type": "float",
+                "min": 0.01,
+                "max": 0.9999
+            },
+            {
+                "key": "sl_cluster_seasonal",
+                "label": "CSL Target - SEASONAL Variability",
+                "description": "Target CSL per SKU con variabilità domanda SEASONAL (pattern stagionali)",
+                "type": "float",
+                "min": 0.01,
+                "max": 0.9999
+            },
+            {
+                "key": "sl_cluster_perishable",
+                "label": "CSL Target - PERISHABLE",
+                "description": "Target CSL per SKU deperibili (shelf_life <= 7 giorni)",
+                "type": "float",
+                "min": 0.01,
+                "max": 0.9999
+            }
+        ]
+        
+        self._create_param_rows(scrollable_frame, parameters, "service_level")
+    
     def _build_promo_cannibalization_settings_tab(self):
         """Build Promo Cannibalization (Downlift) Configuration sub-tab."""
         tab_frame = ttk.Frame(self.settings_notebook, padding=10)
@@ -6095,6 +6239,16 @@ class DesktopOrderApp:
                 "expiry_critical_threshold_days": ("expiry_alerts", "critical_threshold_days"),
                 "expiry_warning_threshold_days": ("expiry_alerts", "warning_threshold_days"),
                 "stock_unit_price": ("dashboard", "stock_unit_price"),
+                "sl_metric": ("service_level", "metric"),
+                "sl_default_csl": ("service_level", "default_csl"),
+                "sl_fill_rate_target": ("service_level", "fill_rate_target"),
+                "sl_lookback_days": ("service_level", "lookback_days"),
+                "sl_oos_mode": ("service_level", "oos_mode"),
+                "sl_cluster_high": ("service_level", "cluster_csl_high"),
+                "sl_cluster_stable": ("service_level", "cluster_csl_stable"),
+                "sl_cluster_low": ("service_level", "cluster_csl_low"),
+                "sl_cluster_seasonal": ("service_level", "cluster_csl_seasonal"),
+                "sl_cluster_perishable": ("service_level", "cluster_csl_perishable"),
             }
             
             # Load widget values
@@ -6154,6 +6308,16 @@ class DesktopOrderApp:
                 "expiry_critical_threshold_days": ("expiry_alerts", "critical_threshold_days"),
                 "expiry_warning_threshold_days": ("expiry_alerts", "warning_threshold_days"),
                 "stock_unit_price": ("dashboard", "stock_unit_price"),
+                "sl_metric": ("service_level", "metric"),
+                "sl_default_csl": ("service_level", "default_csl"),
+                "sl_fill_rate_target": ("service_level", "fill_rate_target"),
+                "sl_lookback_days": ("service_level", "lookback_days"),
+                "sl_oos_mode": ("service_level", "oos_mode"),
+                "sl_cluster_high": ("service_level", "cluster_csl_high"),
+                "sl_cluster_stable": ("service_level", "cluster_csl_stable"),
+                "sl_cluster_low": ("service_level", "cluster_csl_low"),
+                "sl_cluster_seasonal": ("service_level", "cluster_csl_seasonal"),
+                "sl_cluster_perishable": ("service_level", "cluster_csl_perishable"),
             }
             
             # Update settings from widgets

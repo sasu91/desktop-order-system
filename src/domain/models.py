@@ -81,6 +81,9 @@ class SKU:
     # Assortment status
     in_assortment: bool = True  # True = in assortment (active), False = out of assortment (discontinued)
     
+    # Service level override (0.0 = use global/cluster resolver)
+    target_csl: float = 0.0  # Target Cycle Service Level (0.0 = resolver, 0.01-0.9999 = override)
+    
     def __post_init__(self):
         if not self.sku or not self.sku.strip():
             raise ValueError("SKU cannot be empty")
@@ -132,6 +135,8 @@ class SKU:
             raise ValueError("MC horizon_mode must be '', 'auto', or 'custom'")
         if self.mc_horizon_days < 0:
             raise ValueError("MC horizon_days cannot be negative")
+        if self.target_csl < 0.0 or self.target_csl >= 1.0:
+            raise ValueError("target_csl must be 0.0 (use resolver) or in range (0, 1)")
 
 
 @dataclass(frozen=True)

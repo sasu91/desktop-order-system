@@ -28,7 +28,7 @@ class CSVLayer:
                      "max_stock", "reorder_point", "demand_variability", "category", "department",
                      "oos_boost_percent", "oos_detection_mode", "oos_popup_preference", "forecast_method",
                      "mc_distribution", "mc_n_simulations", "mc_random_seed", "mc_output_stat",
-                     "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days", "in_assortment"],
+                     "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days", "in_assortment", "target_csl"],
         "transactions.csv": ["date", "sku", "event", "qty", "receipt_date", "note"],
         "sales.csv": ["date", "sku", "qty_sold", "promo_flag"],
         "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "qty_received", "status", "receipt_date",
@@ -145,6 +145,8 @@ class CSVLayer:
                     mc_horizon_days=int(row.get("mc_horizon_days", "0")),
                     # Assortment status (backward-compatible: missing → True)
                     in_assortment=row.get("in_assortment", "true").strip().lower() in ("true", "1", "yes", "t"),
+                    # Service level override (backward-compatible: missing → 0.0 = use resolver)
+                    target_csl=float(row.get("target_csl", "0")),
                 )
                 skus.append(sku)
             except (ValueError, KeyError) as e:
@@ -218,6 +220,8 @@ class CSVLayer:
                     mc_output_percentile=sku.mc_output_percentile,
                     mc_horizon_mode=sku.mc_horizon_mode,
                     mc_horizon_days=sku.mc_horizon_days,
+                    in_assortment=sku.in_assortment,
+                    target_csl=sku.target_csl,
                 )
             except Exception as e:
                 # Fallback to original if auto-classification fails
@@ -259,6 +263,8 @@ class CSVLayer:
             mc_output_percentile=sku.mc_output_percentile,
             mc_horizon_mode=sku.mc_horizon_mode,
             mc_horizon_days=sku.mc_horizon_days,
+            in_assortment=sku.in_assortment,
+            target_csl=sku.target_csl,
         )
         
         rows = self._read_csv("skus.csv")
@@ -293,6 +299,7 @@ class CSVLayer:
             "mc_horizon_mode": final_sku.mc_horizon_mode,
             "mc_horizon_days": str(final_sku.mc_horizon_days),
             "in_assortment": "true" if final_sku.in_assortment else "false",
+            "target_csl": str(final_sku.target_csl),
         })
         self._write_csv("skus.csv", rows)
     
@@ -356,7 +363,8 @@ class CSVLayer:
         mc_output_percentile: int = 0,
         mc_horizon_mode: str = "",
         mc_horizon_days: int = 0,
-        in_assortment: bool = True
+        in_assortment: bool = True,
+        target_csl: float = 0.0
     ) -> bool:
         """
         Update SKU (code, description, EAN, and parameters).
@@ -449,6 +457,7 @@ class CSVLayer:
                 "mc_horizon_mode": row.get("mc_horizon_mode", "").strip(),
                 "mc_horizon_days": row.get("mc_horizon_days", "0").strip() or "0",
                 "in_assortment": row.get("in_assortment", "true").strip() or "true",
+                "target_csl": row.get("target_csl", "0").strip() or "0",
             }
             
             # Update the target row with new values
@@ -484,6 +493,7 @@ class CSVLayer:
                 normalized_row["mc_horizon_mode"] = mc_horizon_mode
                 normalized_row["mc_horizon_days"] = str(mc_horizon_days)
                 normalized_row["in_assortment"] = "true" if in_assortment else "false"
+                normalized_row["target_csl"] = str(target_csl)
                 updated = True
             
             normalized_rows.append(normalized_row)
@@ -1268,6 +1278,65 @@ class CSVLayer:
                     "value": {},
                     "description": "Mappa gruppi sostituti: {group_id: [sku_id...]}. Esempio: {'GROUP_A': ['SKU001', 'SKU002']}"
                 }
+            },
+            "service_level": {
+                "metric": {
+                    "value": "csl",
+                    "choices": ["csl", "fill_rate_proxy"],
+                    "description": "Service level metric: 'csl' (Cycle Service Level) or 'fill_rate_proxy' (OOS-based estimation)"
+                },
+                "default_csl": {
+                    "value": 0.95,
+                    "min": 0.01,
+                    "max": 0.9999,
+                    "description": "Default Cycle Service Level target (probability of no stockout per replenishment cycle)"
+                },
+                "fill_rate_target": {
+                    "value": 0.98,
+                    "min": 0.01,
+                    "max": 0.9999,
+                    "description": "Fill rate target when using fill_rate_proxy metric (% of demand met from stock)"
+                },
+                "lookback_days": {
+                    "value": 30,
+                    "min": 7,
+                    "description": "Lookback period (days) for service level KPI calculations"
+                },
+                "oos_mode": {
+                    "value": "strict",
+                    "choices": ["strict", "relaxed"],
+                    "description": "OOS detection strictness for service level KPIs: 'strict' (IP=0) or 'relaxed' (sales=0 + low IP)"
+                },
+                "cluster_csl_high": {
+                    "value": 0.98,
+                    "min": 0.01,
+                    "max": 0.9999,
+                    "description": "Target CSL for HIGH demand variability SKUs"
+                },
+                "cluster_csl_stable": {
+                    "value": 0.95,
+                    "min": 0.01,
+                    "max": 0.9999,
+                    "description": "Target CSL for STABLE demand variability SKUs"
+                },
+                "cluster_csl_low": {
+                    "value": 0.90,
+                    "min": 0.01,
+                    "max": 0.9999,
+                    "description": "Target CSL for LOW demand variability SKUs"
+                },
+                "cluster_csl_seasonal": {
+                    "value": 0.95,
+                    "min": 0.01,
+                    "max": 0.9999,
+                    "description": "Target CSL for SEASONAL demand variability SKUs"
+                },
+                "cluster_csl_perishable": {
+                    "value": 0.93,
+                    "min": 0.01,
+                    "max": 0.9999,
+                    "description": "Target CSL for PERISHABLE SKUs (shelf_life <= 7 days)"
+                }
             }
         }
         
@@ -1280,13 +1349,21 @@ class CSVLayer:
             with open(settings_file, "r", encoding="utf-8") as f:
                 settings = json.load(f)
                 # Merge with defaults for missing keys
+                keys_added = False
                 for section, params in default_settings.items():
                     if section not in settings:
                         settings[section] = params
+                        keys_added = True
                     else:
                         for param, config in params.items():
                             if param not in settings[section]:
                                 settings[section][param] = config
+                                keys_added = True
+                
+                # Auto-persist if new keys were merged
+                if keys_added:
+                    self.write_settings(settings)
+                
                 return settings
         except (json.JSONDecodeError, IOError) as e:
             print(f"Warning: Could not read settings.json: {e}. Using defaults.")

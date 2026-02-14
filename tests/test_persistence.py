@@ -57,10 +57,11 @@ class TestCSVLayerAutoCreate:
             "sku", "description", "ean", "moq", "pack_size", "lead_time_days",
             "review_period", "safety_stock", "shelf_life_days", "min_shelf_life_days",
             "waste_penalty_mode", "waste_penalty_factor", "waste_risk_threshold",
-            "max_stock", "reorder_point", "demand_variability", "oos_boost_percent",
-            "oos_detection_mode", "oos_popup_preference", "forecast_method",
-            "mc_distribution", "mc_n_simulations", "mc_random_seed", "mc_output_stat",
-            "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days", "in_assortment",
+            "max_stock", "reorder_point", "demand_variability", "category", "department",
+            "oos_boost_percent", "oos_detection_mode", "oos_popup_preference",
+            "forecast_method", "mc_distribution", "mc_n_simulations", "mc_random_seed",
+            "mc_output_stat", "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days",
+            "in_assortment", "target_csl",
         ]
         assert headers == expected_headers
 
@@ -95,6 +96,81 @@ class TestSKUOperations:
         
         sku_ids = csv_layer.get_all_sku_ids()
         assert set(sku_ids) == {"SKU001", "SKU002"}
+    
+    def test_target_csl_roundtrip(self, csv_layer):
+        """Write SKU with target_csl and read it back (roundtrip preservation)."""
+        sku = SKU(
+            sku="SKU_CSL",
+            description="SKU with CSL override",
+            target_csl=0.95
+        )
+        csv_layer.write_sku(sku)
+        
+        skus = csv_layer.read_skus()
+        assert len(skus) == 1
+        assert skus[0].target_csl == 0.95, f"Expected target_csl=0.95, got {skus[0].target_csl}"
+    
+    def test_read_skus_legacy_no_target_csl(self, temp_data_dir):
+        """Test backward compatibility: read legacy skus.csv without target_csl column."""
+        import csv
+        from pathlib import Path
+        
+        # Create legacy skus.csv without target_csl column
+        skus_file = temp_data_dir / "skus.csv"
+        with open(skus_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=[
+                "sku", "description", "ean", "moq", "pack_size", "lead_time_days",
+                "review_period", "safety_stock", "shelf_life_days", "min_shelf_life_days",
+                "waste_penalty_mode", "waste_penalty_factor", "waste_risk_threshold",
+                "max_stock", "reorder_point", "demand_variability", "category", "department",
+                "oos_boost_percent", "oos_detection_mode", "oos_popup_preference",
+                "forecast_method", "mc_distribution", "mc_n_simulations", "mc_random_seed",
+                "mc_output_stat", "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days",
+                "in_assortment"
+                # Note: NO target_csl column
+            ])
+            writer.writeheader()
+            writer.writerow({
+                "sku": "LEGACY001",
+                "description": "Legacy SKU",
+                "ean": "",
+                "moq": "1",
+                "pack_size": "1",
+                "lead_time_days": "7",
+                "review_period": "7",
+                "safety_stock": "0",
+                "shelf_life_days": "0",
+                "min_shelf_life_days": "0",
+                "waste_penalty_mode": "",
+                "waste_penalty_factor": "0",
+                "waste_risk_threshold": "0",
+                "max_stock": "999",
+                "reorder_point": "10",
+                "demand_variability": "STABLE",
+                "category": "",
+                "department": "",
+                "oos_boost_percent": "0",
+                "oos_detection_mode": "",
+                "oos_popup_preference": "ask",
+                "forecast_method": "",
+                "mc_distribution": "",
+                "mc_n_simulations": "0",
+                "mc_random_seed": "0",
+                "mc_output_stat": "",
+                "mc_output_percentile": "0",
+                "mc_horizon_mode": "",
+                "mc_horizon_days": "0",
+                "in_assortment": "true",
+            })
+        
+        # Read using csv_layer (should not crash, should default target_csl to 0.0)
+        from src.persistence.csv_layer import CSVLayer
+        csv_layer_legacy = CSVLayer(temp_data_dir)
+        
+        skus = csv_layer_legacy.read_skus()
+        assert len(skus) == 1
+        assert skus[0].sku == "LEGACY001"
+        assert skus[0].target_csl == 0.0, f"Legacy SKU should default target_csl to 0.0, got {skus[0].target_csl}"
 
 
 class TestTransactionOperations:
