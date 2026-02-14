@@ -1151,6 +1151,101 @@ class OrderWorkflow:
         else:
             receipt_date = date.today() + timedelta(days=effective_lead_time)
         
+        # === EXPLAINABILITY DRIVERS EXTRACTION ===
+        # Extract standard explainability fields for operational transparency
+        
+        # Policy mode and forecast method
+        expl_policy_mode = csl_breakdown.get("policy_mode", "")
+        expl_forecast_method = forecast_method  # Already computed earlier (simple, monte_carlo)
+        
+        # Target CSL, sigma_horizon, reorder_point depend on policy mode
+        if expl_policy_mode == "csl":
+            # CSL mode: extract from csl_breakdown (populated from compute_order result)
+            expl_target_csl = float(csl_breakdown.get("alpha_target", 0.0))
+            expl_sigma_horizon = float(csl_breakdown.get("sigma_horizon", 0.0))
+            expl_reorder_point = int(csl_breakdown.get("reorder_point", 0))
+            expl_equivalent_csl_legacy = 0.0  # Not applicable in CSL mode
+        else:
+            # LEGACY mode: compute equivalent CSL (informational, non-binding)
+            # Approximation: CSL ~ z-score mapped from safety factor
+            expl_target_csl = 0.0  # Legacy doesn't use explicit alpha
+            expl_sigma_horizon = 0.0  # Legacy doesn't compute sigma_horizon explicitly
+            expl_reorder_point = S  # S is the legacy reorder point
+            
+            # Compute equivalent CSL: if safety_stock > 0, infer approximate alpha
+            # Using formula: safety_stock = z * σ * sqrt(lead_time + review_period)
+            # We approximate z from safety_stock / (forecast_qty * variability_factor)
+            # This is informational only, for user comparison
+            if safety_stock > 0 and forecast_qty > 0:
+                # Approximate z-score (assumes variability ~ 0.2 of forecast, rough estimate)
+                approx_variability = 0.2  # Placeholder heuristic
+                approx_sigma_daily = forecast_qty / (lead_time + review_period) * approx_variability if (lead_time + review_period) > 0 else 0
+                approx_sigma_horizon_val = approx_sigma_daily * ((lead_time + review_period) ** 0.5) if approx_sigma_daily > 0 else 0
+                if approx_sigma_horizon_val > 0:
+                    approx_z = safety_stock / approx_sigma_horizon_val
+                    # Map z to alpha (cumulative normal distribution approximation)
+                    # For z in [0, 3]: alpha ~ 0.5 + 0.341*z for z < 1, else use lookup
+                    # Simple mapping: z=1→0.84, z=2→0.98, z=3→0.999
+                    if approx_z < 0:
+                        expl_equivalent_csl_legacy = 0.5
+                    elif approx_z < 1:
+                        expl_equivalent_csl_legacy = 0.5 + 0.341 * approx_z
+                    elif approx_z < 2:
+                        expl_equivalent_csl_legacy = 0.84 + 0.14 * (approx_z - 1)  # Linear interp 0.84→0.98
+                    else:
+                        expl_equivalent_csl_legacy = min(0.999, 0.98 + 0.019 * (approx_z - 2))
+                else:
+                    expl_equivalent_csl_legacy = 0.0
+            else:
+                expl_equivalent_csl_legacy = 0.0
+        
+        # Constraints applied (extract from CSL result if available, else infer from legacy logic)
+        expl_constraints_pack = False
+        expl_constraints_moq = False
+        expl_constraints_max = False
+        expl_constraint_details = ""
+        
+        if expl_policy_mode == "csl" and "csl_result" in locals():
+            # CSL mode: parse constraints_applied list from compute_order
+            constraints_list = csl_result.get("constraints_applied", [])
+            for constraint_str in constraints_list:
+                if "pack_size" in constraint_str.lower():
+                    expl_constraints_pack = True
+                if "moq" in constraint_str.lower():
+                    expl_constraints_moq = True
+                if "max_stock" in constraint_str.lower() or "capped" in constraint_str.lower():
+                    expl_constraints_max = True
+            # Build detail string
+            expl_constraint_details = "; ".join(constraints_list) if constraints_list else "Nessun vincolo applicato"
+        else:
+            # LEGACY mode: infer from local variables
+            # Pack constraint: check if proposed_qty != proposed_qty_raw (rounding applied)
+            if proposed_qty_raw > 0 and pack_size > 1:
+                pack_rounded = ((proposed_qty_raw + pack_size - 1) // pack_size) * pack_size
+                if pack_rounded != proposed_qty_raw:
+                    expl_constraints_pack = True
+            
+            # MOQ constraint: check if MOQ forced increase
+            if moq > 1:
+                if proposed_qty_raw > 0 and proposed_qty_raw < moq:
+                    expl_constraints_moq = True  # Below MOQ, forced to 0 or increased
+            
+            # Max stock constraint
+            if capped_by_max_stock:
+                expl_constraints_max = True
+            
+            # Build detail string for legacy
+            details_parts = []
+            if expl_constraints_pack:
+                details_parts.append(f"Pack: arrotondato a multiplo di {pack_size}")
+            if expl_constraints_moq:
+                details_parts.append(f"MOQ: {moq} unità minime")
+            if expl_constraints_max:
+                details_parts.append(f"Max Stock: cappato a {max_stock}")
+            expl_constraint_details = "; ".join(details_parts) if details_parts else "Nessun vincolo applicato"
+        
+        # === END EXPLAINABILITY EXTRACTION ===
+        
         notes = f"S={S} (forecast={forecast_qty}+safety={safety_stock}), IP={inventory_position}, Pack={pack_size}, MOQ={moq}, Max={max_stock}"
         if unfulfilled_qty > 0:
             notes += f", Unfulfilled={unfulfilled_qty}"
@@ -1260,6 +1355,17 @@ class OrderWorkflow:
             cannibalization_downlift_factor=cannibalization_downlift_factor_val,
             cannibalization_confidence=cannibalization_confidence_val,
             cannibalization_note=cannibalization_note_val,
+            # Explainability drivers (standard transparency)
+            target_csl=expl_target_csl,
+            sigma_horizon=expl_sigma_horizon,
+            reorder_point=expl_reorder_point,
+            forecast_method=expl_forecast_method,
+            policy_mode=expl_policy_mode,
+            equivalent_csl_legacy=expl_equivalent_csl_legacy,
+            constraints_applied_pack=expl_constraints_pack,
+            constraints_applied_moq=expl_constraints_moq,
+            constraints_applied_max=expl_constraints_max,
+            constraint_details=expl_constraint_details,
             # CSL policy breakdown
             csl_policy_mode=str(csl_breakdown.get("policy_mode", "")),
             csl_alpha_target=float(csl_breakdown.get("alpha_target", 0.0)),

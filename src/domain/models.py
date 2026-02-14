@@ -379,6 +379,18 @@ class OrderProposal:
     cannibalization_confidence: str = ""  # A/B/C (affidabilità stima)
     cannibalization_note: str = ""  # Dettaglio riduzione o fallback reason
     
+    # Explainability drivers (standard transparency)
+    target_csl: float = 0.0  # Alpha (target CSL) usato per safety stock
+    sigma_horizon: float = 0.0  # Deviazione standard domanda su horizon
+    reorder_point: int = 0  # Reorder point SKU
+    forecast_method: str = ""  # simple, monte_carlo, etc.
+    policy_mode: str = ""  # legacy, csl
+    equivalent_csl_legacy: float = 0.0  # Equivalente CSL per policy legacy (informativo)
+    constraints_applied_pack: bool = False  # True se arrotondamento pack applicato
+    constraints_applied_moq: bool = False  # True se MOQ constraint applicato
+    constraints_applied_max: bool = False  # True se max_stock cap applicato
+    constraint_details: str = ""  # Dettaglio testuale vincoli (es. "Pack: 12→24, MOQ: 10, Max: 500")
+    
     # CSL-based policy (Target Service Level mode)
     csl_policy_mode: str = ""  # "legacy" or "csl"
     csl_alpha_target: float = 0.0  # Target service level (alpha from resolver)

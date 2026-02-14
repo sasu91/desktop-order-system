@@ -153,6 +153,8 @@ class DesktopOrderApp:
         export_menu.add_command(label="Elenco SKU", command=self._export_sku_list)
         export_menu.add_command(label="Log Ordini", command=self._export_order_logs)
         export_menu.add_command(label="Log Ricevimenti", command=self._export_receiving_logs)
+        export_menu.add_separator()
+        export_menu.add_command(label="📊 Ordini + KPI + Breakdown", command=self._export_order_kpi_breakdown)
         
         file_menu.add_separator()
         file_menu.add_command(label="Esci", command=self.root.quit)
@@ -1452,6 +1454,56 @@ class DesktopOrderApp:
         details = []
         details.append(f"SKU: {proposal.sku}")
         details.append(f"Descrizione: {proposal.description}")
+        details.append("")
+        
+        # === EXPLAINABILITY DRIVERS (Standard Transparency) ===
+        details.append("═══ PERCHÉ QUESTA QUANTITÀ? ═══")
+        details.append(f"Policy Mode: {proposal.policy_mode.upper() if proposal.policy_mode else 'N/A'}")
+        details.append(f"Forecast Method: {proposal.forecast_method.upper() if proposal.forecast_method else 'N/A'}")
+        details.append(f"Reorder Point (S): {to_colli(proposal.reorder_point, pack_size)}")
+        details.append(f"Inventory Position (IP): {to_colli(proposal.inventory_position, pack_size)}")
+        
+        # Policy-specific drivers
+        if proposal.policy_mode == "csl":
+            # CSL mode: show target alpha, sigma, z-score
+            details.append(f"Target CSL (α): {proposal.target_csl:.3f} ({proposal.target_csl*100:.1f}%)")
+            details.append(f"Domanda incertezza (σ): {proposal.sigma_horizon:.1f} pz")
+            details.append(f"z-score: {proposal.csl_z_score:.2f}")
+        elif proposal.policy_mode == "legacy":
+            # Legacy mode: show equivalent CSL (informational)
+            if proposal.equivalent_csl_legacy > 0:
+                details.append(f"CSL Equivalente (informativo): {proposal.equivalent_csl_legacy:.3f} ({proposal.equivalent_csl_legacy*100:.1f}%)")
+                details.append(f"  (approssimazione per confronto, non vincolante)")
+        
+        # OOS days impact
+        if proposal.oos_days_count > 0:
+            details.append(f"⚠️ Giorni OOS rilevati: {proposal.oos_days_count}")
+            if proposal.oos_boost_applied:
+                details.append(f"   Boost applicato: +{int(proposal.oos_boost_percent*100)}%")
+        
+        # Constraints applied
+        details.append("")
+        details.append("Vincoli Applicati:")
+        constraints_list = []
+        if proposal.constraints_applied_pack:
+            constraints_list.append(f"✓ Pack size ({pack_size} pz/collo)")
+        if proposal.constraints_applied_moq:
+            constraints_list.append(f"✓ MOQ ({proposal.moq} pz)")
+        if proposal.constraints_applied_max:
+            constraints_list.append(f"✓ Max Stock ({proposal.max_stock} pz)")
+        
+        if constraints_list:
+            for c in constraints_list:
+                details.append(f"  {c}")
+        else:
+            details.append("  Nessun vincolo applicato")
+        
+        # Constraint details (full explanation)
+        if proposal.constraint_details and proposal.constraint_details != "Nessun vincolo applicato":
+            details.append(f"  Dettagli: {proposal.constraint_details}")
+        
+        details.append("")
+        details.append("═══ DETTAGLI COMPLETI ═══")
         details.append("")
         
         # Forecast
@@ -3195,6 +3247,104 @@ class DesktopOrderApp:
         self.exception_validation_label = ttk.Label(button_frame, text="", font=("Helvetica", 8), foreground="#d9534f")
         self.exception_validation_label.pack(side="left", padx=15)
         
+        # === PROBLEMATIC SKUs SMART FILTERS ===
+        smart_frame = ttk.LabelFrame(main_frame, text="🔍 SKU Problematici (Filtri Smart)", padding=10)
+        smart_frame.pack(side="top", fill="both", expand=True, pady=(0, 10))
+        
+        # Filter controls (checkboxes + thresholds)
+        filter_ctrl_frame = ttk.Frame(smart_frame)
+        filter_ctrl_frame.pack(side="top", fill="x", pady=(0, 10))
+        
+        # Filter checkboxes (4 filtri in una riga)
+        self.filter_oos_var = tk.BooleanVar(value=True)
+        self.filter_otif_var = tk.BooleanVar(value=True)
+        self.filter_wmape_var = tk.BooleanVar(value=True)
+        self.filter_perish_var = tk.BooleanVar(value=True)
+        
+        ttk.Checkbutton(filter_ctrl_frame, text="OOS Rate Alto", variable=self.filter_oos_var, command=self._refresh_smart_exceptions).pack(side="left", padx=10)
+        ttk.Checkbutton(filter_ctrl_frame, text="OTIF Basso/Unfulfilled", variable=self.filter_otif_var, command=self._refresh_smart_exceptions).pack(side="left", padx=10)
+        ttk.Checkbutton(filter_ctrl_frame, text="WMAPE Alto", variable=self.filter_wmape_var, command=self._refresh_smart_exceptions).pack(side="left", padx=10)
+        ttk.Checkbutton(filter_ctrl_frame, text="Perishability Critica", variable=self.filter_perish_var, command=self._refresh_smart_exceptions).pack(side="left", padx=10)
+        
+        # Threshold controls (seconda riga)
+        threshold_frame = ttk.Frame(smart_frame)
+        threshold_frame.pack(side="top", fill="x", pady=(0, 10))
+        
+        ttk.Label(threshold_frame, text="Soglie:", font=("Helvetica", 9, "bold")).pack(side="left", padx=(0, 10))
+        
+        ttk.Label(threshold_frame, text="OOS%>", font=("Helvetica", 8)).pack(side="left")
+        self.threshold_oos_var = tk.StringVar(value="15.0")
+        ttk.Entry(threshold_frame, textvariable=self.threshold_oos_var, width=6).pack(side="left", padx=(2, 15))
+        
+        ttk.Label(threshold_frame, text="OTIF%<", font=("Helvetica", 8)).pack(side="left")
+        self.threshold_otif_var = tk.StringVar(value="80.0")
+        ttk.Entry(threshold_frame, textvariable=self.threshold_otif_var, width=6).pack(side="left", padx=(2, 15))
+        
+        ttk.Label(threshold_frame, text="WMAPE%>", font=("Helvetica", 8)).pack(side="left")
+        self.threshold_wmape_var = tk.StringVar(value="50.0")
+        ttk.Entry(threshold_frame, textvariable=self.threshold_wmape_var, width=6).pack(side="left", padx=(2, 15))
+        
+        ttk.Label(threshold_frame, text="Shelf Life<", font=("Helvetica", 8)).pack(side="left")
+        self.threshold_shelf_var = tk.StringVar(value="7")
+        ttk.Entry(threshold_frame, textvariable=self.threshold_shelf_var, width=6).pack(side="left", padx=(2, 15))
+        
+        ttk.Button(threshold_frame, text="🔄 Aggiorna Filtri", command=self._refresh_smart_exceptions).pack(side="left", padx=10)
+        
+        # Smart exceptions table
+        smart_table_frame = ttk.Frame(smart_frame)
+        smart_table_frame.pack(fill="both", expand=True)
+        
+        smart_scrollbar_y = ttk.Scrollbar(smart_table_frame, orient="vertical")
+        smart_scrollbar_x = ttk.Scrollbar(smart_table_frame, orient="horizontal")
+        
+        self.smart_exception_treeview = ttk.Treeview(
+            smart_table_frame,
+            columns=("sku", "description", "oos_rate", "otif", "unfulfilled", "wmape", "shelf_life", "stock", "reason"),
+            show="headings",
+            yscrollcommand=smart_scrollbar_y.set,
+            xscrollcommand=smart_scrollbar_x.set,
+            height=10,
+        )
+        
+        smart_scrollbar_y.config(command=self.smart_exception_treeview.yview)
+        smart_scrollbar_y.pack(side="right", fill="y")
+        smart_scrollbar_x.config(command=self.smart_exception_treeview.xview)
+        smart_scrollbar_x.pack(side="bottom", fill="x")
+        
+        self.smart_exception_treeview.pack(side="left", fill="both", expand=True)
+        
+        # Column headings
+        self.smart_exception_treeview.heading("sku", text="SKU")
+        self.smart_exception_treeview.heading("description", text="Descrizione")
+        self.smart_exception_treeview.heading("oos_rate", text="OOS %")
+        self.smart_exception_treeview.heading("otif", text="OTIF %")
+        self.smart_exception_treeview.heading("unfulfilled", text="Unfulfilled")
+        self.smart_exception_treeview.heading("wmape", text="WMAPE %")
+        self.smart_exception_treeview.heading("shelf_life", text="Shelf Life (d)")
+        self.smart_exception_treeview.heading("stock", text="Stock Attuale")
+        self.smart_exception_treeview.heading("reason", text="Motivo Alert")
+        
+        # Column widths
+        self.smart_exception_treeview.column("sku", width=100)
+        self.smart_exception_treeview.column("description", width=200)
+        self.smart_exception_treeview.column("oos_rate", width=70, anchor="center")
+        self.smart_exception_treeview.column("otif", width=70, anchor="center")
+        self.smart_exception_treeview.column("unfulfilled", width=80, anchor="center")
+        self.smart_exception_treeview.column("wmape", width=80, anchor="center")
+        self.smart_exception_treeview.column("shelf_life", width=100, anchor="center")
+        self.smart_exception_treeview.column("stock", width=100, anchor="center")
+        self.smart_exception_treeview.column("reason", width=250)
+        
+        # Quick action buttons
+        smart_action_frame = ttk.Frame(smart_frame)
+        smart_action_frame.pack(side="top", fill="x", pady=(10, 0))
+        
+        ttk.Button(smart_action_frame, text="📝 Apri in Admin", command=self._open_sku_in_admin_from_smart).pack(side="left", padx=5)
+        ttk.Label(smart_action_frame, text="(oppure doppio-click sulla riga)", font=("Helvetica", 8, "italic"), foreground="gray").pack(side="left", padx=(5, 20))
+        
+        # Bind double-click for quick access
+        self.smart_exception_treeview.bind("<Double-1>", lambda e: self._open_sku_in_admin_from_smart())
+        
         # === HISTORY TABLE ===
         history_frame = ttk.LabelFrame(main_frame, text="Storico Eccezioni", padding=5)
         history_frame.pack(fill="both", expand=True)
@@ -3592,6 +3742,176 @@ class DesktopOrderApp:
         today = date.today()
         self.exception_view_date_var.set(today.isoformat())
         self._refresh_exception_tab()
+    
+    def _refresh_smart_exceptions(self):
+        """Refresh smart exception filters to show problematic SKUs."""
+        # Clear existing table
+        self.smart_exception_treeview.delete(*self.smart_exception_treeview.get_children())
+        
+        # Parse thresholds
+        try:
+            oos_threshold = float(self.threshold_oos_var.get())
+            otif_threshold = float(self.threshold_otif_var.get())
+            wmape_threshold = float(self.threshold_wmape_var.get())
+            shelf_threshold = int(self.threshold_shelf_var.get())
+        except ValueError:
+            messagebox.showerror("Errore", "Soglie non valide. Usa numeri.")
+            return
+        
+        # Get filters enabled
+        filter_oos = self.filter_oos_var.get()
+        filter_otif = self.filter_otif_var.get()
+        filter_wmape = self.filter_wmape_var.get()
+        filter_perish = self.filter_perish_var.get()
+        
+        # If no filters enabled, show message and return
+        if not any([filter_oos, filter_otif, filter_wmape, filter_perish]):
+            self.smart_exception_treeview.insert("", "end", values=("", "Nessun filtro attivo", "", "", "", "", "", "", "Abilita almeno un filtro sopra"))
+            return
+        
+        # Load data sources
+        all_skus = self.csv_layer.read_skus()
+        kpi_daily = self.csv_layer.read_kpi_daily()  # Returns list of KPIDaily records
+        current_stock_map = {}  # Map SKU -> on_hand
+        transactions = self.csv_layer.read_transactions()
+        
+        # Calculate current stock for each SKU
+        from src.domain.ledger import StockCalculator
+        for sku_obj in all_skus:
+            stock = StockCalculator.calculate_asof(
+                sku=sku_obj.sku,
+                asof_date=date.today() + timedelta(days=1),  # Include today
+                transactions=transactions,
+                sales_records=None,
+            )
+            current_stock_map[sku_obj.sku] = stock.on_hand
+        
+        # Build KPI map (latest KPI for each SKU)
+        kpi_map = {}  # Map SKU -> latest KPI dict
+        for kpi in kpi_daily:
+            sku_key = kpi.get("sku", "")
+            kpi_date = kpi.get("date", "")
+            if sku_key and (sku_key not in kpi_map or kpi_date > kpi_map[sku_key].get("date", "")):
+                kpi_map[sku_key] = kpi
+        
+        # Calculate unfulfilled for each SKU from current proposals (if available)
+        unfulfilled_map = {}  # Map SKU -> unfulfilled_qty
+        if hasattr(self, 'current_proposals') and self.current_proposals:
+            for prop in self.current_proposals:
+                unfulfilled_map[prop.sku] = prop.unfulfilled_qty
+        
+        # Filter SKUs
+        problematic_skus = []
+        
+        for sku_obj in all_skus:
+            sku = sku_obj.sku
+            reasons = []
+            
+            # Get KPI data for this SKU
+            kpi = kpi_map.get(sku)
+            oos_rate = float(kpi.get("oos_rate", 0.0)) if kpi else 0.0
+            otif = float(kpi.get("otif_rate", 100.0)) if kpi else 100.0
+            wmape = float(kpi.get("wmape", 0.0)) if kpi else 0.0
+            
+            unfulfilled = unfulfilled_map.get(sku, 0)
+            shelf_life = sku_obj.shelf_life_days if sku_obj.shelf_life_days else 0
+            stock = current_stock_map.get(sku, 0)
+            
+            # Apply filters
+            passes = False
+            
+            if filter_oos and oos_rate > oos_threshold:
+                reasons.append(f"OOS alto ({oos_rate:.1f}%)")
+                passes = True
+            
+            if filter_otif and (otif < otif_threshold or unfulfilled > 0):
+                if otif < otif_threshold and unfulfilled > 0:
+                    reasons.append(f"OTIF basso ({otif:.1f}%) + Unfulfilled ({unfulfilled})")
+                elif unfulfilled > 0:
+                    reasons.append(f"Unfulfilled ({unfulfilled})")
+                else:
+                    reasons.append(f"OTIF basso ({otif:.1f}%)")
+                passes = True
+            
+            if filter_wmape and wmape > wmape_threshold:
+                reasons.append(f"WMAPE alto ({wmape:.1f}%)")
+                passes = True
+            
+            if filter_perish and shelf_life > 0 and shelf_life < shelf_threshold and stock > 0:
+                # Critical perishability: short shelf life + stock on hand
+                # Approximate coverage from stock / (avg daily sales estimate)
+                # Use simple ratio: if stock > shelf_life/2, flag as critical
+                if stock > shelf_life * 10:  # Heuristic: stock > 10x shelf_life days is risky
+                    reasons.append(f"Shelf life critica ({shelf_life}d, stock={stock})")
+                    passes = True
+            
+            if passes:
+                problematic_skus.append({
+                    "sku": sku,
+                    "description": sku_obj.description,
+                    "oos_rate": oos_rate,
+                    "otif": otif,
+                    "unfulfilled": unfulfilled,
+                    "wmape": wmape,
+                    "shelf_life": shelf_life,
+                    "stock": stock,
+                    "reason": "; ".join(reasons),
+                })
+        
+        # Sort by severity (number of reasons, then by OOS rate descending)
+        problematic_skus.sort(key=lambda x: (-len(x["reason"].split(";")), -x["oos_rate"]))
+        
+        # Populate table
+        for item in problematic_skus:
+            self.smart_exception_treeview.insert(
+                "",
+                "end",
+                values=(
+                    item["sku"],
+                    item["description"],
+                    f"{item['oos_rate']:.1f}%" if item['oos_rate'] > 0 else "-",
+                    f"{item['otif']:.1f}%" if item['otif'] < 100 else "-",
+                    str(item["unfulfilled"]) if item["unfulfilled"] > 0 else "-",
+                    f"{item['wmape']:.1f}%" if item['wmape'] > 0 else "-",
+                    str(item["shelf_life"]) if item["shelf_life"] > 0 else "-",
+                    str(item["stock"]),
+                    item["reason"],
+                ),
+            )
+        
+        # Show count
+        if not problematic_skus:
+            self.smart_exception_treeview.insert("", "end", values=("", "Nessun SKU problematico trovato", "", "", "", "", "", "", "Tutti gli SKU passano i filtri attivi"))
+    
+    def _open_sku_in_admin_from_smart(self):
+        """Open selected SKU in Admin tab for editing (from smart exceptions table)."""
+        selected = self.smart_exception_treeview.selection()
+        if not selected:
+            messagebox.showwarning("Nessuna Selezione", "Seleziona uno SKU problematico per aprire in Admin.")
+            return
+        
+        item = self.smart_exception_treeview.item(selected[0])
+        sku = item["values"][0]
+        
+        if not sku:
+            return
+        
+        # Switch to Admin tab
+        self.notebook.select(self.admin_tab)
+        
+        # Find SKU in admin table and select it, then open edit form
+        # First, find the item in admin_treeview
+        for item_id in self.admin_treeview.get_children():
+            item_values = self.admin_treeview.item(item_id)["values"]
+            if item_values and item_values[0] == sku:
+                # Select and focus
+                self.admin_treeview.selection_set(item_id)
+                self.admin_treeview.focus(item_id)
+                self.admin_treeview.see(item_id)
+                
+                # Trigger edit form
+                self._edit_sku()
+                break
     
     def _revert_selected_exception(self):
         """Revert selected exception from table."""
@@ -5247,6 +5567,273 @@ class DesktopOrderApp:
         except Exception as e:
             messagebox.showerror("Errore Esportazione", f"Impossibile esportare log ricevimenti: {str(e)}")
     
+    def _export_order_kpi_breakdown(self):
+        """
+        Export comprehensive CSV with Order Proposals + KPI + Explainability Breakdown.
+        Live KPI recalculation for operational audit.
+        """
+        try:
+            # Generate timestamp filename
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            suggested_filename = f"order_kpi_breakdown_{timestamp}.csv"
+            
+            # Create export/ folder if not exists
+            export_dir = self.csv_layer.data_dir / "export"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            
+            file_path = filedialog.asksaveasfilename(
+                title="Export Ordini + KPI + Breakdown",
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialfile=suggested_filename,
+                initialdir=export_dir,
+            )
+            
+            if not file_path:
+                return
+            
+            # Load data
+            all_skus = self.csv_layer.read_skus()
+            transactions = self.csv_layer.read_transactions()
+            sales_records = self.csv_layer.read_sales()
+            settings = self.csv_layer.read_settings()
+            
+            # Build proposals map (use current proposals if available, else generate fresh)
+            proposal_map = {}
+            if hasattr(self, 'current_proposals') and self.current_proposals:
+                for prop in self.current_proposals:
+                    proposal_map[prop.sku] = prop
+            else:
+                # Generate fresh proposals for export (loop over all SKUs)
+                from src.workflows.order import OrderWorkflow
+                from src.domain.ledger import StockCalculator
+                order_workflow = OrderWorkflow(self.csv_layer)
+                for sku_obj in all_skus:
+                    try:
+                        # Calculate current stock
+                        stock = StockCalculator.calculate_asof(
+                            sku=sku_obj.sku,
+                            asof_date=date.today() + timedelta(days=1),
+                            transactions=transactions,
+                            sales_records=None,
+                        )
+                        
+                        # Calculate daily sales avg
+                        sku_sales = [s for s in sales_records if s.sku == sku_obj.sku]
+                        if sku_sales:
+                            total_sales = sum(s.qty_sold for s in sku_sales)
+                            days = len(sku_sales)
+                            daily_sales_avg = total_sales / days if days > 0 else 0.0
+                        else:
+                            daily_sales_avg = 0.0
+                        
+                        prop = order_workflow.generate_proposal(
+                            sku=sku_obj.sku,
+                            description=sku_obj.description,
+                            current_stock=stock,
+                            daily_sales_avg=daily_sales_avg,
+                            sku_obj=sku_obj,
+                            transactions=transactions,
+                            sales_records=sales_records,
+                        )
+                        if prop:
+                            proposal_map[sku_obj.sku] = prop
+                    except Exception as e:
+                        logging.warning(f"Failed to generate proposal for SKU {sku_obj.sku} during export: {e}")
+            
+            # Live KPI calculation for each SKU
+            from src.analytics.kpi import compute_oos_kpi, compute_forecast_accuracy, compute_supplier_proxy_kpi
+            
+            kpi_lookback_days = settings.get("kpi_metrics", {}).get("oos_lookback_days", {}).get("value", 90)
+            oos_mode = settings.get("kpi_metrics", {}).get("oos_detection_mode", {}).get("value", "strict")
+            kpi_map = {}  # Map SKU -> KPI dict
+            
+            for sku_obj in all_skus:
+                sku = sku_obj.sku
+                
+                # OOS KPI
+                oos_kpi = compute_oos_kpi(
+                    sku=sku,
+                    lookback_days=kpi_lookback_days,
+                    mode=oos_mode,
+                    csv_layer=self.csv_layer,
+                    asof_date=date.today(),
+                )
+                
+                # Forecast accuracy KPI
+                forecast_kpi = compute_forecast_accuracy(
+                    sku=sku,
+                    lookback_days=kpi_lookback_days,
+                    mode="mape",
+                    csv_layer=self.csv_layer,
+                    asof_date=date.today(),
+                )
+                
+                # Supplier/OTIF proxy KPI
+                supplier_kpi = compute_supplier_proxy_kpi(
+                    sku=sku,
+                    lookback_days=kpi_lookback_days,
+                    csv_layer=self.csv_layer,
+                    asof_date=date.today(),
+                )
+                
+                # Waste rate (from analytics if available, else 0)
+                waste_rate = 0.0  # TODO: integrate waste_rate calculation if available
+                
+                kpi_map[sku] = {
+                    "oos_rate": oos_kpi.get("oos_rate", 0.0),
+                    "oos_days": oos_kpi.get("oos_days", 0),
+                    "wmape": forecast_kpi.get("wmape", 0.0),
+                    "mae": forecast_kpi.get("mae", 0.0),
+                    "otif": supplier_kpi.get("otif", 100.0),
+                    "qty_unfulfilled": supplier_kpi.get("qty_unfulfilled", 0),
+                    "n_unfulfilled_events": supplier_kpi.get("n_unfulfilled_events", 0),
+                    "waste_rate": waste_rate,
+                }
+            
+            # Write CSV
+            with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                
+                # Header row
+                writer.writerow([
+                    "SKU",
+                    "Descrizione",
+                    "Qty Proposta",
+                    "Receipt Date",
+                    "Policy Mode",
+                    "Forecast Method",
+                    "Target CSL",
+                    "Sigma Horizon",
+                    "Reorder Point",
+                    "Inventory Position",
+                    "Pack Size",
+                    "MOQ",
+                    "Max Stock",
+                    "Constraint Pack",
+                    "Constraint MOQ",
+                    "Constraint Max",
+                    "Constraint Details",
+                    "OOS Days Count",
+                    "OOS Boost Applied",
+                    "Shelf Life Days",
+                    "Usable Stock",
+                    "Waste Risk %",
+                    "KPI: OOS Rate %",
+                    "KPI: OOS Days",
+                    "KPI: WMAPE %",
+                    "KPI: MAE",
+                    "KPI: OTIF %",
+                    "KPI: Unfulfilled Qty",
+                    "KPI: Unfulfilled Events",
+                    "KPI: Waste Rate %",
+                    "Notes",
+                ])
+                
+                # Data rows
+                row_count = 0
+                for sku_obj in all_skus:
+                    sku = sku_obj.sku
+                    prop = proposal_map.get(sku)
+                    kpi = kpi_map.get(sku, {})
+                    
+                    if prop:
+                        # Full row from proposal + KPI
+                        writer.writerow([
+                            sku,
+                            sku_obj.description,
+                            prop.proposed_qty,
+                            prop.receipt_date.isoformat() if prop.receipt_date else "",
+                            prop.policy_mode,
+                            prop.forecast_method,
+                            f"{prop.target_csl:.3f}" if prop.target_csl > 0 else "",
+                            f"{prop.sigma_horizon:.2f}" if prop.sigma_horizon > 0 else "",
+                            prop.reorder_point,
+                            prop.inventory_position,
+                            prop.pack_size,
+                            prop.moq,
+                            prop.max_stock,
+                            "YES" if prop.constraints_applied_pack else "NO",
+                            "YES" if prop.constraints_applied_moq else "NO",
+                            "YES" if prop.constraints_applied_max else "NO",
+                            prop.constraint_details,
+                            prop.oos_days_count,
+                            "YES" if prop.oos_boost_applied else "NO",
+                            prop.shelf_life_days if prop.shelf_life_days > 0 else "",
+                            prop.usable_stock,
+                            f"{prop.waste_risk_percent:.1f}" if prop.waste_risk_percent > 0 else "",
+                            f"{kpi.get('oos_rate', 0.0):.2f}",
+                            kpi.get('oos_days', 0),
+                            f"{kpi.get('wmape', 0.0):.2f}",
+                            f"{kpi.get('mae', 0.0):.2f}",
+                            f"{kpi.get('otif', 100.0):.2f}",
+                            kpi.get('qty_unfulfilled', 0),
+                            kpi.get('n_unfulfilled_events', 0),
+                            f"{kpi.get('waste_rate', 0.0):.2f}",
+                            prop.notes,
+                        ])
+                        row_count += 1
+                    else:
+                        # SKU without proposal (KPI only)
+                        writer.writerow([
+                            sku,
+                            sku_obj.description,
+                            0,  # No proposal
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            0,
+                            0,
+                            sku_obj.pack_size,
+                            sku_obj.moq,
+                            sku_obj.max_stock,
+                            "",
+                            "",
+                            "",
+                            "",
+                            0,
+                            "",
+                            sku_obj.shelf_life_days if sku_obj.shelf_life_days else "",
+                            0,
+                            "",
+                            f"{kpi.get('oos_rate', 0.0):.2f}",
+                            kpi.get('oos_days', 0),
+                            f"{kpi.get('wmape', 0.0):.2f}",
+                            f"{kpi.get('mae', 0.0):.2f}",
+                            f"{kpi.get('otif', 100.0):.2f}",
+                            kpi.get('qty_unfulfilled', 0),
+                            kpi.get('n_unfulfilled_events', 0),
+                            f"{kpi.get('waste_rate', 0.0):.2f}",
+                            "No proposal generated",
+                        ])
+                        row_count += 1
+            
+            messagebox.showinfo(
+                "Successo",
+                f"Export completato:\n{file_path}\n\n{row_count} SKU esportati con KPI live e breakdown."
+            )
+            
+            # Log export operation (EXPORT_LOG audit trail)
+            policy_mode = settings.get("reorder_engine", {}).get("policy_mode", {}).get("value", "legacy")
+            kpi_params = {
+                "lookback_days": kpi_lookback_days,
+                "export_timestamp": timestamp,
+                "policy_mode": policy_mode,
+            }
+            
+            self.csv_layer.log_audit(
+                operation="EXPORT_LOG",
+                details=f"Order+KPI+Breakdown export: {row_count} SKUs, file={Path(file_path).name}, policy={policy_mode}, kpi_lookback={kpi_lookback_days}d",
+                sku=None,
+            )
+        
+        except Exception as e:
+            import traceback
+            messagebox.showerror("Errore Esportazione", f"Impossibile esportare Order+KPI+Breakdown:\n{str(e)}\n\n{traceback.format_exc()}")
+    
     def _filter_settings(self, *args):
         """Filter visible settings rows based on search query."""
         query = self.settings_search_var.get().lower()
@@ -5360,6 +5947,7 @@ class DesktopOrderApp:
         self._refresh_receiving_history()
         self._refresh_admin_tab()
         self._refresh_exception_tab()
+        self._refresh_smart_exceptions()  # Populate smart exception filters on startup
         self._refresh_promo_tab()
         self._refresh_settings_tab()
     
