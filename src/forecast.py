@@ -938,117 +938,8 @@ def monte_carlo_forecast_with_stats(
 # EVENT UPLIFT (DELIVERY DATE DEMAND DRIVER)
 # ======================================================================
 
-def apply_event_uplift(
-    sku_obj: Any,  # SKU object
-    forecast_date: date,
-    baseline_value: float,
-    event_rules: List[Any],  # List[EventUpliftRule]
-    settings: Dict[str, Any],
-) -> Dict[str, Any]:
-    """
-    Apply event-driven uplift to baseline forecast for specific delivery date.
-    
-    Event uplift is applied BEFORE promo uplift in the forecast pipeline.
-    Rules are matched by delivery_date and scope (ALL / DEPT / CATEGORY).
-    Multiple matching rules are combined (max uplift factor wins).
-    
-    Policy enforcements:
-    - Min/max factor clipping (default 1.0-2.0)
-    - Perishables exclusion (if shelf_life <= threshold)
-    - Perishables cap on extra coverage days
-    
-    Args:
-        sku_obj: SKU object
-        forecast_date: Date to forecast (delivery date in order context)
-        baseline_value: Baseline forecast value
-        event_rules: List of EventUpliftRule objects
-        settings: Settings dict with event_uplift section
-    
-    Returns:
-        Dict with:
-            - "adjusted_value": float (uplifted forecast)
-            - "uplift_factor": float (applied factor, 1.0 = neutral)
-            - "event_active": bool (whether event rule matched)
-            - "excluded_perishable": bool (whether excluded due to shelf life policy)
-            - "matched_rules": List[EventUpliftRule] (rules that matched this SKU+date)
-    """
-    event_settings = settings.get("event_uplift", {})
-    enabled = event_settings.get("enabled", {}).get("value", False)
-    
-    # If disabled, return baseline unchanged
-    if not enabled:
-        return {
-            "adjusted_value": baseline_value,
-            "uplift_factor": 1.0,
-            "event_active": False,
-            "excluded_perishable": False,
-            "matched_rules": [],
-        }
-    
-    # Filter rules matching this delivery date
-    matching_rules = [r for r in event_rules if r.delivery_date == forecast_date]
-    
-    # Further filter by scope (ALL / DEPT / CATEGORY)
-    applicable_rules = [r for r in matching_rules if r.applies_to_sku(sku_obj)]
-    
-    if not applicable_rules:
-        return {
-            "adjusted_value": baseline_value,
-            "uplift_factor": 1.0,
-            "event_active": False,
-            "excluded_perishable": False,
-            "matched_rules": [],
-        }
-    
-    # Perishables policy: exclude SKUs with short shelf life
-    perishables_threshold = event_settings.get("perishables_policy_exclude_if_shelf_life_days_lte", {}).get("value", 3)
-    if sku_obj.shelf_life_days > 0 and sku_obj.shelf_life_days <= perishables_threshold:
-        return {
-            "adjusted_value": baseline_value,
-            "uplift_factor": 1.0,
-            "event_active": True,
-            "excluded_perishable": True,
-            "matched_rules": applicable_rules,
-        }
-    
-    # Calculate uplift factor: use max strength from applicable rules
-    # strength is in range [0, 100] or [0, 1] depending on input format
-    # We normalize to multiplier: 1.0 + (strength / 100.0) if strength > 1.0 else 1.0 + strength
-    max_strength = max(r.strength for r in applicable_rules)
-    
-    # Normalize strength to uplift factor
-    if max_strength > 1.0:
-        # Assume percentage format (e.g., 20 = 20%)
-        uplift_factor = 1.0 + (max_strength / 100.0)
-    else:
-        # Assume decimal format (e.g., 0.2 = 20%)
-        uplift_factor = 1.0 + max_strength
-    
-    # Apply min/max clipping
-    min_factor = event_settings.get("min_factor", {}).get("value", 1.0)
-    max_factor = event_settings.get("max_factor", {}).get("value", 2.0)
-    uplift_factor = max(min_factor, min(max_factor, uplift_factor))
-    
-    # Apply uplift to baseline
-    adjusted_value = baseline_value * uplift_factor
-    
-    # Perishables cap on extra coverage (limit overstock)
-    # This is a soft cap: if uplift would add >N days extra cover, clip it
-    cap_extra_days = event_settings.get("perishables_policy_cap_extra_cover_days_per_sku", {}).get("value", 1)
-    if sku_obj.shelf_life_days > 0 and cap_extra_days > 0:
-        # Calculate implied extra days = (adjusted - baseline) / daily_sales_avg
-        # Since we don't have daily_sales_avg here, we just apply the cap as a factor limit
-        # This is a simplified version; full implementation would require daily_sales context
-        # For now, we trust the min/max_factor clipping
-        pass
-    
-    return {
-        "adjusted_value": adjusted_value,
-        "uplift_factor": uplift_factor,
-        "event_active": True,
-        "excluded_perishable": False,
-        "matched_rules": applicable_rules,
-    }
+# Legacy simple implementation removed, replaced with domain/event_uplift.py module
+# See src/domain/event_uplift.py for full event-aware demand driver implementation
 
 
 # ======================================================================
@@ -1163,7 +1054,7 @@ def promo_adjusted_forecast(
         logging.warning(f"Failed to load event uplift rules: {e}. Continuing with no event uplift.")
         event_rules = []
     
-    # Get SKU object for event uplift scope checks
+    # Get SKU object for event uplift
     sku_obj = None
     try:
         all_skus_dict = {s.sku: s for s in all_skus}
@@ -1172,25 +1063,62 @@ def promo_adjusted_forecast(
         pass
     
     # Apply event uplift to baseline (FIRST driver in pipeline)
+    # Use new event-aware demand driver from domain/event_uplift.py
     event_adjusted_predictions = {}
     event_uplift_factor_map = {}
     event_active_map = {}
+    event_explain_map = {}  # NEW: explainability per date
     
-    if sku_obj:
-        for forecast_date in horizon_dates:
-            baseline_value = baseline_predictions[forecast_date]
-            event_result = apply_event_uplift(
+    if sku_obj and event_rules:
+        try:
+            # Import new event uplift module
+            try:
+                from src.domain.event_uplift import apply_event_uplift_to_forecast
+            except ImportError:
+                from domain.event_uplift import apply_event_uplift_to_forecast
+            
+            # For each delivery date in horizon, check for event uplift
+            # (In practice, we need to know receipt_date for each forecast_date, but
+            # for forecast pipeline we assume delivery_date = forecast_date for simplicity)
+            # Full order workflow will pass explicit delivery_date
+            
+            # Simplified: apply uplift using first horizon date as anchor delivery date
+            # (This is a limitation of current API; order workflow should call directly)
+            delivery_date = horizon_dates[0] if horizon_dates else asof_date
+            
+            adjusted_fc, explain = apply_event_uplift_to_forecast(
                 sku_obj=sku_obj,
-                forecast_date=forecast_date,
-                baseline_value=baseline_value,
+                delivery_date=delivery_date,
+                horizon_dates=horizon_dates,
+                baseline_forecast=baseline_predictions,
                 event_rules=event_rules,
+                all_skus=all_skus,
+                sales_records=sales_records,
                 settings=settings,
             )
-            event_adjusted_predictions[forecast_date] = event_result["adjusted_value"]
-            event_uplift_factor_map[forecast_date] = event_result["uplift_factor"]
-            event_active_map[forecast_date] = event_result["event_active"]
+            
+            # Extract results
+            event_adjusted_predictions = adjusted_fc
+            
+            # Calculate uplift factors per date
+            for forecast_date in horizon_dates:
+                baseline_val = baseline_predictions.get(forecast_date, 1.0)
+                adjusted_val = event_adjusted_predictions.get(forecast_date, baseline_val)
+                factor = adjusted_val / baseline_val if baseline_val > 0.01 else 1.0
+                event_uplift_factor_map[forecast_date] = factor
+                event_active_map[forecast_date] = (factor != 1.0)
+                event_explain_map[forecast_date] = explain  # Store explain (same for all dates)
+            
+        except Exception as e:
+            import logging
+            logging.warning(f"Event uplift application failed for SKU {sku_id}: {e}. Using baseline.")
+            # Fallback: use baseline unchanged
+            for forecast_date in horizon_dates:
+                event_adjusted_predictions[forecast_date] = baseline_predictions[forecast_date]
+                event_uplift_factor_map[forecast_date] = 1.0
+                event_active_map[forecast_date] = False
     else:
-        # No SKU object, use baseline unchanged
+        # No SKU object or no rules, use baseline unchanged
         for forecast_date in horizon_dates:
             event_adjusted_predictions[forecast_date] = baseline_predictions[forecast_date]
             event_uplift_factor_map[forecast_date] = 1.0
@@ -1224,6 +1152,7 @@ def promo_adjusted_forecast(
             "cannibalization_applied": False,
             "event_uplift_factor": event_uplift_factor_map,
             "event_active": event_active_map,
+            "event_explain_map": event_explain_map,
         }
     
     # Check if any date in horizon has promo active
@@ -1265,6 +1194,7 @@ def promo_adjusted_forecast(
             "cannibalization_applied": False,
             "event_uplift_factor": event_uplift_factor_map,
             "event_active": event_active_map,
+            "event_explain_map": event_explain_map,
         }
     
     # Estimate uplift factor (live calculation, no caching - user decision)
@@ -1412,6 +1342,7 @@ def promo_adjusted_forecast(
         "cannibalization_applied": cannibalization_applied,
         "event_uplift_factor": event_uplift_factor_map,
         "event_active": event_active_map,
+        "event_explain_map": event_explain_map,
     }
 
 

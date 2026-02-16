@@ -33,7 +33,10 @@ class CSVLayer:
         "sales.csv": ["date", "sku", "qty_sold", "promo_flag"],
         "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "qty_received", "status", "receipt_date",
                            "promo_prebuild_enabled", "promo_start_date", "target_open_qty", "projected_stock_on_promo_start",
-                           "prebuild_delta_qty", "prebuild_qty", "prebuild_coverage_days", "prebuild_distribution_note"],
+                           "prebuild_delta_qty", "prebuild_qty", "prebuild_coverage_days", "prebuild_distribution_note",
+                           "event_uplift_active", "event_delivery_date", "event_reason", "event_u_store_day",
+                           "event_quantile", "event_fallback_level", "event_beta_i", "event_beta_fallback_level",
+                           "event_m_i", "event_explain_short"],
         "receiving_logs.csv": ["document_id", "receipt_id", "date", "sku", "qty_received", "receipt_date", "order_ids"],
         "audit_log.csv": ["timestamp", "operation", "sku", "details", "user"],
         "lots.csv": ["lot_id", "sku", "expiry_date", "qty_on_hand", "receipt_id", "receipt_date"],
@@ -60,12 +63,54 @@ class CSVLayer:
             self._ensure_file_exists(filename, columns)
     
     def _ensure_file_exists(self, filename: str, columns: List[str]):
-        """Create a CSV file with headers if it doesn't exist."""
+        """Create a CSV file with headers if it doesn't exist, or migrate if schema changed."""
         filepath = self.data_dir / filename
         if not filepath.exists():
+            # File doesn't exist, create with headers
             with open(filepath, "w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=columns)
                 writer.writeheader()
+        else:
+            # File exists, check if schema matches (migration if needed)
+            try:
+                with open(filepath, "r", newline="", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    current_columns = reader.fieldnames or []
+                
+                # Compare current columns with expected schema
+                if set(current_columns) != set(columns):
+                    # Schema mismatch detected, migrate
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Schema migration detected for {filename}: {len(current_columns)} → {len(columns)} columns")
+                    
+                    # Backup existing file before migration
+                    import shutil
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    backup_path = filepath.parent / f"{filepath.stem}.pre_migration.{timestamp}{filepath.suffix}"
+                    shutil.copy2(filepath, backup_path)
+                    logger.info(f"Backup created: {backup_path}")
+                    
+                    # Read all existing rows with old schema
+                    with open(filepath, "r", newline="", encoding="utf-8") as f:
+                        reader = csv.DictReader(f)
+                        old_rows = list(reader)
+                    
+                    # Rewrite with new schema (missing columns will be empty strings)
+                    with open(filepath, "w", newline="", encoding="utf-8") as f:
+                        writer = csv.DictWriter(f, fieldnames=columns)
+                        writer.writeheader()
+                        for row in old_rows:
+                            # Fill missing columns with empty strings
+                            migrated_row = {col: row.get(col, "") for col in columns}
+                            writer.writerow(migrated_row)
+                    
+                    logger.info(f"Schema migration complete for {filename}: {len(old_rows)} rows migrated")
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Schema check/migration failed for {filename}: {e}. File may have issues.")
     
     def _read_csv(self, filename: str) -> List[Dict[str, str]]:
         """Read CSV file and return list of dicts."""
@@ -1105,9 +1150,19 @@ class CSVLayer:
         prebuild_qty: int = 0,
         prebuild_coverage_days: int = 0,
         prebuild_distribution_note: str = "",
+        event_uplift_active: bool = False,
+        event_delivery_date: Optional[str] = None,
+        event_reason: str = "",
+        event_u_store_day: float = 1.0,
+        event_quantile: float = 0.0,
+        event_fallback_level: str = "",
+        event_beta_i: float = 1.0,
+        event_beta_fallback_level: str = "",
+        event_m_i: float = 1.0,
+        event_explain_short: str = "",
     ):
         """
-        Write order log entry with expected receipt date, received quantity, and prebuild info.
+        Write order log entry with expected receipt date, received quantity, prebuild info, and event metadata.
         
         Args:
             order_id: Unique order identifier
@@ -1125,6 +1180,16 @@ class CSVLayer:
             prebuild_qty: Prebuild quantity added to this order
             prebuild_coverage_days: Coverage days for prebuild calculation
             prebuild_distribution_note: Distribution note for prebuild logic
+            event_uplift_active: Whether event uplift was applied
+            event_delivery_date: Delivery date for event (ISO format)
+            event_reason: Event reason (e.g., "holiday", "weather")
+            event_u_store_day: U_store_day estimate (event shock factor)
+            event_quantile: Quantile used for U estimation (e.g., 0.70)
+            event_fallback_level: Fallback level for U ("global", "dept:XXX", etc.)
+            event_beta_i: SKU sensitivity to event (beta_i)
+            event_beta_fallback_level: Fallback level for beta_i
+            event_m_i: Final multiplier (m_i = 1 + (U - 1) * beta)
+            event_explain_short: Short explanation string
         """
         self._append_csv("order_logs.csv", {
             "order_id": order_id,
@@ -1142,6 +1207,16 @@ class CSVLayer:
             "prebuild_qty": str(prebuild_qty),
             "prebuild_coverage_days": str(prebuild_coverage_days),
             "prebuild_distribution_note": prebuild_distribution_note or "",
+            "event_uplift_active": str(event_uplift_active),
+            "event_delivery_date": event_delivery_date or "",
+            "event_reason": event_reason or "",
+            "event_u_store_day": str(event_u_store_day),
+            "event_quantile": str(event_quantile),
+            "event_fallback_level": event_fallback_level or "",
+            "event_beta_i": str(event_beta_i),
+            "event_beta_fallback_level": event_beta_fallback_level or "",
+            "event_m_i": str(event_m_i),
+            "event_explain_short": event_explain_short or "",
         })
     
     def update_order_received_qty(self, order_id: str, qty_received: int, status: str):
@@ -1544,6 +1619,22 @@ class CSVLayer:
                 "apply_to": {
                     "value": "forecast_only",
                     "description": "Modalità applicazione: 'forecast_only' (solo media) o 'forecast_and_sigma' (media e sigma)"
+                },
+                "similar_days_seasonal_window": {
+                    "value": 30,
+                    "description": "Finestra stagionale per giorni simili (±N giorni, stesso weekday)"
+                },
+                "min_samples_u_estimation": {
+                    "value": 5,
+                    "description": "Minimo numero campioni per stimare U_store_day"
+                },
+                "min_samples_beta_estimation": {
+                    "value": 10,
+                    "description": "Minimo numero campioni per stimare beta_i a livello SKU"
+                },
+                "beta_normalization_mode": {
+                    "value": "mean_one",
+                    "description": "Modalità normalizzazione beta_i: 'mean_one', 'weighted_sum_one', 'none'"
                 }
             },
             "promo_prebuild": {

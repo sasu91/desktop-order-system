@@ -2,7 +2,7 @@
 Order workflow: proposal generation and confirmation.
 """
 from datetime import date, timedelta
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 import logging
 
 from ..domain.models import Stock, OrderProposal, OrderConfirmation, Transaction, EventType, SKU, SalesRecord
@@ -528,6 +528,19 @@ class OrderWorkflow:
         cannibalization_confidence_val = ""
         cannibalization_note_val = ""
         
+        # Event uplift (delivery-date-based demand driver) tracking
+        event_uplift_active_val = False
+        event_uplift_factor_val = 1.0
+        event_u_store_day_val = 1.0
+        event_beta_i_val = 1.0
+        event_m_i_val = 1.0
+        event_reason_val = ""
+        event_delivery_date_val = None
+        event_quantile_val = 0.0
+        event_fallback_level_val = ""
+        event_beta_fallback_level_val = ""
+        event_explain_short_val = ""
+        
         # Check if promo adjustment is enabled in settings
         promo_adj_settings = settings.get("promo_adjustment", {})
         promo_adjustment_enabled = promo_adj_settings.get("enabled", {}).get("value", False)
@@ -597,6 +610,57 @@ class OrderWorkflow:
                     # Use adjusted forecast (già ridotto da downlift in forecast.py)
                     forecast_qty = promo_adjusted_forecast_qty
                 
+                # === EVENT UPLIFT (DELIVERY-DATE-BASED DEMAND DRIVER) ===
+                # Extract event metadata from promo_result for traceability
+                event_uplift_active_val = False
+                event_uplift_factor_val = 1.0
+                event_u_store_day_val = 1.0
+                event_beta_i_val = 1.0
+                event_m_i_val = 1.0
+                event_reason_val = ""
+                event_delivery_date_val = None
+                event_quantile_val = 0.0
+                event_fallback_level_val = ""
+                event_beta_fallback_level_val = ""
+                event_explain_short_val = ""
+                
+                # Check if event uplift was active on any date in horizon
+                event_active_map = promo_result.get("event_active", {})
+                any_event_active = any(event_active_map.values())
+                
+                if any_event_active and promo_result.get("event_explain_map"):
+                    # Extract explain from first active date (all dates share same explain)
+                    event_explain_map = promo_result["event_explain_map"]
+                    first_event_date = next((d for d in horizon_dates if event_active_map.get(d, False)), None)
+                    
+                    if first_event_date and first_event_date in event_explain_map:
+                        explain_obj = event_explain_map[first_event_date]
+                        
+                        # Populate event fields
+                        event_uplift_active_val = True
+                        event_m_i_val = explain_obj.m_i
+                        event_uplift_factor_val = event_m_i_val
+                        event_u_store_day_val = explain_obj.u_store_day
+                        event_beta_i_val = explain_obj.beta_i
+                        event_delivery_date_val = explain_obj.delivery_date
+                        event_quantile_val = explain_obj.u_quantile
+                        event_fallback_level_val = explain_obj.u_fallback_level
+                        event_beta_fallback_level_val = explain_obj.beta_fallback_level
+                        
+                        # Extract reason from matched rule
+                        if explain_obj.rule_matched:
+                            event_reason_val = explain_obj.rule_matched.reason if hasattr(explain_obj.rule_matched, 'reason') else ""
+                        
+                        # Build short explanation
+                        change_pct = (event_m_i_val - 1.0) * 100
+                        sign = "+" if change_pct >= 0 else ""
+                        event_explain_short_val = (
+                            f"Event {sign}{change_pct:.0f}% "
+                            f"({event_reason_val if event_reason_val else 'no reason'}, "
+                            f"P{int(event_quantile_val*100)}, "
+                            f"{event_fallback_level_val})"
+                        )
+            
             except Exception as e:
                 logging.warning(f"Promo adjustment failed for SKU {sku}: {e}. Using baseline forecast.")
                 promo_adjustment_note = f"Errore promo adjustment: {str(e)[:50]}..."
@@ -739,7 +803,13 @@ class OrderWorkflow:
                 else:
                     history = []
                 
-                # Call compute_order
+                # Prepare forecast override from promo-adjusted forecast (includes event uplift)
+                # This enables event/promo-adjusted demand to flow into CSL policy
+                forecast_demand_override = None
+                if promo_adjustment_enabled and promo_adjusted_forecast_qty > 0:
+                    forecast_demand_override = float(promo_adjusted_forecast_qty)
+                
+                # Call compute_order with optional forecast override
                 csl_result = compute_order(
                     sku=sku,
                     order_date=order_date,
@@ -751,6 +821,7 @@ class OrderWorkflow:
                     history=history,
                     window_weeks=12,  # Default 12 weeks for forecast
                     censored_flags=None,  # TODO: integrate censored days detection
+                    forecast_demand_override=forecast_demand_override,  # NEW: event/promo-adjusted forecast
                 )
                 
                 # Extract proposed_qty_raw from CSL result
@@ -1024,126 +1095,51 @@ class OrderWorkflow:
         
         # === END POST-PROMO GUARDRAIL ===
         
-        # Apply OOS boost if requested (increase proposed qty)
-        # Regola "almeno +1": se boost_qty calcolato è 0 ma boost è attivo, applica +1
+        # === OOS BOOST (DEPRECATED - NOW HANDLED IN FORECAST) ===
+        # OOS boost is now applied as censored-demand correction in forecast model
+        # (via alpha_boost_for_censored in fit_forecast_model and event uplift).
+        # Post-policy qty boost disabled to prevent double-counting with event uplift.
+        # OOS popup in GUI (estimate override) still active for manual intervention.
         oos_boost_applied = False
-        if oos_days_count > 0 and effective_boost > 0 and proposed_qty_raw > 0:
-            boost_qty = int(proposed_qty_raw * effective_boost)
-            if boost_qty == 0:
-                boost_qty = 1  # Almeno +1 pezzo quando boost attivo
-            oos_boost_applied = True
-            proposed_qty_raw += boost_qty
+        # ARCHIVED CODE (for reference):
+        # if oos_days_count > 0 and effective_boost > 0 and proposed_qty_raw > 0:
+        #     boost_qty = int(proposed_qty_raw * effective_boost)
+        #     if boost_qty == 0:
+        #         boost_qty = 1  # Almeno +1 pezzo quando boost attivo
+        #     oos_boost_applied = True
+        #     proposed_qty_raw += boost_qty
         
-        # Apply pack_size rounding (round up to nearest pack_size multiple)
-        # Skip if simulation already applied it
-        if not simulation_used:
-            if proposed_qty_raw > 0 and pack_size > 1:
-                proposed_qty = ((proposed_qty_raw + pack_size - 1) // pack_size) * pack_size
-            else:
-                proposed_qty = proposed_qty_raw
-            
-            # Apply MOQ rounding (round up to nearest MOQ multiple)
-            if proposed_qty > 0 and moq > 1:
-                proposed_qty = ((proposed_qty + moq - 1) // moq) * moq
-        else:
-            # Simulation already rounded
-            proposed_qty = proposed_qty_raw
+        # === APPLY CONSTRAINTS (CENTRALIZED) ===
+        # Apply all constraints in deterministic order: pack → MOQ → max → shelf life penalty
+        constraint_result = apply_order_constraints(
+            proposed_qty_raw=proposed_qty_raw,
+            pack_size=pack_size,
+            moq=moq,
+            max_stock=max_stock,
+            inventory_position=inventory_position,
+            simulation_used=simulation_used,
+            shelf_life_enabled=shelf_life_enabled,
+            shelf_life_days=shelf_life_days,
+            sku_obj=sku_obj,
+            settings=settings,
+            lots=lots if 'lots' in locals() else None,
+            lots_total=lots_total if 'lots_total' in locals() else 0,
+            ledger_stock=ledger_stock if 'ledger_stock' in locals() else current_stock.on_hand,
+            discrepancy_threshold=discrepancy_threshold if 'discrepancy_threshold' in locals() else 0.0,
+            daily_sales_avg=daily_sales_avg,
+            lead_time=effective_lead_time,
+            demand_variability=demand_variability,
+        )
         
-        # Cap at max_stock (use IP for capping logic)
-        capped_by_max_stock = False
-        if inventory_position + proposed_qty > max_stock:
-            capped_by_max_stock = True
-            proposed_qty = max(0, max_stock - inventory_position)
-            # Re-apply pack_size and MOQ constraints after capping
-            if proposed_qty > 0 and pack_size > 1:
-                proposed_qty = (proposed_qty // pack_size) * pack_size  # Round down
-            if proposed_qty > 0 and moq > 1 and proposed_qty < moq:
-                proposed_qty = 0  # Can't meet MOQ without exceeding max_stock
-        
-        # === APPLY SHELF LIFE PENALTY (Fase 2 - FORWARD-LOOKING) ===
-        shelf_life_penalty_applied = False
-        shelf_life_penalty_message = ""
-        waste_risk_forward_percent = 0.0  # Projected waste risk at receipt_date
-        waste_risk_demand_adjusted_percent = 0.0  # Demand-adjusted waste risk
-        expected_waste_qty = 0  # Expected waste quantity after demand consumption
-        
-        if shelf_life_enabled and shelf_life_days > 0 and proposed_qty > 0:
-            # Determina parametri penalty con category override
-            category = demand_variability.value if demand_variability else "STABLE"
-            category_overrides = settings.get("shelf_life_policy", {}).get("category_overrides", {}).get("value", {})
-            category_params = category_overrides.get(category, {})
-            
-            waste_penalty_mode = sku_obj.waste_penalty_mode if (sku_obj and sku_obj.waste_penalty_mode) else \
-                                 settings.get("shelf_life_policy", {}).get("waste_penalty_mode", {}).get("value", "soft")
-            
-            waste_penalty_factor = sku_obj.waste_penalty_factor if (sku_obj and sku_obj.waste_penalty_factor > 0) else \
-                                   category_params.get("waste_penalty_factor",
-                                   settings.get("shelf_life_policy", {}).get("waste_penalty_factor", {}).get("value", 0.5))
-            
-            waste_risk_threshold = sku_obj.waste_risk_threshold if (sku_obj and sku_obj.waste_risk_threshold > 0) else \
-                                   category_params.get("waste_risk_threshold",
-                                   settings.get("shelf_life_policy", {}).get("waste_risk_threshold", {}).get("value", 15.0))
-            
-            # NEW: Calculate FORWARD waste risk (at receipt_date, including incoming order)
-            # This gives a more realistic picture than current waste_risk_percent
-            receipt_date_calc = date.today() + timedelta(days=lead_time)
-            
-            # Get shelf life parameters (same as earlier calculation)
-            min_shelf_life_calc = sku_obj.min_shelf_life_days if (sku_obj and sku_obj.min_shelf_life_days > 0) else \
-                                  category_params.get("min_shelf_life_days", 
-                                  settings.get("shelf_life_policy", {}).get("min_shelf_life_global", {}).get("value", 7))
-            
-            waste_horizon_days_calc = settings.get("shelf_life_policy", {}).get("waste_horizon_days", {}).get("value", 14)
-            
-            # Calculate forward-looking waste risk (traditional + demand-adjusted)
-            if not lots or lots_total < ledger_stock - discrepancy_threshold:
-                # Fallback case: no forward calculation possible
-                waste_risk_forward_percent = 0.0
-                waste_risk_demand_adjusted_percent = 0.0
-                expected_waste_qty = 0
-            else:
-                # Traditional forward risk (for comparison/notes)
-                waste_risk_forward_percent, _, _ = ShelfLifeCalculator.calculate_forward_waste_risk(
-                    lots=lots,
-                    current_date=date.today(),
-                    receipt_date=receipt_date_calc,
-                    proposed_qty=proposed_qty,
-                    sku_shelf_life_days=shelf_life_days,
-                    min_shelf_life_days=min_shelf_life_calc,
-                    waste_horizon_days=waste_horizon_days_calc
-                )
-                
-                # Demand-adjusted forward risk (used for penalty decision)
-                forecast_daily_demand = daily_sales_avg if daily_sales_avg > 0 else 0.0
-                (
-                    waste_risk_demand_adjusted_percent,
-                    _,
-                    _,
-                    expected_waste_qty
-                ) = ShelfLifeCalculator.calculate_forward_waste_risk_demand_adjusted(
-                    lots=lots,
-                    receipt_date=receipt_date_calc,
-                    proposed_qty=proposed_qty,
-                    sku_shelf_life_days=shelf_life_days,
-                    min_shelf_life_days=min_shelf_life_calc,
-                    waste_horizon_days=waste_horizon_days_calc,
-                    forecast_daily_demand=forecast_daily_demand
-                )
-            
-            # Use DEMAND-ADJUSTED waste risk for penalty decision (more realistic)
-            if waste_risk_demand_adjusted_percent >= waste_risk_threshold:
-                original_proposed = proposed_qty
-                proposed_qty, penalty_msg = ShelfLifeCalculator.apply_shelf_life_penalty(
-                    proposed_qty=proposed_qty,
-                    waste_risk_percent=waste_risk_demand_adjusted_percent,
-                    waste_risk_threshold=waste_risk_threshold,
-                    penalty_mode=waste_penalty_mode,
-                    penalty_factor=waste_penalty_factor
-                )
-                
-                if penalty_msg:
-                    shelf_life_penalty_applied = True
-                    shelf_life_penalty_message = penalty_msg
+        # Extract constraint results
+        proposed_qty = constraint_result["final_qty"]
+        capped_by_max_stock = constraint_result["capped_by_max_stock"]
+        shelf_life_penalty_applied = constraint_result["shelf_life_penalty_applied"]
+        shelf_life_penalty_message = constraint_result["shelf_life_penalty_message"]
+        waste_risk_forward_percent = constraint_result["waste_risk_forward_percent"]
+        waste_risk_demand_adjusted_percent = constraint_result["waste_risk_demand_adjusted_percent"]
+        expected_waste_qty = constraint_result["expected_waste_qty"]
+        constraints_applied_list = constraint_result["constraints_applied"]
         
         # Use target_receipt_date if provided (calendar-aware), otherwise calculate from lead_time
         if target_receipt_date:
@@ -1199,50 +1195,19 @@ class OrderWorkflow:
             else:
                 expl_equivalent_csl_legacy = 0.0
         
-        # Constraints applied (extract from CSL result if available, else infer from legacy logic)
-        expl_constraints_pack = False
-        expl_constraints_moq = False
-        expl_constraints_max = False
-        expl_constraint_details = ""
+        # Constraints applied (use centralized constraint tracking)
+        expl_constraints_pack = constraint_result["constraints_pack"]
+        expl_constraints_moq = constraint_result["constraints_moq"]
+        expl_constraints_max = constraint_result["constraints_max"]
         
         if expl_policy_mode == "csl" and "csl_result" in locals():
-            # CSL mode: parse constraints_applied list from compute_order
-            constraints_list = csl_result.get("constraints_applied", [])
-            for constraint_str in constraints_list:
-                if "pack_size" in constraint_str.lower():
-                    expl_constraints_pack = True
-                if "moq" in constraint_str.lower():
-                    expl_constraints_moq = True
-                if "max_stock" in constraint_str.lower() or "capped" in constraint_str.lower():
-                    expl_constraints_max = True
-            # Build detail string
-            expl_constraint_details = "; ".join(constraints_list) if constraints_list else "Nessun vincolo applicato"
+            # CSL mode: combine CSL constraints + centralized post-policy constraints
+            csl_constraints = csl_result.get("constraints_applied", [])
+            all_constraints = csl_constraints + constraints_applied_list
+            expl_constraint_details = "; ".join(all_constraints) if all_constraints else "Nessun vincolo applicato"
         else:
-            # LEGACY mode: infer from local variables
-            # Pack constraint: check if proposed_qty != proposed_qty_raw (rounding applied)
-            if proposed_qty_raw > 0 and pack_size > 1:
-                pack_rounded = ((proposed_qty_raw + pack_size - 1) // pack_size) * pack_size
-                if pack_rounded != proposed_qty_raw:
-                    expl_constraints_pack = True
-            
-            # MOQ constraint: check if MOQ forced increase
-            if moq > 1:
-                if proposed_qty_raw > 0 and proposed_qty_raw < moq:
-                    expl_constraints_moq = True  # Below MOQ, forced to 0 or increased
-            
-            # Max stock constraint
-            if capped_by_max_stock:
-                expl_constraints_max = True
-            
-            # Build detail string for legacy
-            details_parts = []
-            if expl_constraints_pack:
-                details_parts.append(f"Pack: arrotondato a multiplo di {pack_size}")
-            if expl_constraints_moq:
-                details_parts.append(f"MOQ: {moq} unità minime")
-            if expl_constraints_max:
-                details_parts.append(f"Max Stock: cappato a {max_stock}")
-            expl_constraint_details = "; ".join(details_parts) if details_parts else "Nessun vincolo applicato"
+            # LEGACY or other mode: use centralized constraint list
+            expl_constraint_details = "; ".join(constraints_applied_list) if constraints_applied_list else "Nessun vincolo applicato"
         
         # === END EXPLAINABILITY EXTRACTION ===
         
@@ -1324,6 +1289,18 @@ class OrderWorkflow:
             promo_adjusted_forecast_qty=promo_adjusted_forecast_qty,
             promo_adjustment_note=promo_adjustment_note,
             promo_uplift_factor_used=promo_uplift_factor_used,
+            # Event uplift (delivery-date-based demand driver)
+            event_uplift_active=event_uplift_active_val,
+            event_uplift_factor=event_uplift_factor_val,
+            event_u_store_day=event_u_store_day_val,
+            event_beta_i=event_beta_i_val,
+            event_m_i=event_m_i_val,
+            event_reason=event_reason_val,
+            event_delivery_date=event_delivery_date_val,
+            event_quantile=event_quantile_val,
+            event_fallback_level=event_fallback_level_val,
+            event_beta_fallback_level=event_beta_fallback_level_val,
+            event_explain_short=event_explain_short_val,
             # Shelf life info (Fase 2)
             usable_stock=usable_qty,
             unusable_stock=unusable_qty,
@@ -1449,6 +1426,18 @@ class OrderWorkflow:
             prebuild_coverage = proposal.prebuild_coverage_days if proposal else 0
             prebuild_note = proposal.prebuild_distribution_note if proposal else ""
             
+            # Extract event uplift fields from proposal (default to empty if not present)
+            event_active = proposal.event_uplift_active if proposal else False
+            event_delivery = proposal.event_delivery_date.isoformat() if (proposal and proposal.event_delivery_date) else None
+            event_reason = proposal.event_reason if proposal else ""
+            event_u = proposal.event_u_store_day if proposal else 1.0
+            event_quantile = proposal.event_quantile if proposal else 0.0
+            event_fallback = proposal.event_fallback_level if proposal else ""
+            event_beta = proposal.event_beta_i if proposal else 1.0
+            event_beta_fallback = proposal.event_beta_fallback_level if proposal else ""
+            event_m = proposal.event_m_i if proposal else 1.0
+            event_explain = proposal.event_explain_short if proposal else ""
+            
             self.csv_layer.write_order_log(
                 order_id=confirmation.order_id,
                 date_str=confirmation.date.isoformat(),
@@ -1464,9 +1453,239 @@ class OrderWorkflow:
                 prebuild_qty=prebuild_qty_val,
                 prebuild_coverage_days=prebuild_coverage,
                 prebuild_distribution_note=prebuild_note,
+                event_uplift_active=event_active,
+                event_delivery_date=event_delivery,
+                event_reason=event_reason,
+                event_u_store_day=event_u,
+                event_quantile=event_quantile,
+                event_fallback_level=event_fallback,
+                event_beta_i=event_beta,
+                event_beta_fallback_level=event_beta_fallback,
+                event_m_i=event_m,
+                event_explain_short=event_explain,
             )
         
         return confirmations, transactions
+
+
+def apply_order_constraints(
+    proposed_qty_raw: int,
+    pack_size: int,
+    moq: int,
+    max_stock: int,
+    inventory_position: int,
+    simulation_used: bool = False,
+    shelf_life_enabled: bool = False,
+    shelf_life_days: int = 0,
+    sku_obj: Optional[Any] = None,
+    settings: Optional[Dict[str, Any]] = None,
+    lots: Optional[List[Any]] = None,
+    lots_total: int = 0,
+    ledger_stock: int = 0,
+    discrepancy_threshold: float = 0.0,
+    daily_sales_avg: float = 0.0,
+    lead_time: int = 0,
+    demand_variability: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """
+    Apply all order constraints in deterministic order: pack → MOQ → max → shelf life penalty.
+    
+    This centralizes constraint application logic to ensure consistency and traceability.
+    
+    Constraint Application Order:
+    1. Pack size rounding (round up to nearest pack multiple)
+    2. MOQ rounding (round up to nearest MOQ multiple)
+    3. Max stock cap (with re-application of pack/MOQ after capping)
+    4. Shelf life penalty (if waste risk exceeds threshold)
+    
+    Args:
+        proposed_qty_raw: Raw proposed quantity before constraints
+        pack_size: Package size (units per pack)
+        moq: Minimum order quantity
+        max_stock: Maximum stock level
+        inventory_position: Current inventory position (on_hand + on_order)
+        simulation_used: Whether simulation was used (simulation pre-applies pack/MOQ)
+        shelf_life_enabled: Whether shelf life policy is enabled
+        shelf_life_days: SKU shelf life in days
+        sku_obj: SKU object (for shelf life params)
+        settings: Settings dict (for shelf life params)
+        lots: List of Lot objects (for forward waste risk)
+        lots_total: Total quantity in lots
+        ledger_stock: Ledger on_hand stock
+        discrepancy_threshold: Threshold for lot/ledger discrepancy detection
+        daily_sales_avg: Daily sales average (for demand-adjusted waste risk)
+        lead_time: Lead time in days (for receipt date calculation)
+        demand_variability: DemandVariability enum (for category overrides)
+    
+    Returns:
+        Dict with keys:
+            - "final_qty": int - Final quantity after all constraints
+            - "capped_by_max_stock": bool - Whether max stock cap was applied
+            - "shelf_life_penalty_applied": bool - Whether shelf life penalty was applied
+            - "shelf_life_penalty_message": str - Penalty message
+            - "waste_risk_forward_percent": float - Forward-looking waste risk %
+            - "waste_risk_demand_adjusted_percent": float - Demand-adjusted waste risk %
+            - "expected_waste_qty": int - Expected waste quantity
+            - "constraints_applied": List[str] - List of constraint descriptions
+            - "constraints_pack": bool - Pack constraint applied
+            - "constraints_moq": bool - MOQ constraint applied
+            - "constraints_max": bool - Max constraint applied
+    """
+    proposed_qty = proposed_qty_raw
+    constraints_applied = []
+    constraints_pack = False
+    constraints_moq = False
+    constraints_max = False
+    capped_by_max_stock = False
+    
+    # === STEP 1: PACK SIZE ROUNDING ===
+    # Skip if simulation already applied it
+    if not simulation_used:
+        if proposed_qty_raw > 0 and pack_size > 1:
+            proposed_qty_after_pack = ((proposed_qty_raw + pack_size - 1) // pack_size) * pack_size
+            if proposed_qty_after_pack != proposed_qty_raw:
+                constraints_pack = True
+                constraints_applied.append(
+                    f"pack_size: {proposed_qty_raw} → {proposed_qty_after_pack} "
+                    f"(rounded up to {pack_size} units/pack)"
+                )
+            proposed_qty = proposed_qty_after_pack
+        else:
+            proposed_qty = proposed_qty_raw
+        
+        # === STEP 2: MOQ ROUNDING ===
+        if proposed_qty > 0 and moq > 1:
+            proposed_qty_after_moq = ((proposed_qty + moq - 1) // moq) * moq
+            if proposed_qty_after_moq != proposed_qty:
+                constraints_moq = True
+                constraints_applied.append(
+                    f"moq: {proposed_qty} → {proposed_qty_after_moq} "
+                    f"(rounded up to MOQ={moq})"
+                )
+            proposed_qty = proposed_qty_after_moq
+    else:
+        # Simulation already rounded
+        proposed_qty = proposed_qty_raw
+    
+    # === STEP 3: MAX STOCK CAP ===
+    if inventory_position + proposed_qty > max_stock:
+        capped_by_max_stock = True
+        constraints_max = True
+        proposed_qty_before_cap = proposed_qty
+        proposed_qty = max(0, max_stock - inventory_position)
+        
+        # Re-apply pack_size and MOQ constraints after capping
+        if proposed_qty > 0 and pack_size > 1:
+            proposed_qty = (proposed_qty // pack_size) * pack_size  # Round down
+        if proposed_qty > 0 and moq > 1 and proposed_qty < moq:
+            proposed_qty = 0  # Can't meet MOQ without exceeding max_stock
+        
+        constraints_applied.append(
+            f"max_stock: {proposed_qty_before_cap} → {proposed_qty} "
+            f"(capped by max_stock={max_stock}, IP={inventory_position})"
+        )
+    
+    # === STEP 4: SHELF LIFE PENALTY ===
+    shelf_life_penalty_applied = False
+    shelf_life_penalty_message = ""
+    waste_risk_forward_percent = 0.0
+    waste_risk_demand_adjusted_percent = 0.0
+    expected_waste_qty = 0
+    
+    if shelf_life_enabled and shelf_life_days > 0 and proposed_qty > 0:
+        # Get shelf life parameters with category override
+        category = demand_variability.value if demand_variability else "STABLE"
+        category_overrides = settings.get("shelf_life_policy", {}).get("category_overrides", {}).get("value", {}) if settings else {}
+        category_params = category_overrides.get(category, {})
+        
+        waste_penalty_mode = sku_obj.waste_penalty_mode if (sku_obj and sku_obj.waste_penalty_mode) else \
+                             settings.get("shelf_life_policy", {}).get("waste_penalty_mode", {}).get("value", "soft") if settings else "soft"
+        
+        waste_penalty_factor = sku_obj.waste_penalty_factor if (sku_obj and sku_obj.waste_penalty_factor > 0) else \
+                               category_params.get("waste_penalty_factor",
+                               settings.get("shelf_life_policy", {}).get("waste_penalty_factor", {}).get("value", 0.5) if settings else 0.5)
+        
+        waste_risk_threshold = sku_obj.waste_risk_threshold if (sku_obj and sku_obj.waste_risk_threshold > 0) else \
+                               category_params.get("waste_risk_threshold",
+                               settings.get("shelf_life_policy", {}).get("waste_risk_threshold", {}).get("value", 15.0) if settings else 15.0)
+        
+        # Calculate FORWARD waste risk (at receipt_date, including incoming order)
+        receipt_date_calc = date.today() + timedelta(days=lead_time)
+        
+        # Get shelf life parameters
+        min_shelf_life_calc = sku_obj.min_shelf_life_days if (sku_obj and sku_obj.min_shelf_life_days > 0) else \
+                              category_params.get("min_shelf_life_days", 
+                              settings.get("shelf_life_policy", {}).get("min_shelf_life_global", {}).get("value", 7) if settings else 7)
+        
+        waste_horizon_days_calc = settings.get("shelf_life_policy", {}).get("waste_horizon_days", {}).get("value", 14) if settings else 14
+        
+        # Calculate forward-looking waste risk (traditional + demand-adjusted)
+        if not lots or lots_total < ledger_stock - discrepancy_threshold:
+            # Fallback case: no forward calculation possible
+            waste_risk_forward_percent = 0.0
+            waste_risk_demand_adjusted_percent = 0.0
+            expected_waste_qty = 0
+        else:
+            # Traditional forward risk (for comparison/notes)
+            waste_risk_forward_percent, _, _ = ShelfLifeCalculator.calculate_forward_waste_risk(
+                lots=lots,
+                current_date=date.today(),
+                receipt_date=receipt_date_calc,
+                proposed_qty=proposed_qty,
+                sku_shelf_life_days=shelf_life_days,
+                min_shelf_life_days=min_shelf_life_calc,
+                waste_horizon_days=waste_horizon_days_calc
+            )
+            
+            # Demand-adjusted forward risk (used for penalty decision)
+            forecast_daily_demand = daily_sales_avg if daily_sales_avg > 0 else 0.0
+            (
+                waste_risk_demand_adjusted_percent,
+                _,
+                _,
+                expected_waste_qty
+            ) = ShelfLifeCalculator.calculate_forward_waste_risk_demand_adjusted(
+                lots=lots,
+                receipt_date=receipt_date_calc,
+                proposed_qty=proposed_qty,
+                sku_shelf_life_days=shelf_life_days,
+                min_shelf_life_days=min_shelf_life_calc,
+                waste_horizon_days=waste_horizon_days_calc,
+                forecast_daily_demand=forecast_daily_demand
+            )
+        
+        # Use DEMAND-ADJUSTED waste risk for penalty decision (more realistic)
+        if waste_risk_demand_adjusted_percent >= waste_risk_threshold:
+            original_proposed = proposed_qty
+            proposed_qty, penalty_msg = ShelfLifeCalculator.apply_shelf_life_penalty(
+                proposed_qty=proposed_qty,
+                waste_risk_percent=waste_risk_demand_adjusted_percent,
+                waste_risk_threshold=waste_risk_threshold,
+                penalty_mode=waste_penalty_mode,
+                penalty_factor=waste_penalty_factor
+            )
+            
+            if penalty_msg:
+                shelf_life_penalty_applied = True
+                shelf_life_penalty_message = penalty_msg
+                constraints_applied.append(
+                    f"shelf_life_penalty: {original_proposed} → {proposed_qty} "
+                    f"({penalty_msg})"
+                )
+    
+    return {
+        "final_qty": proposed_qty,
+        "capped_by_max_stock": capped_by_max_stock,
+        "shelf_life_penalty_applied": shelf_life_penalty_applied,
+        "shelf_life_penalty_message": shelf_life_penalty_message,
+        "waste_risk_forward_percent": waste_risk_forward_percent,
+        "waste_risk_demand_adjusted_percent": waste_risk_demand_adjusted_percent,
+        "expected_waste_qty": expected_waste_qty,
+        "constraints_applied": constraints_applied,
+        "constraints_pack": constraints_pack,
+        "constraints_moq": constraints_moq,
+        "constraints_max": constraints_max,
+    }
 
 
 def calculate_daily_sales_average(

@@ -296,13 +296,13 @@ class EventUpliftRule:
     Event-driven uplift rule for delivery date demand adjustment.
     
     Represents a demand multiplier for specific delivery dates, with configurable scope
-    (ALL, DEPT, CATEGORY) to apply uplift to all SKUs or filtered subset.
+    (ALL, SKU, DEPT, CATEGORY) to apply uplift to all SKUs or filtered subset.
     """
     delivery_date: Date  # Target delivery/receipt date for uplift application
     reason: str          # Event reason: holiday, local_event, weather, payday, closure
     strength: float      # Uplift strength: 0.0-1.0 (optional %, converted) or multiplicative factor hint
-    scope_type: str      # Scope: "ALL", "DEPT", "CATEGORY"
-    scope_key: str       # Scope key: empty for ALL, department/category code otherwise
+    scope_type: str      # Scope: "ALL", "SKU", "DEPT", "CATEGORY"
+    scope_key: str       # Scope key: empty for ALL, SKU code/department/category code otherwise
     notes: str = ""      # Free-text notes
     
     def __post_init__(self):
@@ -312,11 +312,11 @@ class EventUpliftRule:
             raise ValueError(f"reason must be one of: holiday, local_event, weather, payday, closure (got: {self.reason})")
         if self.strength < 0.0 or self.strength > 100.0:
             raise ValueError(f"strength must be in range [0.0, 100.0] (got: {self.strength})")
-        if self.scope_type not in ["ALL", "DEPT", "CATEGORY"]:
-            raise ValueError(f"scope_type must be ALL, DEPT, or CATEGORY (got: {self.scope_type})")
+        if self.scope_type not in ["ALL", "SKU", "DEPT", "CATEGORY"]:
+            raise ValueError(f"scope_type must be ALL, SKU, DEPT, or CATEGORY (got: {self.scope_type})")
         if self.scope_type == "ALL" and self.scope_key.strip():
             raise ValueError("scope_key must be empty for scope_type=ALL")
-        if self.scope_type in ["DEPT", "CATEGORY"] and not self.scope_key.strip():
+        if self.scope_type in ["SKU", "DEPT", "CATEGORY"] and not self.scope_key.strip():
             raise ValueError(f"scope_key required for scope_type={self.scope_type}")
     
     def applies_to_sku(self, sku_obj: 'SKU') -> bool:
@@ -331,6 +331,8 @@ class EventUpliftRule:
         """
         if self.scope_type == "ALL":
             return True
+        elif self.scope_type == "SKU":
+            return sku_obj.sku.strip().upper() == self.scope_key.strip().upper()
         elif self.scope_type == "DEPT":
             return sku_obj.department.strip().upper() == self.scope_key.strip().upper()
         elif self.scope_type == "CATEGORY":
@@ -391,6 +393,19 @@ class OrderProposal:
     promo_adjusted_forecast_qty: int = 0  # Forecast con uplift promo applicato
     promo_adjustment_note: str = ""  # Spiegazione aggiustamento promo (es. "Uplift 1.25x attivo")
     promo_uplift_factor_used: float = 1.0  # Uplift factor utilizzato (1.0 = nessun promo)
+    
+    # Event uplift (delivery-date-based demand driver)
+    event_uplift_active: bool = False  # True se event uplift attivo su delivery_date
+    event_uplift_factor: float = 1.0  # Fattore event applicato al forecast (m_i)
+    event_u_store_day: float = 1.0  # U_store_day: event shock globale stimato
+    event_beta_i: float = 1.0  # beta_i: sensibilità SKU all'evento
+    event_m_i: float = 1.0  # m_i = 1 + (U - 1) * beta (moltiplicatore finale)
+    event_reason: str = ""  # Reason dell'evento (es. "holiday", "weather")
+    event_delivery_date: Optional[Date] = None  # Delivery date dell'evento
+    event_quantile: float = 0.0  # Quantile usato per stima U (es. 0.70 = P70)
+    event_fallback_level: str = ""  # Livello fallback U ("global", "dept:XXX", "sku:YYY")
+    event_beta_fallback_level: str = ""  # Livello fallback beta_i
+    event_explain_short: str = ""  # Spiegazione breve (es. "Event +30% (holiday, P70, SKU-level)")
     
     # Shelf life integration (Fase 2)
     usable_stock: int = 0  # Stock utilizzabile (shelf life >= min_shelf_life_days)

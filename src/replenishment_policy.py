@@ -220,6 +220,8 @@ def compute_order(
     window_weeks: int = 8,
     censored_flags: Optional[List[bool]] = None,
     alpha_boost_for_censored: float = 0.05,
+    forecast_demand_override: Optional[float] = None,
+    sigma_horizon_override: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Compute CSL-based order quantity with full breakdown.
@@ -252,6 +254,12 @@ def compute_order(
         censored_flags: Optional list of bool (same length as history).
                        True = day censored (OOS/inevasi), exclude from model.
         alpha_boost_for_censored: Boost alpha if censored days present (default 0.05).
+        forecast_demand_override: Optional override for μ_P (protection period forecast).
+                                 If provided, skips fit_forecast_model/predict steps.
+                                 Use for event/promo-adjusted external forecasts.
+        sigma_horizon_override: Optional override for σ_P (protection period uncertainty).
+                               If provided, skips uncertainty estimation step.
+                               Use when external forecast includes uncertainty estimate.
     
     Returns:
         Dict with comprehensive breakdown:
@@ -325,26 +333,49 @@ def compute_order(
     receipt_date = next_receipt_date(order_date, lane)
     
     # Step 2: Fit forecast model and predict demand (with censored filtering)
-    model = fit_forecast_model(
-        history,
-        censored_flags=censored_flags,
-        alpha_boost_for_censored=alpha_boost_for_censored
-    )
-    forecast_values = predict(model, horizon=protection_period)
-    forecast_demand = sum(forecast_values)  # μ_P
+    # If forecast_demand_override is provided, use it directly (event/promo-adjusted forecast)
+    if forecast_demand_override is not None:
+        forecast_demand = forecast_demand_override
+        # Run model fitting only for metadata tracking (not used for forecast_demand)
+        model = fit_forecast_model(
+            history,
+            censored_flags=censored_flags,
+            alpha_boost_for_censored=alpha_boost_for_censored
+        )
+        forecast_values = [forecast_demand / protection_period] * protection_period  # Dummy values for compatibility
+    else:
+        # Standard path: fit model and predict
+        model = fit_forecast_model(
+            history,
+            censored_flags=censored_flags,
+            alpha_boost_for_censored=alpha_boost_for_censored
+        )
+        forecast_values = predict(model, horizon=protection_period)
+        forecast_demand = sum(forecast_values)  # μ_P
     
     # Step 3: Estimate uncertainty (with censored filtering)
-    from src.uncertainty import estimate_demand_uncertainty
-    
-    def forecast_func(hist, horizon):
-        m = fit_forecast_model(hist, censored_flags=censored_flags, alpha_boost_for_censored=alpha_boost_for_censored)
-        return predict(m, horizon)
-    
-    sigma_daily, uncertainty_meta = estimate_demand_uncertainty(
-        history, forecast_func, window_weeks=window_weeks, method="mad", censored_flags=censored_flags
-    )
-    
-    sigma_horizon = sigma_over_horizon(protection_period, sigma_daily)
+    # If sigma_horizon_override is provided, use it directly (event/promo-adjusted uncertainty)
+    if sigma_horizon_override is not None:
+        sigma_horizon = sigma_horizon_override
+        sigma_daily = sigma_horizon / (protection_period ** 0.5) if protection_period > 0 else 0.0
+        uncertainty_meta = {
+            "n_residuals": 0,
+            "n_censored_excluded": 0,
+            "method": "override",
+        }
+    else:
+        # Standard path: estimate uncertainty from history
+        from src.uncertainty import estimate_demand_uncertainty
+        
+        def forecast_func(hist, horizon):
+            m = fit_forecast_model(hist, censored_flags=censored_flags, alpha_boost_for_censored=alpha_boost_for_censored)
+            return predict(m, horizon)
+        
+        sigma_daily, uncertainty_meta = estimate_demand_uncertainty(
+            history, forecast_func, window_weeks=window_weeks, method="mad", censored_flags=censored_flags
+        )
+        
+        sigma_horizon = sigma_over_horizon(protection_period, sigma_daily)
     
     # Step 4: Get z-score for effective CSL (use alpha_eff)
     z_score = _z_score_for_csl(alpha_eff)

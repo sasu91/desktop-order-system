@@ -1355,7 +1355,7 @@ class DesktopOrderApp:
         
         self.proposal_treeview = ttk.Treeview(
             proposal_frame,
-            columns=("SKU", "Description", "Pack Size", "Usable Stock", "Waste Risk %", "Colli Proposti", "Pezzi Proposti", "Shelf Penalty", "MC Comparison", "Promo Δ", "Receipt Date"),
+            columns=("SKU", "Description", "Pack Size", "Usable Stock", "Waste Risk %", "Colli Proposti", "Pezzi Proposti", "Shelf Penalty", "MC Comparison", "Promo Δ", "Event Uplift", "Receipt Date"),
             height=10,
             yscrollcommand=scrollbar.set,
         )
@@ -1372,6 +1372,7 @@ class DesktopOrderApp:
         self.proposal_treeview.column("Shelf Penalty", anchor=tk.CENTER, width=90)
         self.proposal_treeview.column("MC Comparison", anchor=tk.CENTER, width=110)
         self.proposal_treeview.column("Promo Δ", anchor=tk.CENTER, width=90)
+        self.proposal_treeview.column("Event Uplift", anchor=tk.CENTER, width=90)
         self.proposal_treeview.column("Receipt Date", anchor=tk.CENTER, width=120)
         
         self.proposal_treeview.heading("SKU", text="SKU", anchor=tk.W)
@@ -1384,6 +1385,7 @@ class DesktopOrderApp:
         self.proposal_treeview.heading("Shelf Penalty", text="Penalità ⚠️", anchor=tk.CENTER)
         self.proposal_treeview.heading("MC Comparison", text="📊 MC Info", anchor=tk.CENTER)
         self.proposal_treeview.heading("Promo Δ", text="� Promo", anchor=tk.CENTER)
+        self.proposal_treeview.heading("Event Uplift", text="Event", anchor=tk.CENTER)
         self.proposal_treeview.heading("Receipt Date", text="Data Ricevimento", anchor=tk.CENTER)
         
         self.proposal_treeview.pack(fill="both", expand=True)
@@ -1542,6 +1544,25 @@ class DesktopOrderApp:
                 delta = proposal.promo_adjusted_forecast_qty - proposal.baseline_forecast_qty
                 details.append(f"Delta: +{to_colli(delta, pack_size)} ({(delta/proposal.baseline_forecast_qty*100):.1f}%)")
             details.append(f"Status: {proposal.promo_adjustment_note}")
+            details.append("")
+        
+        # Event Uplift (delivery-date-based demand driver)
+        if proposal.event_uplift_active:
+            details.append("═══ EVENT UPLIFT ═══")
+            change_pct = (proposal.event_m_i - 1.0) * 100
+            sign = "+" if change_pct >= 0 else ""
+            details.append(f"Multiplier (m_i): {proposal.event_m_i:.3f} ({sign}{change_pct:.1f}%)")
+            if proposal.event_reason:
+                details.append(f"Reason: {proposal.event_reason}")
+            if proposal.event_delivery_date:
+                details.append(f"Delivery date: {proposal.event_delivery_date.isoformat()}")
+            details.append(f"U (event shock): {proposal.event_u_store_day:.3f}")
+            details.append(f"Beta (SKU sensitivity): {proposal.event_beta_i:.3f}")
+            details.append(f"Quantile: P{int(proposal.event_quantile * 100)}")
+            details.append(f"U fallback: {proposal.event_fallback_level}")
+            details.append(f"Beta fallback: {proposal.event_beta_fallback_level}")
+            if proposal.event_explain_short:
+                details.append(f"Summary: {proposal.event_explain_short}")
             details.append("")
         
         # Promo Prebuild (if enabled and applied)
@@ -2248,6 +2269,20 @@ class DesktopOrderApp:
             reduction_pct = (1.0 - proposal.cannibalization_downlift_factor) * 100
             promo_delta_display += f" 📉{reduction_pct:.0f}%"  # Downlift badge con driver
         
+        # Event uplift display: show m_i multiplier if event active
+        event_uplift_display = ""
+        if proposal.event_uplift_active and proposal.event_m_i > 1.0:
+            change_pct = (proposal.event_m_i - 1.0) * 100
+            event_uplift_display = f"+{change_pct:.0f}%"
+            # Add reason badge if available
+            if proposal.event_reason:
+                event_uplift_display += f" ({proposal.event_reason[:8]})"
+        elif proposal.event_uplift_active and proposal.event_m_i < 1.0:
+            change_pct = (1.0 - proposal.event_m_i) * 100
+            event_uplift_display = f"-{change_pct:.0f}%"
+        else:
+            event_uplift_display = "-"  # No event
+        
         return (
             proposal.sku,
             proposal.description,
@@ -2259,6 +2294,7 @@ class DesktopOrderApp:
             shelf_penalty_display,
             mc_comparison_display,
             promo_delta_display,
+            event_uplift_display,
             proposal.receipt_date.isoformat() if proposal.receipt_date else "",
         )
 
@@ -9145,7 +9181,7 @@ class DesktopOrderApp:
             
             reason = self.event_reason_var.get().strip()
             strength = float(self.event_strength_var.get().strip())
-            scope_type = self.event_scope_type_var.get()
+            scope_type = self.event_scope_type_var.get().strip().upper()  # Normalize to uppercase
             scope_key = self.event_scope_key_var.get().strip() if scope_type != "ALL" else ""
             notes = self.event_notes_var.get().strip()
             
