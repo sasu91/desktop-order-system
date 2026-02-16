@@ -4689,7 +4689,9 @@ class DesktopOrderApp:
         current_sku = None
         if mode == "edit" and sku_code:
             skus = self.csv_layer.read_skus()
-            current_sku = next((s for s in skus if s.sku == sku_code), None)
+            # Normalize SKU code for comparison (handle both string and numeric SKUs)
+            sku_code_normalized = str(sku_code).strip()
+            current_sku = next((s for s in skus if str(s.sku).strip() == sku_code_normalized), None)
             if not current_sku:
                 messagebox.showerror("Error", f"SKU '{sku_code}' not found.")
                 popup.destroy()

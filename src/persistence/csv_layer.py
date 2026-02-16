@@ -554,8 +554,12 @@ class CSVLayer:
                 "target_csl": row.get("target_csl", "0").strip() or "0",
             }
             
+            # Normalize SKU IDs for comparison (handle both string and numeric SKUs)
+            old_sku_id_normalized = str(old_sku_id).strip()
+            row_sku_normalized = str(normalized_row["sku"]).strip()
+            
             # Update the target row with new values
-            if normalized_row["sku"] == old_sku_id:
+            if row_sku_normalized == old_sku_id_normalized:
                 # Capture old assortment status before update
                 old_in_assortment = normalized_row["in_assortment"].lower() in ("true", "1", "yes", "t")
                 
@@ -635,7 +639,9 @@ class CSVLayer:
             True if deleted, False if not found
         """
         rows = self._read_csv("skus.csv")
-        filtered = [row for row in rows if row.get("sku") != sku_id]
+        # Normalize for comparison (handle both string and numeric SKUs)
+        sku_id_normalized = str(sku_id).strip()
+        filtered = [row for row in rows if str(row.get("sku", "")).strip() != sku_id_normalized]
         
         if len(filtered) < len(rows):
             self._write_csv("skus.csv", filtered)
@@ -653,24 +659,27 @@ class CSVLayer:
         Returns:
             (can_delete, reason_if_not)
         """
+        # Normalize for comparison (handle both string and numeric SKUs)
+        sku_id_normalized = str(sku_id).strip()
+        
         # Check transactions
         txns = self.read_transactions()
-        if any(t.sku == sku_id for t in txns):
+        if any(str(t.sku).strip() == sku_id_normalized for t in txns):
             return False, f"SKU {sku_id} has transactions in ledger"
         
         # Check sales
         sales = self.read_sales()
-        if any(s.sku == sku_id for s in sales):
+        if any(str(s.sku).strip() == sku_id_normalized for s in sales):
             return False, f"SKU {sku_id} has sales records"
         
         # Check order logs
         orders = self.read_order_logs()
-        if any(o.get("sku") == sku_id for o in orders):
+        if any(str(o.get("sku", "")).strip() == sku_id_normalized for o in orders):
             return False, f"SKU {sku_id} has order history"
         
         # Check receiving logs
         receives = self.read_receiving_logs()
-        if any(r.get("sku") == sku_id for r in receives):
+        if any(str(r.get("sku", "")).strip() == sku_id_normalized for r in receives):
             return False, f"SKU {sku_id} has receiving history"
         
         return True, ""
@@ -2214,7 +2223,9 @@ class CSVLayer:
             List of lots for the SKU
         """
         lots = self.read_lots()
-        sku_lots = [lot for lot in lots if lot.sku == sku]
+        # Normalize SKU for comparison (handle both string and numeric SKUs)
+        sku_normalized = str(sku).strip()
+        sku_lots = [lot for lot in lots if str(lot.sku).strip() == sku_normalized]
         
         if sort_by_expiry:
             # Sort: None (no expiry) last, then by expiry date ascending
