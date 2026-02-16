@@ -127,6 +127,10 @@ class DesktopOrderApp:
             "settings": "⚙️ Impostazioni"
         }
         
+        # Settings modification tracking
+        self.settings_modified = False
+        self._previous_tab_index = 0  # Track previous tab for detecting tab changes
+        
         # Load saved tab order from settings
         self.tab_order = self._load_tab_order()
         
@@ -175,6 +179,9 @@ class DesktopOrderApp:
         self.notebook.bind("<Button-1>", self._on_tab_press)
         self.notebook.bind("<B1-Motion>", self._on_tab_drag)
         self.notebook.bind("<ButtonRelease-1>", self._on_tab_release)
+        
+        # Bind event for tab change (to check unsaved settings)
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         
         # Create tabs
         self.dashboard_tab = ttk.Frame(self.notebook)
@@ -1551,7 +1558,7 @@ class DesktopOrderApp:
         
         # Read event_uplift enabled status from settings
         try:
-            settings = self.csv.read_settings()
+            settings = self.csv_layer.read_settings()
             event_uplift_enabled = settings.get("event_uplift", {}).get("enabled", {}).get("value", False)
         except Exception:
             event_uplift_enabled = False
@@ -6427,6 +6434,9 @@ class DesktopOrderApp:
                 "section": section_key
             }
             
+            # Add trace to mark as modified when changed
+            value_var.trace_add("write", lambda *args: self._mark_settings_modified())
+            
             # Store for search
             self.settings_rows.append({
                 "frame": row_frame,
@@ -8282,6 +8292,9 @@ class DesktopOrderApp:
             if hasattr(self, "order_days_vars"):
                 for weekday, var in self.order_days_vars.items():
                     var.set(weekday in active_days)
+            
+            # Reset modified flag after loading
+            self.settings_modified = False
         
         except Exception as e:
             messagebox.showerror("Errore", f"Impossibile caricare impostazioni: {str(e)}")
@@ -8289,6 +8302,9 @@ class DesktopOrderApp:
     def _save_settings(self):
         """Save settings to JSON file."""
         try:
+            # Reset modified flag
+            self.settings_modified = False
+            
             settings = self.csv_layer.read_settings()
             
             # Parameter mapping (same as _refresh)
@@ -8454,6 +8470,109 @@ class DesktopOrderApp:
         
         except Exception as e:
             messagebox.showerror("Errore", f"Impossibile ripristinare impostazioni: {str(e)}")
+    
+    def _mark_settings_modified(self):
+        """Mark settings as modified (called by widget trace)."""
+        self.settings_modified = True
+    
+    def _on_tab_changed(self, event):
+        """Handle tab change event - check for unsaved settings."""
+        # This event fires AFTER the tab has changed
+        # We need to track the previous tab to detect leaving settings tab
+        
+        # Get current (new) tab index
+        try:
+            new_tab_index = self.notebook.index(self.notebook.select())
+        except Exception:
+            return
+        
+        # Find settings tab index
+        settings_tab_index = None
+        for i in range(self.notebook.index("end")):
+            try:
+                if self.notebook.tab(i, "text") == "⚙️ Impostazioni":
+                    settings_tab_index = i
+                    break
+            except:
+                continue
+        
+        if settings_tab_index is None:
+            return
+        
+        # Get previous tab index from stored state
+        if not hasattr(self, '_previous_tab_index'):
+            self._previous_tab_index = new_tab_index
+            return
+        
+        previous_tab_index = self._previous_tab_index
+        self._previous_tab_index = new_tab_index
+        
+        # If we just LEFT the settings tab with unsaved changes
+        if previous_tab_index == settings_tab_index and self.settings_modified and new_tab_index != settings_tab_index:
+            # Ask user what to do
+            response = messagebox.askyesnocancel(
+                "Impostazioni Non Salvate",
+                "Ci sono modifiche non salvate nelle impostazioni.\n\nVuoi salvare prima di cambiare tab?",
+                icon='warning'
+            )
+            
+            if response is True:  # Yes - save and continue
+                self._save_settings()
+                self.settings_modified = False
+            elif response is False:  # No - discard and continue
+                self.settings_modified = False
+                # Reload original values when user returns to settings
+            else:  # Cancel - go back to settings tab
+                self.notebook.select(settings_tab_index)
+                self._previous_tab_index = settings_tab_index
+                return
+    
+    def _check_settings_save_on_tab_change(self, target_tab_index):
+        """Check if settings need saving before changing tabs.
+        
+        Args:
+            target_tab_index: The tab index we want to switch to
+            
+        Returns:
+            True if tab change should proceed, False otherwise
+        """
+        # Get settings tab index
+        settings_tab_index = None
+        for i in range(self.notebook.index("end")):
+            if self.notebook.tab(i, "text") == "⚙️ Impostazioni":
+                settings_tab_index = i
+                break
+        
+        if settings_tab_index is None:
+            return True
+        
+        # Get current tab
+        try:
+            current_tab_index = self.notebook.index(self.notebook.select())
+        except Exception:
+            return True
+        
+        # If we're on settings tab and have unsaved changes
+        if current_tab_index == settings_tab_index and self.settings_modified:
+            # Ask user what to do
+            response = messagebox.askyesnocancel(
+                "Impostazioni Non Salvate",
+                "Ci sono modifiche non salvate nelle impostazioni.\n\nVuoi salvare prima di cambiare tab?",
+                icon='warning'
+            )
+            
+            if response is True:  # Yes - save
+                self._save_settings()
+                self.settings_modified = False
+                return True
+            elif response is False:  # No - discard
+                self.settings_modified = False
+                self._refresh_settings_tab()  # Reload original values
+                return True
+            else:  # Cancel - stay on current tab
+                return False
+        
+        return True
     
     def _on_tab_press(self, event):
         """Handle mouse press on tab for drag-and-drop reordering."""
