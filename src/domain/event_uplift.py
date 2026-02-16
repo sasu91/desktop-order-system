@@ -13,7 +13,9 @@ Methodology:
    - Fallback: SKU → category → dept → global if insufficient data
    - Normalize beta_i (mean=1 in group, or weighted sum=1)
    - Apply perishables policy (exclude/cap based on shelf_life)
-4. Construct multiplier: m_i = 1 + (U_store_day - 1) * beta_i
+4. Construct multiplier: m_i = 1 + (U_store_day - 1) * beta_i * strength
+   - strength (0.0-1.0) is user-defined intensity from EventUpliftRule
+   - strength=1.0 → full effect, strength=0.5 → half effect
 5. Apply to baseline forecast for impacted days (delivery + protection period)
 6. Return adjusted forecast + explainability
 
@@ -58,7 +60,7 @@ class EventUpliftExplain:
     beta_normalization_mode: str  # "mean_one", "weighted_sum_one", "none"
     
     # Final multiplier
-    m_i: float  # Final multiplier = 1 + (U - 1) * beta
+    m_i: float  # Final multiplier = 1 + (U - 1) * beta * strength
     m_i_clamped: bool  # True if m_i was clamped by min/max
     
     # Perishables policy
@@ -309,7 +311,8 @@ def apply_event_uplift_to_forecast(
     1. Check if any rule matches delivery_date + SKU scope
     2. Estimate U_store_day from similar historical days
     3. Estimate beta_i (SKU sensitivity) with fallback
-    4. Compute m_i = 1 + (U - 1) * beta_i
+    4. Compute m_i = 1 + (U - 1) * beta_i * strength
+       - strength is user-defined intensity (0.0-1.0) from rule
     5. Apply to impacted dates (delivery + protection period)
     6. Return adjusted forecast + explainability
     
@@ -428,8 +431,10 @@ def apply_event_uplift_to_forecast(
         settings=settings,
     )
     
-    # Compute m_i = 1 + (U - 1) * beta
-    m_i_raw = 1.0 + (u_store_day - 1.0) * beta_i
+    # Compute m_i = 1 + (U - 1) * beta * strength
+    # strength is user-defined intensity (0.0-1.0) from rule
+    strength = rule_matched.strength if hasattr(rule_matched, 'strength') else 1.0
+    m_i_raw = 1.0 + (u_store_day - 1.0) * beta_i * strength
     
     # Clamp m_i
     min_factor = event_settings.get("min_factor", {}).get("value", 1.0)

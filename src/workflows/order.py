@@ -545,6 +545,10 @@ class OrderWorkflow:
         promo_adj_settings = settings.get("promo_adjustment", {})
         promo_adjustment_enabled = promo_adj_settings.get("enabled", {}).get("value", False)
         
+        # Check if event uplift is enabled (independent from promo)
+        event_uplift_settings = settings.get("event_uplift", {})
+        event_uplift_enabled = event_uplift_settings.get("enabled", {}).get("value", False)
+        
         if promo_adjustment_enabled:
             # Build horizon dates for forecast period
             horizon_dates = [date.today() + timedelta(days=i) for i in range(1, forecast_period + 1)]
@@ -664,6 +668,77 @@ class OrderWorkflow:
             except Exception as e:
                 logging.warning(f"Promo adjustment failed for SKU {sku}: {e}. Using baseline forecast.")
                 promo_adjustment_note = f"Errore promo adjustment: {str(e)[:50]}..."
+        
+        # === EVENT UPLIFT (INDEPENDENT FROM PROMO) ===
+        # Apply event-driven demand uplift if enabled (works with or without promo)
+        if event_uplift_enabled and sku_obj and target_receipt_date:
+            try:
+                # Load required data
+                all_sales_records = self.csv_layer.read_sales() if sales_records is None else sales_records
+                all_transactions = self.csv_layer.read_transactions() if transactions is None else transactions
+                all_skus = self.csv_layer.read_skus()
+                event_rules = self.csv_layer.read_event_uplift_rules()
+                
+                if event_rules:
+                    # Import event uplift module
+                    try:
+                        from ..domain.event_uplift import apply_event_uplift_to_forecast
+                    except ImportError:
+                        from domain.event_uplift import apply_event_uplift_to_forecast
+                    
+                    # Build horizon for forecast period
+                    horizon_dates = [date.today() + timedelta(days=i) for i in range(1, forecast_period + 1)]
+                    
+                    # Build baseline forecast dict (constant daily rate for simplicity)
+                    baseline_fc_dict = {d: daily_sales_avg for d in horizon_dates}
+                    
+                    # Apply event uplift using target_receipt_date as delivery_date
+                    event_adjusted_fc, event_explain = apply_event_uplift_to_forecast(
+                        sku_obj=sku_obj,
+                        delivery_date=target_receipt_date,
+                        horizon_dates=horizon_dates,
+                        baseline_forecast=baseline_fc_dict,
+                        event_rules=event_rules,
+                        all_skus=all_skus,
+                        sales_records=all_sales_records,
+                        settings=settings,
+                    )
+                    
+                    # If event active, update forecast_qty
+                    if event_explain.rule_matched is not None:
+                        event_uplift_active_val = True
+                        event_m_i_val = event_explain.m_i
+                        event_uplift_factor_val = event_m_i_val
+                        event_u_store_day_val = event_explain.u_store_day
+                        event_beta_i_val = event_explain.beta_i
+                        event_delivery_date_val = event_explain.delivery_date
+                        event_quantile_val = event_explain.u_quantile
+                        event_fallback_level_val = event_explain.u_fallback_level
+                        event_beta_fallback_level_val = event_explain.beta_fallback_level
+                        
+                        # Extract reason from matched rule
+                        if event_explain.rule_matched:
+                            event_reason_val = event_explain.rule_matched.reason if hasattr(event_explain.rule_matched, 'reason') else ""
+                        
+                        # Build short explanation
+                        change_pct = (event_m_i_val - 1.0) * 100
+                        sign = "+" if change_pct >= 0 else ""
+                        event_explain_short_val = (
+                            f"Event {sign}{change_pct:.0f}% "
+                            f"({event_reason_val if event_reason_val else 'no reason'}, "
+                            f"P{int(event_quantile_val*100)}, "
+                            f"{event_fallback_level_val})"
+                        )
+                        
+                        # Apply uplift to forecast_qty
+                        event_adjusted_total = sum(event_adjusted_fc.values())
+                        event_adjusted_forecast_qty = int(event_adjusted_total)
+                        forecast_qty = event_adjusted_forecast_qty
+                        
+                        logging.info(f"Event uplift applied to {sku}: m_i={event_m_i_val:.3f}, forecast adjusted from {baseline_forecast_qty} to {event_adjusted_forecast_qty}")
+            
+            except Exception as e:
+                logging.warning(f"Event uplift failed for SKU {sku}: {e}. Using baseline forecast.")
         
         S = forecast_qty + safety_stock
         
