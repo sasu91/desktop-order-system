@@ -454,6 +454,9 @@ class OrderProposal:
     constraints_applied_max: bool = False  # True se max_stock cap applicato
     constraint_details: str = ""  # Dettaglio testuale vincoli (es. "Pack: 12→24, MOQ: 10, Max: 500")
     
+    # History tracking (for UI visibility)
+    history_valid_days: int = 0  # Giorni validi usati dal forecast (esclude OOS + out-of-assortment)
+    
     # CSL-based policy (Target Service Level mode)
     csl_policy_mode: str = ""  # "legacy" or "csl"
     csl_alpha_target: float = 0.0  # Target service level (alpha from resolver)

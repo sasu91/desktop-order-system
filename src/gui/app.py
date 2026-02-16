@@ -1395,6 +1395,9 @@ class DesktopOrderApp:
         self.proposal_treeview.heading("Event Uplift", text="Event", anchor=tk.CENTER)
         self.proposal_treeview.heading("Receipt Date", text="Data Ricevimento", anchor=tk.CENTER)
         
+        # Configure tag for low-history SKUs (<=7 valid days)
+        self.proposal_treeview.tag_configure("low_history", background="#fff3cd", foreground="#856404")
+        
         self.proposal_treeview.pack(fill="both", expand=True)
         
         # Bind double-click to edit and single-click to show details
@@ -1497,6 +1500,12 @@ class DesktopOrderApp:
             details.append(f"⚠️ Giorni OOS rilevati: {proposal.oos_days_count}")
             if proposal.oos_boost_applied:
                 details.append(f"   Boost applicato: +{int(proposal.oos_boost_percent*100)}%")
+        
+        # History tracking (valid days used by forecast)
+        if hasattr(proposal, 'history_valid_days'):
+            details.append(f"Storico valido: {proposal.history_valid_days} giorni")
+            if proposal.history_valid_days <= 7:
+                details.append(f"  ⚠️ ATTENZIONE: Storico limitato (<= 7gg)")
         
         # Constraints applied
         details.append("")
@@ -1991,14 +2000,18 @@ class DesktopOrderApp:
             # Determine OOS detection mode: use SKU-specific if set, otherwise global
             oos_detection_mode = sku_obj.oos_detection_mode if (sku_obj and sku_obj.oos_detection_mode) else oos_detection_mode_global
             
-            # Calculate daily sales average (with OOS exclusion) - NOW RETURNS TUPLE
-            daily_sales, oos_days_count = calculate_daily_sales_average(
+            # Calculate daily sales average (with OOS exclusion + detailed breakdown)
+            daily_sales, oos_days_count, oos_days_list, out_of_assortment_days = calculate_daily_sales_average(
                 sales_records, sku_id, 
                 days_lookback=oos_lookback_days, 
                 transactions=transactions, 
                 asof_date=date.today(),
-                oos_detection_mode=oos_detection_mode
+                oos_detection_mode=oos_detection_mode,
+                return_details=True
             )
+            
+            # Calculate valid history days (used by forecast engine)
+            history_valid_days = oos_lookback_days - len(oos_days_list) - len(out_of_assortment_days)
             
             # Determine OOS boost for this SKU
             oos_boost_percent = 0.0
@@ -2061,13 +2074,17 @@ class DesktopOrderApp:
                                 transactions.append(marker_txn)
                                 
                                 # Recalculate daily average with override marker
-                                daily_sales, oos_days_count = calculate_daily_sales_average(
+                                daily_sales, oos_days_count, oos_days_list, out_of_assortment_days = calculate_daily_sales_average(
                                     sales_records, sku_id,
                                     days_lookback=oos_lookback_days,
                                     transactions=transactions,
                                     asof_date=date.today(),
-                                    oos_detection_mode=oos_detection_mode
+                                    oos_detection_mode=oos_detection_mode,
+                                    return_details=True
                                 )
+                                
+                                # Update valid history days after recalculation
+                                history_valid_days = oos_lookback_days - len(oos_days_list) - len(out_of_assortment_days)
                                 
                                 logger.info(f"OOS estimate registered for {sku_id} on {estimate_date}: {estimate_colli} colli ({estimate_pz} pz)")
                         except Exception as e:
@@ -2122,6 +2139,9 @@ class DesktopOrderApp:
                 transactions=transactions,
                 sales_records=sales_records,
             )
+            
+            # Inject history_valid_days into proposal (not part of workflow generation)
+            proposal.history_valid_days = history_valid_days
             
             self.current_proposals.append(proposal)
         
@@ -2356,10 +2376,16 @@ class DesktopOrderApp:
         self.proposal_treeview.delete(*self.proposal_treeview.get_children())
         
         for proposal in self.current_proposals:
+            # Apply low_history tag if valid days <= 7
+            tags = ()
+            if hasattr(proposal, 'history_valid_days') and proposal.history_valid_days <= 7:
+                tags = ("low_history",)
+            
             self.proposal_treeview.insert(
                 "",
                 "end",
                 values=self._build_proposal_row_values(proposal),
+                tags=tags
             )
     
     def _refresh_order_stock_data(self):
@@ -2405,7 +2431,66 @@ class DesktopOrderApp:
             return
 
         if column_name == "Colli Proposti":
-            self._edit_proposed_qty_dialog(proposal, selected[0])
+            self._edit_proposed_qty_inline(proposal, selected[0], event)
+    
+    def _edit_proposed_qty_inline(self, proposal, tree_item_id, event):
+        """Edit proposed quantity inline (in-cell) with Entry widget."""
+        sku_obj = next((s for s in self.csv_layer.read_skus() if s.sku == proposal.sku), None)
+        pack_size = sku_obj.pack_size if sku_obj else 1
+        
+        # Get current value
+        current_colli = proposal.proposed_qty // pack_size if pack_size > 0 else proposal.proposed_qty
+        
+        # Get cell bounding box
+        column_id = self.proposal_treeview.identify_column(event.x)
+        bbox = self.proposal_treeview.bbox(tree_item_id, column_id)
+        if not bbox:
+            return
+        
+        x, y, width, height = bbox
+        
+        # Create Entry widget over the cell
+        entry_var = tk.StringVar(value=str(current_colli))
+        entry = ttk.Entry(self.proposal_treeview, textvariable=entry_var, justify="center")
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.focus_set()
+        entry.select_range(0, tk.END)
+        
+        def save_value(event=None):
+            """Save the edited value (Enter key)."""
+            try:
+                new_colli = int(entry_var.get())
+                if new_colli < 0:
+                    messagebox.showerror("Errore", "I colli devono essere >= 0.")
+                    entry.destroy()
+                    return
+                
+                # Convert colli to pezzi
+                new_pezzi = new_colli * pack_size
+                
+                # Update proposal
+                proposal.proposed_qty = new_pezzi
+                
+                # Update tree item
+                self.proposal_treeview.item(
+                    tree_item_id,
+                    values=self._build_proposal_row_values(proposal),
+                )
+                
+                entry.destroy()
+            except ValueError:
+                messagebox.showerror("Errore", "Inserire un numero intero valido.")
+                entry.destroy()
+        
+        def cancel_edit(event=None):
+            """Cancel the edit (Esc key or focus out)."""
+            entry.destroy()
+        
+        # Bind keys
+        entry.bind("<Return>", save_value)
+        entry.bind("<KP_Enter>", save_value)  # Keypad Enter
+        entry.bind("<Escape>", cancel_edit)
+        entry.bind("<FocusOut>", cancel_edit)
     
     def _edit_proposed_qty_dialog(self, proposal, tree_item_id):
         """Show dialog to edit proposed quantity in colli."""
@@ -4575,17 +4660,13 @@ class DesktopOrderApp:
         # Get selected SKU data - use tags to preserve original SKU (with leading zeros)
         item = self.admin_treeview.item(selected[0])
         tags = item.get("tags", [])
-        values = item["values"]
-        
-        print(f"DEBUG _edit_sku: tags={tags}, values={values}")
         
         if tags and tags[0].startswith("sku_"):
             selected_sku = tags[0][4:]  # Remove 'sku_' prefix to get original SKU
         else:
             # Fallback to values if tags not available
+            values = item["values"]
             selected_sku = values[0]  # SKU code
-        
-        print(f"DEBUG _edit_sku: selected_sku='{selected_sku}' (type: {type(selected_sku)})")
         
         self._show_sku_form(mode="edit", sku_code=selected_sku)
     
@@ -4713,18 +4794,8 @@ class DesktopOrderApp:
             # Normalize SKU code for comparison (handle both string and numeric SKUs)
             sku_code_normalized = str(sku_code).strip()
             
-            # Debug: log what we're searching for and what we have
-            print(f"DEBUG _show_sku_form: Searching for SKU: '{sku_code_normalized}' (type: {type(sku_code_normalized)})")
-            print(f"DEBUG _show_sku_form: Available SKUs (first 10): {[f'{s.sku}' for s in skus[:10]]}")
-            
             current_sku = next((s for s in skus if str(s.sku).strip() == sku_code_normalized), None)
             if not current_sku:
-                # Additional debug: show exact match attempts
-                print(f"DEBUG _show_sku_form: Failed to find match. Trying detailed comparison:")
-                for s in skus[:10]:  # Check first 10
-                    s_sku = str(s.sku).strip()
-                    print(f"  '{s_sku}' == '{sku_code_normalized}' ? {s_sku == sku_code_normalized} (repr: {repr(s_sku)} vs {repr(sku_code_normalized)})")
-                
                 messagebox.showerror("Error", f"SKU '{sku_code}' not found.")
                 popup.destroy()
                 return
