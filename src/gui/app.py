@@ -4525,11 +4525,12 @@ class DesktopOrderApp:
             
             status = "In assortimento" if sku.in_assortment else "Fuori assortimento"
             # Store the actual SKU code in tags to preserve leading zeros
+            # Prefix with 'sku_' to prevent tkinter from converting to number
             item_id = self.admin_treeview.insert(
                 "",
                 "end",
                 values=(sku.sku, sku.description, sku.ean or "", status),
-                tags=(sku.sku,)  # Store original SKU in tags
+                tags=(f"sku_{sku.sku}",)  # Store original SKU in tags with prefix
             )
     
     def _search_skus(self):
@@ -4547,11 +4548,12 @@ class DesktopOrderApp:
             
             status = "In assortimento" if sku.in_assortment else "Fuori assortimento"
             # Store the actual SKU code in tags to preserve leading zeros
+            # Prefix with 'sku_' to prevent tkinter from converting to number
             self.admin_treeview.insert(
                 "",
                 "end",
                 values=(sku.sku, sku.description, sku.ean or "", status),
-                tags=(sku.sku,)  # Store original SKU in tags
+                tags=(f"sku_{sku.sku}",)  # Store original SKU in tags with prefix
             )
     
     def _clear_search(self):
@@ -4577,8 +4579,8 @@ class DesktopOrderApp:
         
         print(f"DEBUG _edit_sku: tags={tags}, values={values}")
         
-        if tags:
-            selected_sku = tags[0]  # Original SKU from tags
+        if tags and tags[0].startswith("sku_"):
+            selected_sku = tags[0][4:]  # Remove 'sku_' prefix to get original SKU
         else:
             # Fallback to values if tags not available
             selected_sku = values[0]  # SKU code
@@ -4597,8 +4599,8 @@ class DesktopOrderApp:
         # Get selected SKU data - use tags to preserve original SKU (with leading zeros)
         item = self.admin_treeview.item(selected[0])
         tags = item.get("tags", [])
-        if tags:
-            sku_code = tags[0]  # Original SKU from tags
+        if tags and tags[0].startswith("sku_"):
+            sku_code = tags[0][4:]  # Remove 'sku_' prefix to get original SKU
         else:
             # Fallback to values if tags not available
             values = item["values"]
