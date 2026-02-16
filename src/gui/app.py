@@ -6670,17 +6670,17 @@ class DesktopOrderApp:
             ttk.Entry(form_frame, textvariable=self.event_delivery_date_var, width=15).grid(row=0, column=1, sticky="w", pady=8)
         self.event_delivery_date_var.trace('w', lambda *args: self._validate_event_uplift_form())
         
-        ttk.Label(form_frame, text="Motivo: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=0, column=2, sticky="e", padx=(20, 8), pady=8)
+        ttk.Label(form_frame, text="Motivo:", font=("Helvetica", 9)).grid(row=0, column=2, sticky="e", padx=(20, 8), pady=8)
         self.event_reason_var = tk.StringVar()
         reason_combo = ttk.Combobox(
             form_frame,
             textvariable=self.event_reason_var,
-            values=["Natale", "Pasqua", "San Valentino", "Festa della Mamma", "Black Friday", "Epifania", "Ferragosto", "Custom..."],
+            values=["", "holiday", "local_event", "weather", "payday", "closure"],
             width=25,
             state="readonly",
         )
         reason_combo.grid(row=0, column=3, sticky="w", pady=8)
-        reason_combo.current(0)  # Default: Natale
+        reason_combo.current(0)  # Default: empty (optional)
         self.event_reason_var.trace('w', lambda *args: self._validate_event_uplift_form())
         
         # ROW 1: Strength (obbligatorio) + Scope Type
@@ -9152,10 +9152,7 @@ class DesktopOrderApp:
         except ValueError:
             errors.append("Data consegna non valida (formato: YYYY-MM-DD)")
         
-        # Reason validation
-        reason = self.event_reason_var.get().strip()
-        if not reason:
-            errors.append("Motivo richiesto")
+        # Reason validation (optional, no check needed)
         
         # Strength validation
         try:
@@ -9344,7 +9341,7 @@ class DesktopOrderApp:
     def _clear_event_uplift_form(self):
         """Reset event uplift form to default values."""
         self.event_delivery_date_var.set(date.today().isoformat())
-        self.event_reason_var.set("Natale")
+        self.event_reason_var.set("")  # Optional field
         self.event_strength_var.set("0.5")
         self.event_scope_type_var.set("ALL")
         self.event_scope_key_var.set("")
