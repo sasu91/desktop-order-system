@@ -1546,16 +1546,32 @@ class DesktopOrderApp:
             details.append(f"Status: {proposal.promo_adjustment_note}")
             details.append("")
         
-        # Event Uplift (delivery-date-based demand driver)
+        # Event Uplift (delivery-date-based demand driver) - always visible
+        details.append("═══ EVENT UPLIFT ═══")
+        
+        # Read event_uplift enabled status from settings
+        try:
+            settings = self.csv.read_settings()
+            event_uplift_enabled = settings.get("event_uplift", {}).get("enabled", {}).get("value", False)
+        except Exception:
+            event_uplift_enabled = False
+        
+        details.append(f"Enabled: {'Sì' if event_uplift_enabled else 'No'}")
+        
+        if proposal.receipt_date:
+            details.append(f"Receipt date: {proposal.receipt_date.isoformat()}")
+        if proposal.event_delivery_date:
+            details.append(f"Delivery date: {proposal.event_delivery_date.isoformat()}")
+        
+        # Always show multiplier
+        change_pct = (proposal.event_m_i - 1.0) * 100
+        sign = "+" if change_pct >= 0 else ""
+        details.append(f"Multiplier (m_i): {proposal.event_m_i:.3f} ({sign}{change_pct:.1f}%)")
+        
+        # Show details if active
         if proposal.event_uplift_active:
-            details.append("═══ EVENT UPLIFT ═══")
-            change_pct = (proposal.event_m_i - 1.0) * 100
-            sign = "+" if change_pct >= 0 else ""
-            details.append(f"Multiplier (m_i): {proposal.event_m_i:.3f} ({sign}{change_pct:.1f}%)")
             if proposal.event_reason:
                 details.append(f"Reason: {proposal.event_reason}")
-            if proposal.event_delivery_date:
-                details.append(f"Delivery date: {proposal.event_delivery_date.isoformat()}")
             details.append(f"U (event shock): {proposal.event_u_store_day:.3f}")
             details.append(f"Beta (SKU sensitivity): {proposal.event_beta_i:.3f}")
             details.append(f"Quantile: P{int(proposal.event_quantile * 100)}")
@@ -1563,7 +1579,37 @@ class DesktopOrderApp:
             details.append(f"Beta fallback: {proposal.event_beta_fallback_level}")
             if proposal.event_explain_short:
                 details.append(f"Summary: {proposal.event_explain_short}")
-            details.append("")
+        
+        # Motivation (contextual explanation)
+        motivation = None
+        if not event_uplift_enabled:
+            motivation = "Event uplift disabilitato nelle impostazioni"
+        elif not proposal.event_uplift_active:
+            motivation = "Nessuna regola uplift per questa data di consegna"
+        elif proposal.event_m_i > 1.01:  # Significant increase
+            if proposal.event_reason:
+                motivation = f"Incremento del {change_pct:.1f}% per evento: {proposal.event_reason}"
+            else:
+                motivation = f"Incremento del {change_pct:.1f}% rilevato dai dati storici di giorni simili"
+        elif proposal.event_m_i < 0.99:  # Significant decrease
+            if proposal.event_reason:
+                motivation = f"Riduzione del {abs(change_pct):.1f}% per evento: {proposal.event_reason}"
+            else:
+                motivation = f"Riduzione del {abs(change_pct):.1f}% rilevata dai dati storici di giorni simili"
+        else:  # Neutral (m_i ≈ 1.0)
+            if proposal.event_u_store_day is not None and abs(proposal.event_u_store_day - 1.0) < 0.05:
+                motivation = "Giorni simili mostrano domanda normale (U ≈ 1.0)"
+            elif proposal.event_beta_i is not None and abs(proposal.event_beta_i) < 0.1:
+                motivation = "SKU insensibile agli eventi (Beta ≈ 0)"
+            elif hasattr(proposal, 'event_strength') and proposal.event_strength is not None and proposal.event_strength < 0.1:
+                motivation = f"Regola configurata con forza bassa (strength = {proposal.event_strength:.2f})"
+            else:
+                motivation = "Impatto netto neutro (combinazione U, Beta, Strength)"
+        
+        if motivation:
+            details.append(f"Motivazione: {motivation}")
+        
+        details.append("")
         
         # Promo Prebuild (if enabled and applied)
         if proposal.promo_prebuild_enabled:
