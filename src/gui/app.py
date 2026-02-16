@@ -6821,6 +6821,7 @@ class DesktopOrderApp:
         self._build_expiry_alerts_settings_tab()
         self._build_shelf_life_settings_tab()
         self._build_dashboard_settings_tab()
+        self._build_event_uplift_settings_tab()
         self._build_service_level_settings_tab()
         self._build_closed_loop_settings_tab()
         self._build_holidays_settings_tab()
@@ -7419,6 +7420,138 @@ class DesktopOrderApp:
         ]
         
         self._create_param_rows(scrollable_frame, dashboard_params, "dashboard")
+
+    def _build_event_uplift_settings_tab(self):
+        """Build Event Uplift Parameters sub-tab."""
+        tab_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(tab_frame, text="📈 Event Uplift")
+
+        # Scrollable container
+        scroll_container = ttk.Frame(tab_frame)
+        scroll_container.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(scroll_container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Enable mouse wheel scrolling
+        def _on_mousewheel(event):
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
+
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+        # Auto-apply checkbox
+        event_auto_frame = ttk.Frame(scrollable_frame)
+        event_auto_frame.pack(fill="x", pady=(0, 10))
+        event_auto_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(event_auto_frame, text="✓ Auto-applica tutti i parametri di questa sezione ai nuovi SKU", variable=event_auto_var).pack(anchor="w")
+        self.settings_section_widgets["event_uplift"] = event_auto_var
+
+        # Parameters
+        event_uplift_params = [
+            {
+                "key": "event_uplift_enabled",
+                "label": "🔧 Abilita Event Uplift",
+                "description": "Attiva aggiustamento domanda basato su eventi sulla data di consegna",
+                "type": "bool"
+            },
+            {
+                "key": "event_default_quantile",
+                "label": "Quantile Default",
+                "description": "Quantile per stima U_store_day (es. 0.70 = P70)",
+                "type": "float",
+                "min": 0.0,
+                "max": 1.0
+            },
+            {
+                "key": "event_min_factor",
+                "label": "Fattore Minimo",
+                "description": "Limite inferiore moltiplicatore event uplift (1.0 = neutro)",
+                "type": "float",
+                "min": 0.1,
+                "max": 10.0
+            },
+            {
+                "key": "event_max_factor",
+                "label": "Fattore Massimo",
+                "description": "Limite superiore moltiplicatore event uplift",
+                "type": "float",
+                "min": 0.1,
+                "max": 10.0
+            },
+            {
+                "key": "event_perishables_exclude_threshold",
+                "label": "Soglia Esclusione Deperibili (giorni)",
+                "description": "Escludi SKU con shelf_life <= soglia dall'event uplift",
+                "type": "int",
+                "min": 0,
+                "max": 365
+            },
+            {
+                "key": "event_perishables_cap_extra_days",
+                "label": "Cap Extra Coverage Deperibili (giorni)",
+                "description": "Limite giorni extra per deperibili (politica anti-overstock)",
+                "type": "int",
+                "min": 0,
+                "max": 30
+            },
+            {
+                "key": "event_apply_to",
+                "label": "Modalità Applicazione",
+                "description": "Applica a sola media forecast o anche alla variabilità",
+                "type": "choice",
+                "choices": ["forecast_only", "forecast_and_sigma"]
+            },
+            {
+                "key": "event_similar_days_window",
+                "label": "Finestra Giorni Simili (± giorni)",
+                "description": "Finestra stagionale per ricerca giorni simili",
+                "type": "int",
+                "min": 1,
+                "max": 365
+            },
+            {
+                "key": "event_min_samples_u",
+                "label": "Min Campioni U_store_day",
+                "description": "Numero minimo campioni per stimare U_store_day",
+                "type": "int",
+                "min": 1,
+                "max": 365
+            },
+            {
+                "key": "event_min_samples_beta",
+                "label": "Min Campioni Beta_i",
+                "description": "Numero minimo campioni per stimare beta_i",
+                "type": "int",
+                "min": 1,
+                "max": 365
+            },
+            {
+                "key": "event_beta_normalization_mode",
+                "label": "Normalizzazione Beta",
+                "description": "Modalità normalizzazione beta_i",
+                "type": "choice",
+                "choices": ["mean_one", "weighted_sum_one", "none"]
+            }
+        ]
+
+        self._create_param_rows(scrollable_frame, event_uplift_params, "event_uplift")
     
     def _build_holidays_settings_tab(self):
         """Build Holidays and Calendar Management sub-tab."""
@@ -8042,6 +8175,17 @@ class DesktopOrderApp:
                 "expiry_critical_threshold_days": ("expiry_alerts", "critical_threshold_days"),
                 "expiry_warning_threshold_days": ("expiry_alerts", "warning_threshold_days"),
                 "stock_unit_price": ("dashboard", "stock_unit_price"),
+                "event_uplift_enabled": ("event_uplift", "enabled"),
+                "event_default_quantile": ("event_uplift", "default_quantile"),
+                "event_min_factor": ("event_uplift", "min_factor"),
+                "event_max_factor": ("event_uplift", "max_factor"),
+                "event_perishables_exclude_threshold": ("event_uplift", "perishables_policy_exclude_if_shelf_life_days_lte"),
+                "event_perishables_cap_extra_days": ("event_uplift", "perishables_policy_cap_extra_cover_days_per_sku"),
+                "event_apply_to": ("event_uplift", "apply_to"),
+                "event_similar_days_window": ("event_uplift", "similar_days_seasonal_window"),
+                "event_min_samples_u": ("event_uplift", "min_samples_u_estimation"),
+                "event_min_samples_beta": ("event_uplift", "min_samples_beta_estimation"),
+                "event_beta_normalization_mode": ("event_uplift", "beta_normalization_mode"),
                 "sl_metric": ("service_level", "metric"),
                 "sl_default_csl": ("service_level", "default_csl"),
                 "sl_fill_rate_target": ("service_level", "fill_rate_target"),
@@ -8133,6 +8277,17 @@ class DesktopOrderApp:
                 "expiry_critical_threshold_days": ("expiry_alerts", "critical_threshold_days"),
                 "expiry_warning_threshold_days": ("expiry_alerts", "warning_threshold_days"),
                 "stock_unit_price": ("dashboard", "stock_unit_price"),
+                "event_uplift_enabled": ("event_uplift", "enabled"),
+                "event_default_quantile": ("event_uplift", "default_quantile"),
+                "event_min_factor": ("event_uplift", "min_factor"),
+                "event_max_factor": ("event_uplift", "max_factor"),
+                "event_perishables_exclude_threshold": ("event_uplift", "perishables_policy_exclude_if_shelf_life_days_lte"),
+                "event_perishables_cap_extra_days": ("event_uplift", "perishables_policy_cap_extra_cover_days_per_sku"),
+                "event_apply_to": ("event_uplift", "apply_to"),
+                "event_similar_days_window": ("event_uplift", "similar_days_seasonal_window"),
+                "event_min_samples_u": ("event_uplift", "min_samples_u_estimation"),
+                "event_min_samples_beta": ("event_uplift", "min_samples_beta_estimation"),
+                "event_beta_normalization_mode": ("event_uplift", "beta_normalization_mode"),
                 "sl_metric": ("service_level", "metric"),
                 "sl_default_csl": ("service_level", "default_csl"),
                 "sl_fill_rate_target": ("service_level", "fill_rate_target"),
