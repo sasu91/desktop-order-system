@@ -8316,17 +8316,38 @@ class DesktopOrderApp:
         Returns:
             List of tab IDs in saved order (or default order if not saved)
         """
-        default_order = ["stock", "order", "receiving", "exception", "expiry", "promo", "dashboard", "admin", "settings"]
+        default_order = ["stock", "order", "receiving", "exception", "expiry", "promo", "event_uplift", "dashboard", "admin", "settings"]
         
         try:
             settings = self.csv_layer.read_settings()
             if "ui" in settings and "tab_order" in settings["ui"]:
                 saved_order = settings["ui"]["tab_order"]
-                # Validate saved order (must contain all tab IDs)
-                if set(saved_order) == set(default_order) and len(saved_order) == len(default_order):
+                
+                # Migration: If saved_order is missing new tabs, add them before dashboard
+                if set(saved_order) != set(default_order):
+                    # Find missing tabs
+                    missing_tabs = [t for t in default_order if t not in saved_order]
+                    
+                    if missing_tabs:
+                        # Insert missing tabs before "dashboard" (or at end if dashboard not found)
+                        if "dashboard" in saved_order:
+                            dashboard_idx = saved_order.index("dashboard")
+                            for tab in missing_tabs:
+                                saved_order.insert(dashboard_idx, tab)
+                                dashboard_idx += 1
+                        else:
+                            saved_order.extend(missing_tabs)
+                        
+                        # Save migrated order
+                        settings["ui"]["tab_order"] = saved_order
+                        self.csv_layer.write_settings(settings)
+                        logger.info(f"Tab order migrated: added {missing_tabs}")
+                
+                # Validate: all tabs must be present
+                if set(saved_order) == set(default_order):
                     return saved_order
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to load tab order: {e}")
         
         return default_order
     
