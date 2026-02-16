@@ -5,7 +5,7 @@ Tkinter-based desktop UI with multiple tabs.
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from pathlib import Path
 import tempfile
 import os
@@ -145,6 +145,10 @@ class DesktopOrderApp:
         file_menu.add_command(label="Aggiorna", command=self._refresh_all)
         file_menu.add_separator()
         
+        # Import submenu
+        file_menu.add_command(label="Importa SKU da CSV...", command=self._import_sku_from_csv)
+        file_menu.add_separator()
+        
         # Export submenu
         export_menu = tk.Menu(file_menu, tearoff=0)
         file_menu.add_cascade(label="Esporta in CSV", menu=export_menu)
@@ -180,6 +184,7 @@ class DesktopOrderApp:
         self.exception_tab = ttk.Frame(self.notebook)
         self.expiry_tab = ttk.Frame(self.notebook)  # NEW: Expiry tracking tab
         self.promo_tab = ttk.Frame(self.notebook)  # NEW: Promo calendar tab
+        self.event_uplift_tab = ttk.Frame(self.notebook)  # NEW: Event uplift tab
         self.admin_tab = ttk.Frame(self.notebook)
         self.settings_tab = ttk.Frame(self.notebook)
         
@@ -191,6 +196,7 @@ class DesktopOrderApp:
             "exception": self.exception_tab,
             "expiry": self.expiry_tab,  # NEW
             "promo": self.promo_tab,  # NEW
+            "event_uplift": self.event_uplift_tab,  # NEW
             "dashboard": self.dashboard_tab,
             "admin": self.admin_tab,
             "settings": self.settings_tab
@@ -205,6 +211,7 @@ class DesktopOrderApp:
             "exception": "⚠️ Eccezioni",
             "expiry": "⏰ Scadenze",  # NEW
             "promo": "📅 Calendario Promo",  # NEW
+            "event_uplift": "📈 Eventi/Uplift",  # NEW
             "admin": "🔧 Admin",
             "settings": "⚙️ Impostazioni"
         }
@@ -224,6 +231,7 @@ class DesktopOrderApp:
         self._build_exception_tab()
         self._build_expiry_tab()  # NEW
         self._build_promo_tab()  # NEW
+        self._build_event_uplift_tab()  # NEW
         self._build_admin_tab()
         self._build_settings_tab()
     
@@ -5883,6 +5891,362 @@ class DesktopOrderApp:
             import traceback
             messagebox.showerror("Errore Esportazione", f"Impossibile esportare Order+KPI+Breakdown:\n{str(e)}\n\n{traceback.format_exc()}")
     
+    # === IMPORT FUNCTIONALITY ===
+    
+    def _import_sku_from_csv(self):
+        """
+        Import SKUs from external CSV file with preview and validation wizard.
+        
+        Steps:
+        1. File picker for CSV selection
+        2. Parse and validate (auto-detect delimiter, map columns)
+        3. Show preview with valid/discarded counts and first ~50 rows
+        4. Allow column remapping
+        5. Choose UPSERT or REPLACE mode
+        6. Confirm import (with extra confirmation if REPLACE has discards)
+        7. Execute import with backup and atomic write
+        8. Log to audit_log.csv and export error details if discarded rows exist
+        """
+        from pathlib import Path
+        from src.workflows.sku_import import SKUImporter
+        from datetime import datetime
+        
+        try:
+            # Step 1: File picker
+            file_path = filedialog.askopenfilename(
+                title="Seleziona CSV per Import SKU",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            )
+            
+            if not file_path:
+                return  # User cancelled
+            
+            file_path = Path(file_path)
+            
+            # Step 2: Parse and validate
+            importer = SKUImporter(self.csv_layer)
+            
+            try:
+                preview = importer.parse_csv_with_preview(
+                    filepath=file_path,
+                    column_mapping=None,  # Auto-detect
+                    preview_limit=50,
+                )
+            except Exception as e:
+                messagebox.showerror(
+                    "Errore Parsing CSV",
+                    f"Impossibile leggere il file CSV:\n{str(e)}\n\n"
+                    f"Verifica che il file sia un CSV valido e prova nuovamente."
+                )
+                return
+            
+            # Step 3: Show preview wizard
+            self._show_import_preview_wizard(importer, preview, file_path)
+        
+        except Exception as e:
+            import traceback
+            messagebox.showerror(
+                "Errore Import",
+                f"Errore durante import SKU:\n{str(e)}\n\n{traceback.format_exc()}"
+            )
+    
+    def _show_import_preview_wizard(self, importer, preview, source_file):
+        """
+        Show import preview wizard with validation results and confirmation.
+        
+        Args:
+            importer: SKUImporter instance
+            preview: ImportPreview object
+            source_file: Path to source CSV file
+        """
+        # Create wizard window
+        wizard = tk.Toplevel(self.root)
+        wizard.title(f"Import SKU da CSV: {source_file.name}")
+        wizard.geometry("1000x700")
+        wizard.transient(self.root)
+        wizard.grab_set()
+        
+        # Header with summary
+        header_frame = ttk.Frame(wizard, padding=10)
+        header_frame.pack(fill="x", side="top")
+        
+        ttk.Label(
+            header_frame,
+            text=f"File: {source_file.name}",
+            font=("Helvetica", 12, "bold")
+        ).pack(anchor="w")
+        
+        summary_text = (
+            f"Totale righe: {preview.total_rows}  |  "
+            f"✅ Valide: {preview.valid_rows}  |  "
+            f"❌ Scartate: {preview.discarded_rows}"
+        )
+        
+        if preview.discarded_rows > 0:
+            summary_text += f"\nMotivo principale scarti: {preview.primary_discard_reason}"
+        
+        summary_label = ttk.Label(
+            header_frame,
+            text=summary_text,
+            font=("Helvetica", 10),
+            foreground="blue" if preview.valid_rows > 0 else "red"
+        )
+        summary_label.pack(anchor="w", pady=(5, 0))
+        
+        # Column mapping info
+        mapping_frame = ttk.LabelFrame(wizard, text="Mapping Colonne", padding=10)
+        mapping_frame.pack(fill="x", padx=10, pady=5)
+        
+        mapping_text = ", ".join([f"{csv_col} → {field}" for csv_col, field in preview.column_mapping.items()])
+        ttk.Label(
+            mapping_frame,
+            text=mapping_text if mapping_text else "Nessuna colonna mappata",
+            font=("Courier", 9),
+            wraplength=900
+        ).pack(anchor="w")
+        
+        # Preview table (first 50 rows)
+        preview_frame = ttk.LabelFrame(wizard, text="Anteprima Righe (prime 50)", padding=10)
+        preview_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        # Scrollable table
+        table_scroll_y = ttk.Scrollbar(preview_frame, orient="vertical")
+        table_scroll_x = ttk.Scrollbar(preview_frame, orient="horizontal")
+        
+        preview_table = ttk.Treeview(
+            preview_frame,
+            yscrollcommand=table_scroll_y.set,
+            xscrollcommand=table_scroll_x.set,
+            height=15
+        )
+        
+        table_scroll_y.config(command=preview_table.yview)
+        table_scroll_x.config(command=preview_table.xview)
+        
+        table_scroll_y.pack(side="right", fill="y")
+        table_scroll_x.pack(side="bottom", fill="x")
+        preview_table.pack(fill="both", expand=True)
+        
+        # Configure columns
+        preview_table["columns"] = ("row", "status", "sku", "description", "errors")
+        preview_table.column("#0", width=0, stretch=False)
+        preview_table.column("row", width=50, anchor="center")
+        preview_table.column("status", width=80, anchor="center")
+        preview_table.column("sku", width=150, anchor="w")
+        preview_table.column("description", width=300, anchor="w")
+        preview_table.column("errors", width=400, anchor="w")
+        
+        preview_table.heading("row", text="Riga")
+        preview_table.heading("status", text="Stato")
+        preview_table.heading("sku", text="SKU")
+        preview_table.heading("description", text="Descrizione")
+        preview_table.heading("errors", text="Errori/Avvisi")
+        
+        # Populate table
+        for row in preview.rows:
+            status = "✅ OK" if row.is_valid else "❌ ERRORE"
+            sku = row.mapped_data.get("sku", "")
+            desc = row.mapped_data.get("description", "")
+            errors_text = "; ".join(row.errors) if row.errors else "; ".join(row.warnings)
+            
+            tag = "valid" if row.is_valid else "invalid"
+            preview_table.insert(
+                "",
+                "end",
+                values=(row.row_number, status, sku, desc, errors_text),
+                tags=(tag,)
+            )
+        
+        # Tag colors
+        preview_table.tag_configure("valid", background="#e8f5e9")
+        preview_table.tag_configure("invalid", background="#ffebee")
+        
+        # Mode selection
+        mode_frame = ttk.Frame(wizard, padding=10)
+        mode_frame.pack(fill="x", side="bottom")
+        
+        mode_var = tk.StringVar(value="UPSERT")
+        
+        ttk.Label(
+            mode_frame,
+            text="Modalità Import:",
+            font=("Helvetica", 10, "bold")
+        ).pack(side="left", padx=(0, 10))
+        
+        ttk.Radiobutton(
+            mode_frame,
+            text="UPSERT (Aggiorna esistenti + Aggiungi nuovi)",
+            variable=mode_var,
+            value="UPSERT"
+        ).pack(side="left", padx=5)
+        
+        ttk.Radiobutton(
+            mode_frame,
+            text="REPLACE (Sostituisci tutto il file SKU)",
+            variable=mode_var,
+            value="REPLACE"
+        ).pack(side="left", padx=5)
+        
+        # Action buttons
+        button_frame = ttk.Frame(wizard, padding=10)
+        button_frame.pack(fill="x", side="bottom")
+        
+        def on_confirm():
+            """Execute import after confirmation."""
+            mode = mode_var.get()
+            
+            # Check if there are no valid rows
+            if preview.valid_rows == 0:
+                messagebox.showerror(
+                    "Impossibile Importare",
+                    "Nessuna riga valida da importare. Correggi gli errori e riprova.",
+                    parent=wizard
+                )
+                return
+            
+            # Confirmation for REPLACE mode
+            if mode == "REPLACE":
+                confirm_msg = (
+                    f"⚠️  ATTENZIONE ⚠️\n\n"
+                    f"Modalità REPLACE: Tutti gli SKU esistenti verranno sostituiti con i {preview.valid_rows} SKU validi dal file.\n\n"
+                    f"SKU esistenti non presenti nel file verranno RIMOSSI.\n\n"
+                    f"Vuoi procedere?"
+                )
+                
+                # Extra confirmation if there are discarded rows
+                if preview.discarded_rows > 0:
+                    confirm_msg += (
+                        f"\n\n⚠️  ATTENZIONE: {preview.discarded_rows} righe verranno scartate.\n"
+                        f"Motivo principale: {preview.primary_discard_reason}\n\n"
+                        f"Procedere comunque con REPLACE?"
+                    )
+                
+                if not messagebox.askyesno("Conferma REPLACE", confirm_msg, parent=wizard):
+                    return
+            else:
+                # UPSERT confirmation
+                confirm_msg = (
+                    f"Conferma Import UPSERT:\n\n"
+                    f"Righe valide da importare: {preview.valid_rows}\n"
+                    f"Righe scartate: {preview.discarded_rows}\n\n"
+                    f"Gli SKU esistenti verranno aggiornati, i nuovi verranno aggiunti.\n\n"
+                    f"Procedere?"
+                )
+                
+                if not messagebox.askyesno("Conferma Import", confirm_msg, parent=wizard):
+                    return
+            
+            # Execute import
+            try:
+                result = importer.execute_import(
+                    preview=preview,
+                    mode=mode,
+                    require_confirmation_on_discards=(mode == "REPLACE")  # Already confirmed above
+                )
+                
+                if result.get("confirmation_required"):
+                    # Should not happen since we already confirmed
+                    messagebox.showwarning(
+                        "Conferma Richiesta",
+                        "Conferma aggiuntiva richiesta per REPLACE con scarti.",
+                        parent=wizard
+                    )
+                    return
+                
+                if result["success"]:
+                    # Export discard details if any
+                    error_detail_file = ""
+                    if preview.discarded_rows > 0:
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        error_detail_file = f"import_sku_errors_{timestamp}.csv"
+                        error_path = self.csv_layer.data_dir / error_detail_file
+                        importer.export_discard_details(preview, error_path)
+                    
+                    # Log to audit
+                    self.csv_layer.log_import_audit(
+                        source_file=source_file.name,
+                        mode=mode,
+                        total_rows=preview.total_rows,
+                        imported=result["imported"],
+                        discarded=preview.discarded_rows,
+                        primary_discard_reason=preview.primary_discard_reason,
+                        error_detail_file=error_detail_file,
+                        user="GUI"
+                    )
+                    
+                    # Success message
+                    success_msg = (
+                        f"✅ Import completato con successo!\n\n"
+                        f"Modalità: {mode}\n"
+                        f"Righe importate: {result['imported']}\n"
+                        f"Righe scartate: {result['discarded']}\n"
+                    )
+                    
+                    if mode == "UPSERT":
+                        success_msg += f"Aggiornati: {result['updated']}\nAggiunti: {result['added']}\n"
+                    
+                    if error_detail_file:
+                        success_msg += f"\nDettagli scarti salvati in: {error_detail_file}"
+                    
+                    messagebox.showinfo("Import Completato", success_msg, parent=wizard)
+                    
+                    # Refresh GUI
+                    self._refresh_all()
+                    wizard.destroy()
+                else:
+                    error_msg = "Errori:\n" + "\n".join(result.get("errors", ["Errore sconosciuto"]))
+                    messagebox.showerror("Import Fallito", error_msg, parent=wizard)
+            
+            except Exception as e:
+                import traceback
+                messagebox.showerror(
+                    "Errore Import",
+                    f"Errore durante esecuzione import:\n{str(e)}\n\n{traceback.format_exc()}",
+                    parent=wizard
+                )
+        
+        def on_cancel():
+            """Close wizard without importing."""
+            wizard.destroy()
+        
+        ttk.Button(
+            button_frame,
+            text="❌ Annulla",
+            command=on_cancel
+        ).pack(side="right", padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="✅ Conferma Import",
+            command=on_confirm
+        ).pack(side="right", padx=5)
+        
+        # Export errors button (if discards exist)
+        if preview.discarded_rows > 0:
+            def export_errors():
+                """Export discarded rows to CSV for analysis."""
+                error_file = filedialog.asksaveasfilename(
+                    title="Salva Dettagli Scarti",
+                    defaultextension=".csv",
+                    filetypes=[("CSV files", "*.csv")],
+                    initialfile=f"import_errors_{source_file.stem}.csv",
+                    parent=wizard
+                )
+                
+                if error_file:
+                    importer.export_discard_details(preview, Path(error_file))
+                    messagebox.showinfo(
+                        "Esportazione Completata",
+                        f"Dettagli scarti esportati in:\n{error_file}",
+                        parent=wizard
+                    )
+            
+            ttk.Button(
+                button_frame,
+                text="📄 Esporta Scarti",
+                command=export_errors
+            ).pack(side="left", padx=5)
+    
     def _filter_settings(self, *args):
         """Filter visible settings rows based on search query."""
         query = self.settings_search_var.get().lower()
@@ -6236,6 +6600,150 @@ class DesktopOrderApp:
         self.cannib_treeview.tag_configure("confidence_A", foreground="green", font=("Helvetica", 9, "bold"))
         self.cannib_treeview.tag_configure("confidence_B", foreground="orange")
         self.cannib_treeview.tag_configure("confidence_C", foreground="red")
+    
+    def _build_event_uplift_tab(self):
+        """Build Event/Uplift tab for delivery-date-driven demand adjustments."""
+        main_frame = ttk.Frame(self.event_uplift_tab)
+        main_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # Title
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(side="top", fill="x", pady=(0, 10))
+        ttk.Label(title_frame, text="📈 Eventi/Uplift per Data Consegna", font=("Helvetica", 14, "bold")).pack(side="left")
+        ttk.Label(title_frame, text="(Driver di domanda basato su eventi futuri)", font=("Helvetica", 9, "italic"), foreground="gray").pack(side="left", padx=(10, 0))
+        
+        # === EVENT UPLIFT RULE ENTRY FORM ===
+        form_frame = ttk.LabelFrame(main_frame, text="Aggiungi Regola Uplift (campi obbligatori marcati con *)", padding=15)
+        form_frame.pack(side="top", fill="x", pady=(0, 10))
+        
+        # Grid configuration
+        form_frame.columnconfigure(1, weight=1)
+        form_frame.columnconfigure(3, weight=1)
+        
+        # ROW 0: Delivery Date (obbligatorio) + Reason (obbligatorio)
+        ttk.Label(form_frame, text="Data Consegna: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=0, column=0, sticky="e", padx=(0, 8), pady=8)
+        self.event_delivery_date_var = tk.StringVar(value=date.today().isoformat())
+        if TKCALENDAR_AVAILABLE:
+            DateEntry(  # type: ignore[misc]
+                form_frame,
+                textvariable=self.event_delivery_date_var,
+                width=12,
+                date_pattern="yyyy-mm-dd",
+            ).grid(row=0, column=1, sticky="w", pady=8)
+        else:
+            ttk.Entry(form_frame, textvariable=self.event_delivery_date_var, width=15).grid(row=0, column=1, sticky="w", pady=8)
+        self.event_delivery_date_var.trace('w', lambda *args: self._validate_event_uplift_form())
+        
+        ttk.Label(form_frame, text="Motivo: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=0, column=2, sticky="e", padx=(20, 8), pady=8)
+        self.event_reason_var = tk.StringVar()
+        reason_combo = ttk.Combobox(
+            form_frame,
+            textvariable=self.event_reason_var,
+            values=["Natale", "Pasqua", "San Valentino", "Festa della Mamma", "Black Friday", "Epifania", "Ferragosto", "Custom..."],
+            width=25,
+            state="readonly",
+        )
+        reason_combo.grid(row=0, column=3, sticky="w", pady=8)
+        reason_combo.current(0)  # Default: Natale
+        self.event_reason_var.trace('w', lambda *args: self._validate_event_uplift_form())
+        
+        # ROW 1: Strength (obbligatorio) + Scope Type
+        ttk.Label(form_frame, text="Intensità (0.0-1.0): *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=1, column=0, sticky="e", padx=(0, 8), pady=8)
+        self.event_strength_var = tk.StringVar(value="0.5")
+        strength_entry = ttk.Entry(form_frame, textvariable=self.event_strength_var, width=15)
+        strength_entry.grid(row=1, column=1, sticky="w", pady=8)
+        self.event_strength_var.trace('w', lambda *args: self._validate_event_uplift_form())
+        ttk.Label(form_frame, text="(0.0=nessun effetto, 1.0=massimo)", font=("Helvetica", 8, "italic"), foreground="#777").grid(row=1, column=1, sticky="w", padx=(120, 0), pady=8)
+        
+        ttk.Label(form_frame, text="Ambito:", font=("Helvetica", 9)).grid(row=1, column=2, sticky="e", padx=(20, 8), pady=8)
+        self.event_scope_type_var = tk.StringVar(value="ALL")
+        scope_frame = ttk.Frame(form_frame)
+        scope_frame.grid(row=1, column=3, columnspan=2, sticky="w", pady=8)
+        ttk.Radiobutton(scope_frame, text="Tutto", variable=self.event_scope_type_var, value="ALL", command=self._on_event_scope_change).pack(side="left", padx=5)
+        ttk.Radiobutton(scope_frame, text="Department", variable=self.event_scope_type_var, value="department", command=self._on_event_scope_change).pack(side="left", padx=5)
+        ttk.Radiobutton(scope_frame, text="Category", variable=self.event_scope_type_var, value="category", command=self._on_event_scope_change).pack(side="left", padx=5)
+        ttk.Radiobutton(scope_frame, text="SKU", variable=self.event_scope_type_var, value="sku", command=self._on_event_scope_change).pack(side="left", padx=5)
+        
+        # ROW 2: Scope Key (conditional) + Notes
+        ttk.Label(form_frame, text="Scope Key:", font=("Helvetica", 9)).grid(row=2, column=0, sticky="e", padx=(0, 8), pady=8)
+        self.event_scope_key_var = tk.StringVar()
+        self.event_scope_key_entry = ttk.Entry(form_frame, textvariable=self.event_scope_key_var, width=25, state="disabled")
+        self.event_scope_key_entry.grid(row=2, column=1, sticky="w", pady=8)
+        ttk.Label(form_frame, text="(richiesto se ambito != Tutto)", font=("Helvetica", 8, "italic"), foreground="#777").grid(row=2, column=1, sticky="w", padx=(190, 0), pady=8)
+        
+        ttk.Label(form_frame, text="Note:", font=("Helvetica", 9)).grid(row=2, column=2, sticky="ne", padx=(20, 8), pady=8)
+        self.event_notes_var = tk.StringVar()
+        ttk.Entry(form_frame, textvariable=self.event_notes_var, width=40).grid(row=2, column=3, columnspan=2, sticky="w", pady=8)
+        
+        # ROW 3: Buttons
+        button_frame = ttk.Frame(form_frame)
+        button_frame.grid(row=3, column=0, columnspan=5, sticky="w", pady=(10, 0))
+        
+        self.event_submit_btn = ttk.Button(button_frame, text="✓ Aggiungi Regola", command=self._add_event_uplift_rule, state="disabled")
+        self.event_submit_btn.pack(side="left", padx=5)
+        ttk.Button(button_frame, text="✗ Cancella Modulo", command=self._clear_event_uplift_form).pack(side="left", padx=5)
+        
+        # Validation status label
+        self.event_validation_label = ttk.Label(button_frame, text="", font=("Helvetica", 8), foreground="#d9534f")
+        self.event_validation_label.pack(side="left", padx=15)
+        
+        # Edit mode indicator (hidden by default)
+        self.event_edit_mode = False
+        self.event_edit_key = None
+        
+        # === EVENT UPLIFT RULES TABLE ===
+        table_controls_frame = ttk.Frame(main_frame)
+        table_controls_frame.pack(side="top", fill="x", pady=(0, 5))
+        
+        ttk.Label(table_controls_frame, text="Regole Uplift Esistenti", font=("Helvetica", 11, "bold")).pack(side="left", padx=5)
+        ttk.Button(table_controls_frame, text="✏️ Modifica Selezionata", command=self._edit_event_uplift_rule).pack(side="left", padx=5)
+        ttk.Button(table_controls_frame, text="🗑️ Rimuovi Selezionata", command=self._remove_event_uplift_rule).pack(side="left", padx=5)
+        ttk.Button(table_controls_frame, text="🔄 Aggiorna", command=self._refresh_event_uplift_tab).pack(side="left", padx=5)
+        
+        # Search filter
+        ttk.Label(table_controls_frame, text="Filtra:").pack(side="left", padx=(20, 5))
+        self.event_filter_var = tk.StringVar()
+        self.event_filter_var.trace('w', lambda *args: self._filter_event_uplift_table())
+        ttk.Entry(table_controls_frame, textvariable=self.event_filter_var, width=20).pack(side="left", padx=5)
+        
+        table_frame = ttk.Frame(main_frame)
+        table_frame.pack(fill="both", expand=True)
+        
+        scrollbar = ttk.Scrollbar(table_frame)
+        scrollbar.pack(side="right", fill="y")
+        
+        self.event_uplift_treeview = ttk.Treeview(
+            table_frame,
+            columns=("Data Consegna", "Motivo", "Intensità", "Ambito", "Note", "Status"),
+            height=15,
+            yscrollcommand=scrollbar.set,
+        )
+        scrollbar.config(command=self.event_uplift_treeview.yview)
+        
+        self.event_uplift_treeview.column("#0", width=0, stretch=tk.NO)
+        self.event_uplift_treeview.column("Data Consegna", anchor=tk.CENTER, width=120)
+        self.event_uplift_treeview.column("Motivo", anchor=tk.W, width=150)
+        self.event_uplift_treeview.column("Intensità", anchor=tk.CENTER, width=90)
+        self.event_uplift_treeview.column("Ambito", anchor=tk.W, width=200)
+        self.event_uplift_treeview.column("Note", anchor=tk.W, width=250)
+        self.event_uplift_treeview.column("Status", anchor=tk.CENTER, width=100)
+        
+        self.event_uplift_treeview.heading("Data Consegna", text="Data Consegna", anchor=tk.CENTER)
+        self.event_uplift_treeview.heading("Motivo", text="Motivo", anchor=tk.W)
+        self.event_uplift_treeview.heading("Intensità", text="Intensità", anchor=tk.CENTER)
+        self.event_uplift_treeview.heading("Ambito", text="Ambito", anchor=tk.W)
+        self.event_uplift_treeview.heading("Note", text="Note", anchor=tk.W)
+        self.event_uplift_treeview.heading("Status", text="Status", anchor=tk.CENTER)
+        
+        self.event_uplift_treeview.pack(fill="both", expand=True)
+        
+        # Tag for past/active/future events
+        self.event_uplift_treeview.tag_configure("past", foreground="gray")
+        self.event_uplift_treeview.tag_configure("active", background="#d4edda", foreground="green")
+        self.event_uplift_treeview.tag_configure("future", foreground="blue")
+        
+        # Load initial data
+        self._refresh_event_uplift_tab()
     
     def _build_settings_tab(self):
         """Build Settings tab for reorder engine configuration."""
@@ -8570,6 +9078,293 @@ class DesktopOrderApp:
     def _filter_cannibalization_table(self):
         """Filter cannibalization report table by SKU."""
         self._refresh_cannibalization_report()
+    
+    # === EVENT UPLIFT TAB HANDLERS ===
+    
+    def _validate_event_uplift_form(self):
+        """Validate event uplift form and enable/disable submit button."""
+        errors = []
+        
+        # Delivery date validation
+        try:
+            delivery_date_str = self.event_delivery_date_var.get().strip()
+            if not delivery_date_str:
+                errors.append("Data consegna richiesta")
+            else:
+                date.fromisoformat(delivery_date_str)
+        except ValueError:
+            errors.append("Data consegna non valida (formato: YYYY-MM-DD)")
+        
+        # Reason validation
+        reason = self.event_reason_var.get().strip()
+        if not reason:
+            errors.append("Motivo richiesto")
+        
+        # Strength validation
+        try:
+            strength_str = self.event_strength_var.get().strip()
+            if not strength_str:
+                errors.append("Intensità richiesta")
+            else:
+                strength = float(strength_str)
+                if not (0.0 <= strength <= 1.0):
+                    errors.append("Intensità deve essere tra 0.0 e 1.0")
+        except ValueError:
+            errors.append("Intensità non valida (numero decimale)")
+        
+        # Scope key validation (required if scope != ALL)
+        scope_type = self.event_scope_type_var.get()
+        scope_key = self.event_scope_key_var.get().strip()
+        if scope_type != "ALL" and not scope_key:
+            errors.append(f"Scope Key richiesto per ambito '{scope_type}'")
+        
+        # Update UI
+        if errors:
+            self.event_submit_btn.config(state="disabled")
+            self.event_validation_label.config(text=" | ".join(errors), foreground="#d9534f")
+        else:
+            self.event_submit_btn.config(state="normal")
+            self.event_validation_label.config(text="✓ Form valido", foreground="green")
+    
+    def _on_event_scope_change(self):
+        """Enable/disable scope key entry based on scope type selection."""
+        scope_type = self.event_scope_type_var.get()
+        if scope_type == "ALL":
+            self.event_scope_key_entry.config(state="disabled")
+            self.event_scope_key_var.set("")
+        else:
+            self.event_scope_key_entry.config(state="normal")
+        self._validate_event_uplift_form()
+    
+    def _add_event_uplift_rule(self):
+        """Add or update event uplift rule."""
+        try:
+            # Parse form values
+            delivery_date_str = self.event_delivery_date_var.get().strip()
+            delivery_date_parsed = date.fromisoformat(delivery_date_str)
+            
+            reason = self.event_reason_var.get().strip()
+            strength = float(self.event_strength_var.get().strip())
+            scope_type = self.event_scope_type_var.get()
+            scope_key = self.event_scope_key_var.get().strip() if scope_type != "ALL" else ""
+            notes = self.event_notes_var.get().strip()
+            
+            # Check for duplicate (unless in edit mode with same key)
+            existing_rules = self.csv_layer.read_event_uplift_rules()
+            for rule in existing_rules:
+                if rule.delivery_date == delivery_date_parsed and rule.scope_type == scope_type and rule.scope_key == scope_key:
+                    if not self.event_edit_mode or (delivery_date_parsed, scope_type, scope_key) != self.event_edit_key:
+                        if not messagebox.askyesno(
+                            "Duplicato Rilevato",
+                            f"Esiste già una regola per {delivery_date_str} / {scope_type} / {scope_key or 'ALL'}.\nSovrascrivere?",
+                            icon="warning"
+                        ):
+                            return
+                        # If yes, delete old rule (will be replaced)
+                        self.csv_layer.delete_event_uplift_rule(delivery_date_parsed, scope_type, scope_key)
+                        break
+            
+            # If in edit mode and key changed, delete old rule first
+            if self.event_edit_mode and self.event_edit_key is not None and self.event_edit_key != (delivery_date_parsed, scope_type, scope_key):
+                old_date, old_scope_type, old_scope_key = self.event_edit_key
+                self.csv_layer.delete_event_uplift_rule(old_date, old_scope_type, old_scope_key)
+            
+            # Create rule object
+            from src.domain.models import EventUpliftRule
+            rule = EventUpliftRule(
+                delivery_date=delivery_date_parsed,
+                reason=reason,
+                strength=strength,
+                scope_type=scope_type,
+                scope_key=scope_key,
+                notes=notes,
+            )
+            
+            # Save rule
+            self.csv_layer.write_event_uplift_rule(rule)
+            
+            # Show confirmation
+            action = "aggiornata" if self.event_edit_mode else "aggiunta"
+            messagebox.showinfo("Successo", f"Regola uplift {action} con successo!")
+            
+            # Reset form and refresh table
+            self._clear_event_uplift_form()
+            self._refresh_event_uplift_tab()
+        
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile salvare regola uplift:\n{str(e)}")
+    
+    def _edit_event_uplift_rule(self):
+        """Load selected rule into form for editing."""
+        selection = self.event_uplift_treeview.selection()
+        if not selection:
+            messagebox.showwarning("Nessuna Selezione", "Seleziona una regola da modificare.")
+            return
+        
+        try:
+            # Get selected item data
+            item = selection[0]
+            values = self.event_uplift_treeview.item(item, 'values')
+            
+            # Parse values: (Data Consegna, Motivo, Intensità, Ambito, Note, Status)
+            delivery_date_str = values[0]
+            reason = values[1]
+            strength_str = values[2]
+            ambito_str = values[3]  # Format: "ALL" or "dept:XXX" or "category:YYY" or "sku:ZZZ"
+            notes = values[4]
+            
+            # Parse ambito into scope_type and scope_key
+            if ambito_str == "ALL":
+                scope_type = "ALL"
+                scope_key = ""
+            else:
+                scope_type, scope_key = ambito_str.split(":", 1)
+            
+            # Populate form
+            self.event_delivery_date_var.set(delivery_date_str)
+            self.event_reason_var.set(reason)
+            self.event_strength_var.set(strength_str)
+            self.event_scope_type_var.set(scope_type)
+            self.event_scope_key_var.set(scope_key)
+            self.event_notes_var.set(notes)
+            
+            # Enable scope key entry if needed
+            self._on_event_scope_change()
+            
+            # Enter edit mode
+            self.event_edit_mode = True
+            self.event_edit_key = (date.fromisoformat(delivery_date_str), scope_type, scope_key)
+            self.event_submit_btn.config(text="✓ Aggiorna Regola")
+            
+            # Validate form
+            self._validate_event_uplift_form()
+        
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile caricare regola per modifica:\n{str(e)}")
+    
+    def _remove_event_uplift_rule(self):
+        """Remove selected event uplift rule."""
+        selection = self.event_uplift_treeview.selection()
+        if not selection:
+            messagebox.showwarning("Nessuna Selezione", "Seleziona una regola da rimuovere.")
+            return
+        
+        try:
+            # Get selected item data
+            item = selection[0]
+            values = self.event_uplift_treeview.item(item, 'values')
+            
+            # Parse key: (Data Consegna, Motivo, Intensità, Ambito, Note, Status)
+            delivery_date_str = values[0]
+            ambito_str = values[3]
+            
+            # Parse ambito
+            if ambito_str == "ALL":
+                scope_type = "ALL"
+                scope_key = ""
+            else:
+                scope_type, scope_key = ambito_str.split(":", 1)
+            
+            # Confirm deletion
+            if not messagebox.askyesno(
+                "Conferma Rimozione",
+                f"Rimuovere regola uplift del {delivery_date_str} ({ambito_str})?",
+                icon="warning"
+            ):
+                return
+            
+            # Delete rule
+            delivery_date_parsed = date.fromisoformat(delivery_date_str)
+            self.csv_layer.delete_event_uplift_rule(delivery_date_parsed, scope_type, scope_key)
+            
+            # Refresh table
+            self._refresh_event_uplift_tab()
+            messagebox.showinfo("Successo", "Regola uplift rimossa con successo!")
+        
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile rimuovere regola uplift:\n{str(e)}")
+    
+    def _clear_event_uplift_form(self):
+        """Reset event uplift form to default values."""
+        self.event_delivery_date_var.set(date.today().isoformat())
+        self.event_reason_var.set("Natale")
+        self.event_strength_var.set("0.5")
+        self.event_scope_type_var.set("ALL")
+        self.event_scope_key_var.set("")
+        self.event_notes_var.set("")
+        
+        # Disable scope key entry
+        self.event_scope_key_entry.config(state="disabled")
+        
+        # Exit edit mode
+        self.event_edit_mode = False
+        self.event_edit_key = None
+        self.event_submit_btn.config(text="✓ Aggiungi Regola")
+        
+        # Revalidate form
+        self._validate_event_uplift_form()
+    
+    def _refresh_event_uplift_tab(self):
+        """Refresh event uplift rules table."""
+        try:
+            # Clear all items
+            for item in self.event_uplift_treeview.get_children():
+                self.event_uplift_treeview.delete(item)
+            
+            # Read rules
+            rules = self.csv_layer.read_event_uplift_rules()
+            
+            # Get filter text
+            filter_text = self.event_filter_var.get().strip().lower()
+            
+            # Populate table
+            today = date.today()
+            for rule in rules:
+                # Build ambito display
+                if rule.scope_type == "ALL":
+                    ambito_display = "ALL"
+                else:
+                    ambito_display = f"{rule.scope_type}:{rule.scope_key}"
+                
+                # Apply filter
+                if filter_text:
+                    combined_text = f"{rule.delivery_date} {rule.reason} {ambito_display} {rule.notes}".lower()
+                    if filter_text not in combined_text:
+                        continue
+                
+                # Determine status
+                if rule.delivery_date < today:
+                    status = "Passato"
+                    tag = "past"
+                elif rule.delivery_date == today:
+                    status = "Oggi"
+                    tag = "active"
+                else:
+                    delta_days = (rule.delivery_date - today).days
+                    status = f"Tra {delta_days}g"
+                    tag = "future"
+                
+                # Insert row
+                self.event_uplift_treeview.insert(
+                    "",
+                    "end",
+                    values=(
+                        rule.delivery_date.isoformat(),
+                        rule.reason,
+                        f"{rule.strength:.2f}",
+                        ambito_display,
+                        rule.notes[:50] + ("..." if len(rule.notes) > 50 else ""),
+                        status,
+                    ),
+                    tags=(tag,)
+                )
+        
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile aggiornare tabella event uplift:\n{str(e)}")
+    
+    def _filter_event_uplift_table(self):
+        """Filter event uplift table by search text."""
+        self._refresh_event_uplift_tab()
 
 
 def main():

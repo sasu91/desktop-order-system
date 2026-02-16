@@ -290,6 +290,54 @@ class PromoWindow:
         return (self.end_date - self.start_date).days + 1
 
 
+@dataclass(frozen=True)
+class EventUpliftRule:
+    """
+    Event-driven uplift rule for delivery date demand adjustment.
+    
+    Represents a demand multiplier for specific delivery dates, with configurable scope
+    (ALL, DEPT, CATEGORY) to apply uplift to all SKUs or filtered subset.
+    """
+    delivery_date: Date  # Target delivery/receipt date for uplift application
+    reason: str          # Event reason: holiday, local_event, weather, payday, closure
+    strength: float      # Uplift strength: 0.0-1.0 (optional %, converted) or multiplicative factor hint
+    scope_type: str      # Scope: "ALL", "DEPT", "CATEGORY"
+    scope_key: str       # Scope key: empty for ALL, department/category code otherwise
+    notes: str = ""      # Free-text notes
+    
+    def __post_init__(self):
+        if not self.delivery_date:
+            raise ValueError("delivery_date cannot be empty")
+        if self.reason not in ["holiday", "local_event", "weather", "payday", "closure", ""]:
+            raise ValueError(f"reason must be one of: holiday, local_event, weather, payday, closure (got: {self.reason})")
+        if self.strength < 0.0 or self.strength > 100.0:
+            raise ValueError(f"strength must be in range [0.0, 100.0] (got: {self.strength})")
+        if self.scope_type not in ["ALL", "DEPT", "CATEGORY"]:
+            raise ValueError(f"scope_type must be ALL, DEPT, or CATEGORY (got: {self.scope_type})")
+        if self.scope_type == "ALL" and self.scope_key.strip():
+            raise ValueError("scope_key must be empty for scope_type=ALL")
+        if self.scope_type in ["DEPT", "CATEGORY"] and not self.scope_key.strip():
+            raise ValueError(f"scope_key required for scope_type={self.scope_type}")
+    
+    def applies_to_sku(self, sku_obj: 'SKU') -> bool:
+        """
+        Check if this uplift rule applies to given SKU based on scope.
+        
+        Args:
+            sku_obj: SKU object to check
+        
+        Returns:
+            True if rule applies to this SKU
+        """
+        if self.scope_type == "ALL":
+            return True
+        elif self.scope_type == "DEPT":
+            return sku_obj.department.strip().upper() == self.scope_key.strip().upper()
+        elif self.scope_type == "CATEGORY":
+            return sku_obj.category.strip().upper() == self.scope_key.strip().upper()
+        return False
+
+
 @dataclass
 class OrderProposal:
     """Order proposal for a SKU."""

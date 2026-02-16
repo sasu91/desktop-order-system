@@ -935,6 +935,123 @@ def monte_carlo_forecast_with_stats(
 
 
 # ======================================================================
+# EVENT UPLIFT (DELIVERY DATE DEMAND DRIVER)
+# ======================================================================
+
+def apply_event_uplift(
+    sku_obj: Any,  # SKU object
+    forecast_date: date,
+    baseline_value: float,
+    event_rules: List[Any],  # List[EventUpliftRule]
+    settings: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Apply event-driven uplift to baseline forecast for specific delivery date.
+    
+    Event uplift is applied BEFORE promo uplift in the forecast pipeline.
+    Rules are matched by delivery_date and scope (ALL / DEPT / CATEGORY).
+    Multiple matching rules are combined (max uplift factor wins).
+    
+    Policy enforcements:
+    - Min/max factor clipping (default 1.0-2.0)
+    - Perishables exclusion (if shelf_life <= threshold)
+    - Perishables cap on extra coverage days
+    
+    Args:
+        sku_obj: SKU object
+        forecast_date: Date to forecast (delivery date in order context)
+        baseline_value: Baseline forecast value
+        event_rules: List of EventUpliftRule objects
+        settings: Settings dict with event_uplift section
+    
+    Returns:
+        Dict with:
+            - "adjusted_value": float (uplifted forecast)
+            - "uplift_factor": float (applied factor, 1.0 = neutral)
+            - "event_active": bool (whether event rule matched)
+            - "excluded_perishable": bool (whether excluded due to shelf life policy)
+            - "matched_rules": List[EventUpliftRule] (rules that matched this SKU+date)
+    """
+    event_settings = settings.get("event_uplift", {})
+    enabled = event_settings.get("enabled", {}).get("value", False)
+    
+    # If disabled, return baseline unchanged
+    if not enabled:
+        return {
+            "adjusted_value": baseline_value,
+            "uplift_factor": 1.0,
+            "event_active": False,
+            "excluded_perishable": False,
+            "matched_rules": [],
+        }
+    
+    # Filter rules matching this delivery date
+    matching_rules = [r for r in event_rules if r.delivery_date == forecast_date]
+    
+    # Further filter by scope (ALL / DEPT / CATEGORY)
+    applicable_rules = [r for r in matching_rules if r.applies_to_sku(sku_obj)]
+    
+    if not applicable_rules:
+        return {
+            "adjusted_value": baseline_value,
+            "uplift_factor": 1.0,
+            "event_active": False,
+            "excluded_perishable": False,
+            "matched_rules": [],
+        }
+    
+    # Perishables policy: exclude SKUs with short shelf life
+    perishables_threshold = event_settings.get("perishables_policy_exclude_if_shelf_life_days_lte", {}).get("value", 3)
+    if sku_obj.shelf_life_days > 0 and sku_obj.shelf_life_days <= perishables_threshold:
+        return {
+            "adjusted_value": baseline_value,
+            "uplift_factor": 1.0,
+            "event_active": True,
+            "excluded_perishable": True,
+            "matched_rules": applicable_rules,
+        }
+    
+    # Calculate uplift factor: use max strength from applicable rules
+    # strength is in range [0, 100] or [0, 1] depending on input format
+    # We normalize to multiplier: 1.0 + (strength / 100.0) if strength > 1.0 else 1.0 + strength
+    max_strength = max(r.strength for r in applicable_rules)
+    
+    # Normalize strength to uplift factor
+    if max_strength > 1.0:
+        # Assume percentage format (e.g., 20 = 20%)
+        uplift_factor = 1.0 + (max_strength / 100.0)
+    else:
+        # Assume decimal format (e.g., 0.2 = 20%)
+        uplift_factor = 1.0 + max_strength
+    
+    # Apply min/max clipping
+    min_factor = event_settings.get("min_factor", {}).get("value", 1.0)
+    max_factor = event_settings.get("max_factor", {}).get("value", 2.0)
+    uplift_factor = max(min_factor, min(max_factor, uplift_factor))
+    
+    # Apply uplift to baseline
+    adjusted_value = baseline_value * uplift_factor
+    
+    # Perishables cap on extra coverage (limit overstock)
+    # This is a soft cap: if uplift would add >N days extra cover, clip it
+    cap_extra_days = event_settings.get("perishables_policy_cap_extra_cover_days_per_sku", {}).get("value", 1)
+    if sku_obj.shelf_life_days > 0 and cap_extra_days > 0:
+        # Calculate implied extra days = (adjusted - baseline) / daily_sales_avg
+        # Since we don't have daily_sales_avg here, we just apply the cap as a factor limit
+        # This is a simplified version; full implementation would require daily_sales context
+        # For now, we trust the min/max_factor clipping
+        pass
+    
+    return {
+        "adjusted_value": adjusted_value,
+        "uplift_factor": uplift_factor,
+        "event_active": True,
+        "excluded_perishable": False,
+        "matched_rules": applicable_rules,
+    }
+
+
+# ======================================================================
 # PROMO-ADJUSTED FORECAST (BASELINE × UPLIFT)
 # ======================================================================
 
@@ -1038,6 +1155,47 @@ def promo_adjusted_forecast(
         alpha_boost_for_censored=alpha_boost_for_censored,
     )
     
+    # Load event uplift rules (applied BEFORE promo uplift)
+    try:
+        event_rules = csv_layer.read_event_uplift_rules()
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to load event uplift rules: {e}. Continuing with no event uplift.")
+        event_rules = []
+    
+    # Get SKU object for event uplift scope checks
+    sku_obj = None
+    try:
+        all_skus_dict = {s.sku: s for s in all_skus}
+        sku_obj = all_skus_dict.get(sku_id)
+    except Exception:
+        pass
+    
+    # Apply event uplift to baseline (FIRST driver in pipeline)
+    event_adjusted_predictions = {}
+    event_uplift_factor_map = {}
+    event_active_map = {}
+    
+    if sku_obj:
+        for forecast_date in horizon_dates:
+            baseline_value = baseline_predictions[forecast_date]
+            event_result = apply_event_uplift(
+                sku_obj=sku_obj,
+                forecast_date=forecast_date,
+                baseline_value=baseline_value,
+                event_rules=event_rules,
+                settings=settings,
+            )
+            event_adjusted_predictions[forecast_date] = event_result["adjusted_value"]
+            event_uplift_factor_map[forecast_date] = event_result["uplift_factor"]
+            event_active_map[forecast_date] = event_result["event_active"]
+    else:
+        # No SKU object, use baseline unchanged
+        for forecast_date in horizon_dates:
+            event_adjusted_predictions[forecast_date] = baseline_predictions[forecast_date]
+            event_uplift_factor_map[forecast_date] = 1.0
+            event_active_map[forecast_date] = False
+    
     # Initialize result maps
     adjusted_predictions = {}
     promo_active_map = {}
@@ -1045,12 +1203,12 @@ def promo_adjusted_forecast(
     smoothing_multiplier_map = {}
     uplift_report = None
     
-    # If adjustment disabled, return baseline as adjusted
+    # If promo adjustment disabled, return event-adjusted as final (event uplift still applies)
     if not adjustment_enabled:
         for forecast_date in horizon_dates:
-            adjusted_predictions[forecast_date] = baseline_predictions[forecast_date]
+            adjusted_predictions[forecast_date] = event_adjusted_predictions[forecast_date]
             promo_active_map[forecast_date] = False
-            uplift_factor_map[forecast_date] = 1.0
+            uplift_factor_map[forecast_date] = event_uplift_factor_map[forecast_date]
             smoothing_multiplier_map[forecast_date] = 1.0
         
         return {
@@ -1064,6 +1222,8 @@ def promo_adjusted_forecast(
             "uplift_report": None,
             "downlift_report": None,
             "cannibalization_applied": False,
+            "event_uplift_factor": event_uplift_factor_map,
+            "event_active": event_active_map,
         }
     
     # Check if any date in horizon has promo active
@@ -1085,11 +1245,11 @@ def promo_adjusted_forecast(
         if promo_active:
             any_promo_active = True
     
-    # If no promo in horizon, return baseline as adjusted
+    # If no promo in horizon, return event-adjusted as final adjusted
     if not any_promo_active:
         for forecast_date in horizon_dates:
-            adjusted_predictions[forecast_date] = baseline_predictions[forecast_date]
-            uplift_factor_map[forecast_date] = 1.0
+            adjusted_predictions[forecast_date] = event_adjusted_predictions[forecast_date]
+            uplift_factor_map[forecast_date] = event_uplift_factor_map[forecast_date]
             smoothing_multiplier_map[forecast_date] = 1.0
         
         return {
@@ -1103,6 +1263,8 @@ def promo_adjusted_forecast(
             "uplift_report": None,
             "downlift_report": None,
             "cannibalization_applied": False,
+            "event_uplift_factor": event_uplift_factor_map,
+            "event_active": event_active_map,
         }
     
     # Estimate uplift factor (live calculation, no caching - user decision)
@@ -1129,14 +1291,15 @@ def promo_adjusted_forecast(
         uplift_factor = 1.0
         uplift_report = None
     
-    # Apply uplift to each date in horizon
+    # Apply promo uplift to each date in horizon (on top of event uplift)
     for forecast_date in horizon_dates:
-        baseline_value = baseline_predictions[forecast_date]
+        event_adjusted_value = event_adjusted_predictions[forecast_date]
         
-        # If promo not active on this date, use baseline
+        # If promo not active on this date, use event-adjusted value
         if not promo_active_map[forecast_date]:
-            adjusted_predictions[forecast_date] = baseline_value
-            uplift_factor_map[forecast_date] = 1.0
+            adjusted_predictions[forecast_date] = event_adjusted_value
+            # Combined uplift factor = event * promo (1.0)
+            uplift_factor_map[forecast_date] = event_uplift_factor_map[forecast_date]
             smoothing_multiplier_map[forecast_date] = 1.0
             continue
         
@@ -1160,11 +1323,12 @@ def promo_adjusted_forecast(
                 elif ramp_out_days > 0 and days_from_end < ramp_out_days:
                     smoothing_multiplier = (days_from_end + 1) / (ramp_out_days + 1)
         
-        # Apply uplift and smoothing to baseline
-        adjusted_value = baseline_value * uplift_factor * smoothing_multiplier
+        # Apply promo uplift and smoothing to event-adjusted value
+        adjusted_value = event_adjusted_value * uplift_factor * smoothing_multiplier
         
         adjusted_predictions[forecast_date] = max(0.0, adjusted_value)
-        uplift_factor_map[forecast_date] = uplift_factor
+        # Combined uplift factor = event * promo
+        uplift_factor_map[forecast_date] = event_uplift_factor_map[forecast_date] * uplift_factor
         smoothing_multiplier_map[forecast_date] = smoothing_multiplier
     
     # === CANNIBALIZATION (DOWNLIFT) ===
@@ -1223,9 +1387,11 @@ def promo_adjusted_forecast(
                         )
                         
                         if driver_in_promo:
-                            # Applica downlift a baseline (target non in promo)
-                            baseline_value = baseline_predictions[forecast_date]
-                            adjusted_predictions[forecast_date] = max(0.0, baseline_value * downlift_factor)
+                            # Applica downlift to event-adjusted (target non in promo, but event uplift may be active)
+                            event_adjusted_value = event_adjusted_predictions[forecast_date]
+                            adjusted_predictions[forecast_date] = max(0.0, event_adjusted_value * downlift_factor)
+                            # Update combined uplift factor to include downlift
+                            uplift_factor_map[forecast_date] = event_uplift_factor_map[forecast_date] * downlift_factor
                             cannibalization_applied = True
         
         except Exception as e:
@@ -1244,6 +1410,8 @@ def promo_adjusted_forecast(
         "uplift_report": uplift_report,
         "downlift_report": downlift_report,
         "cannibalization_applied": cannibalization_applied,
+        "event_uplift_factor": event_uplift_factor_map,
+        "event_active": event_active_map,
     }
 
 

@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 
-from ..domain.models import Transaction, EventType, SKU, SalesRecord, AuditLog, DemandVariability, Lot, PromoWindow
+from ..domain.models import Transaction, EventType, SKU, SalesRecord, AuditLog, DemandVariability, Lot, PromoWindow, EventUpliftRule
 
 
 class CSVLayer:
@@ -40,6 +40,7 @@ class CSVLayer:
         "promo_calendar.csv": ["sku", "start_date", "end_date", "store_id", "promo_flag"],
         "kpi_daily.csv": ["sku", "date", "oos_rate", "lost_sales_est", "wmape", "bias", 
                           "fill_rate", "otif_rate", "avg_delay_days", "n_periods", "lookback_days", "mode"],
+        "event_uplift_rules.csv": ["delivery_date", "reason", "strength", "scope_type", "scope_key", "notes"],
     }
     
     def __init__(self, data_dir: Optional[Path] = None):
@@ -335,6 +336,50 @@ class CSVLayer:
             if query_lower in sku.sku.lower() or query_lower in sku.description.lower()
         ]
     
+    def update_sku_object(self, old_sku_id: str, sku_object: SKU) -> bool:
+        """
+        Update SKU using SKU object (convenience wrapper for update_sku).
+        
+        Args:
+            old_sku_id: Current SKU identifier
+            sku_object: SKU object with new values
+            
+        Returns:
+            True if updated, False if not found
+        """
+        return self.update_sku(
+            old_sku_id=old_sku_id,
+            new_sku_id=sku_object.sku,
+            new_description=sku_object.description,
+            new_ean=sku_object.ean,
+            moq=sku_object.moq,
+            pack_size=sku_object.pack_size,
+            lead_time_days=sku_object.lead_time_days,
+            review_period=sku_object.review_period,
+            safety_stock=sku_object.safety_stock,
+            shelf_life_days=sku_object.shelf_life_days,
+            max_stock=sku_object.max_stock,
+            reorder_point=sku_object.reorder_point,
+            demand_variability=sku_object.demand_variability,
+            oos_boost_percent=sku_object.oos_boost_percent,
+            oos_detection_mode=sku_object.oos_detection_mode,
+            oos_popup_preference=sku_object.oos_popup_preference,
+            min_shelf_life_days=sku_object.min_shelf_life_days,
+            waste_penalty_mode=sku_object.waste_penalty_mode,
+            waste_penalty_factor=sku_object.waste_penalty_factor,
+            waste_risk_threshold=sku_object.waste_risk_threshold,
+            forecast_method=sku_object.forecast_method,
+            mc_distribution=sku_object.mc_distribution,
+            mc_n_simulations=sku_object.mc_n_simulations,
+            mc_random_seed=sku_object.mc_random_seed,
+            mc_output_stat=sku_object.mc_output_stat,
+            mc_output_percentile=sku_object.mc_output_percentile,
+            mc_horizon_mode=sku_object.mc_horizon_mode,
+            mc_horizon_days=sku_object.mc_horizon_days,
+            in_assortment=sku_object.in_assortment,
+            target_csl=sku_object.target_csl,
+        )
+    
     def update_sku(
         self, 
         old_sku_id: str, 
@@ -366,7 +411,9 @@ class CSVLayer:
         mc_horizon_mode: str = "",
         mc_horizon_days: int = 0,
         in_assortment: bool = True,
-        target_csl: float = 0.0
+        target_csl: float = 0.0,
+        category: str = "",
+        department: str = ""
     ) -> bool:
         """
         Update SKU (code, description, EAN, and parameters).
@@ -496,6 +543,8 @@ class CSVLayer:
                 normalized_row["mc_horizon_days"] = str(mc_horizon_days)
                 normalized_row["in_assortment"] = "true" if in_assortment else "false"
                 normalized_row["target_csl"] = str(target_csl)
+                normalized_row["category"] = category
+                normalized_row["department"] = department
                 updated = True
             
             normalized_rows.append(normalized_row)
@@ -690,6 +739,110 @@ class CSVLayer:
                 "note": txn.note or "",
             })
         self._write_csv_atomic("transactions.csv", rows)
+    
+    # ============ Event Uplift Rules Operations ============
+    
+    def read_event_uplift_rules(self) -> List['EventUpliftRule']:
+        """
+        Read event uplift rules from event_uplift_rules.csv.
+        
+        Returns:
+            List of EventUpliftRule objects (sorted by delivery_date)
+        """
+        from ..domain.models import EventUpliftRule
+        
+        rows = self._read_csv("event_uplift_rules.csv")
+        rules = []
+        for row in rows:
+            try:
+                # Parse strength (handle both percentage and factor format)
+                strength_str = row.get("strength", "0").strip()
+                if not strength_str:
+                    strength = 0.0
+                else:
+                    strength = float(strength_str)
+                
+                rules.append(EventUpliftRule(
+                    delivery_date=date.fromisoformat(row["delivery_date"]),
+                    reason=row.get("reason", "").strip(),
+                    strength=strength,
+                    scope_type=row.get("scope_type", "ALL").strip().upper(),
+                    scope_key=row.get("scope_key", "").strip(),
+                    notes=row.get("notes", "").strip(),
+                ))
+            except (ValueError, KeyError) as e:
+                # Skip invalid rows, log warning
+                print(f"Warning: Skipping invalid event uplift rule row: {row}, error: {e}")
+                continue
+        
+        # Sort by delivery_date for consistent ordering
+        rules.sort(key=lambda r: r.delivery_date)
+        return rules
+    
+    def write_event_uplift_rule(self, rule: 'EventUpliftRule'):
+        """
+        Append an event uplift rule to event_uplift_rules.csv.
+        
+        Args:
+            rule: EventUpliftRule to add
+        """
+        self._append_csv("event_uplift_rules.csv", {
+            "delivery_date": rule.delivery_date.isoformat(),
+            "reason": rule.reason,
+            "strength": str(rule.strength),
+            "scope_type": rule.scope_type,
+            "scope_key": rule.scope_key,
+            "notes": rule.notes,
+        })
+    
+    def write_event_uplift_rules(self, rules: List['EventUpliftRule']):
+        """
+        Overwrite entire event_uplift_rules.csv with given list.
+        
+        Args:
+            rules: List of EventUpliftRule objects
+        """
+        file_path = self.data_dir / "event_uplift_rules.csv"
+        with open(file_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(["delivery_date", "reason", "strength", "scope_type", "scope_key", "notes"])
+            for rule in rules:
+                writer.writerow([
+                    rule.delivery_date.isoformat(),
+                    rule.reason,
+                    str(rule.strength),
+                    rule.scope_type,
+                    rule.scope_key,
+                    rule.notes,
+                ])
+    
+    def delete_event_uplift_rule(self, delivery_date: date, scope_type: str, scope_key: str) -> bool:
+        """
+        Delete a specific event uplift rule by composite key.
+        
+        Args:
+            delivery_date: Delivery date of rule to delete
+            scope_type: Scope type (ALL, DEPT, CATEGORY)
+            scope_key: Scope key
+        
+        Returns:
+            True if rule was found and deleted, False otherwise
+        """
+        rules = self.read_event_uplift_rules()
+        initial_count = len(rules)
+        
+        # Filter out matching rule
+        rules = [
+            r for r in rules
+            if not (r.delivery_date == delivery_date and 
+                   r.scope_type == scope_type and 
+                   r.scope_key == scope_key)
+        ]
+        
+        if len(rules) < initial_count:
+            self.write_event_uplift_rules(rules)
+            return True
+        return False
     
     # ============ Sales Operations ============
     
@@ -1113,6 +1266,53 @@ class CSVLayer:
         
         self._append_csv("audit_log.csv", row)
     
+    def log_import_audit(
+        self,
+        source_file: str,
+        mode: str,
+        total_rows: int,
+        imported: int,
+        discarded: int,
+        primary_discard_reason: str = "",
+        error_detail_file: str = "",
+        user: str = "system"
+    ):
+        """
+        Log SKU import operation to audit log.
+        
+        Args:
+            source_file: Name of source CSV file
+            mode: Import mode (UPSERT or REPLACE)
+            total_rows: Total rows in source file
+            imported: Number of rows successfully imported
+            discarded: Number of rows discarded
+            primary_discard_reason: Most common reason for discards
+            error_detail_file: Path to detailed error export (if generated)
+            user: User performing import
+        """
+        details_parts = [
+            f"Mode: {mode}",
+            f"Source: {source_file}",
+            f"Total: {total_rows}",
+            f"Imported: {imported}",
+            f"Discarded: {discarded}"
+        ]
+        
+        if primary_discard_reason:
+            details_parts.append(f"Primary error: {primary_discard_reason}")
+        
+        if error_detail_file:
+            details_parts.append(f"Error details: {error_detail_file}")
+        
+        details = "; ".join(details_parts)
+        
+        self.log_audit(
+            operation="SKU_IMPORT",
+            details=details,
+            sku=None,
+            user=user
+        )
+    
     def read_audit_log(self, sku: Optional[str] = None, limit: Optional[int] = None) -> List[AuditLog]:
         """
         Read audit log entries, optionally filtered by SKU.
@@ -1314,6 +1514,36 @@ class CSVLayer:
                 "ramp_out_days": {
                     "value": 0,
                     "description": "Giorni di ramp-out progressivo alla fine promo (0 = istantaneo)"
+                }
+            },
+            "event_uplift": {
+                "enabled": {
+                    "value": False,
+                    "description": "Abilita uplift domanda basato su eventi (delivery date)"
+                },
+                "default_quantile": {
+                    "value": 0.70,
+                    "description": "Quantile default per calcolo uplift factor (0.70 = conservativo)"
+                },
+                "min_factor": {
+                    "value": 1.0,
+                    "description": "Fattore minimo uplift (clipping inferiore, 1.0 = neutro)"
+                },
+                "max_factor": {
+                    "value": 2.0,
+                    "description": "Fattore massimo uplift (clipping superiore, 2.0 = max raddoppio)"
+                },
+                "perishables_policy_exclude_if_shelf_life_days_lte": {
+                    "value": 3,
+                    "description": "Escludi SKU deperibili con shelf_life <= N giorni (0 = nessuna esclusione)"
+                },
+                "perishables_policy_cap_extra_cover_days_per_sku": {
+                    "value": 1,
+                    "description": "Cap giorni extra copertura per SKU deperibili (limita overstock)"
+                },
+                "apply_to": {
+                    "value": "forecast_only",
+                    "description": "Modalità applicazione: 'forecast_only' (solo media) o 'forecast_and_sigma' (media e sigma)"
                 }
             },
             "promo_prebuild": {
