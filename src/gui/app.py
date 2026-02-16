@@ -4573,12 +4573,17 @@ class DesktopOrderApp:
         # Get selected SKU data - use tags to preserve original SKU (with leading zeros)
         item = self.admin_treeview.item(selected[0])
         tags = item.get("tags", [])
+        values = item["values"]
+        
+        print(f"DEBUG _edit_sku: tags={tags}, values={values}")
+        
         if tags:
             selected_sku = tags[0]  # Original SKU from tags
         else:
             # Fallback to values if tags not available
-            values = item["values"]
             selected_sku = values[0]  # SKU code
+        
+        print(f"DEBUG _edit_sku: selected_sku='{selected_sku}' (type: {type(selected_sku)})")
         
         self._show_sku_form(mode="edit", sku_code=selected_sku)
     
@@ -4706,8 +4711,18 @@ class DesktopOrderApp:
             # Normalize SKU code for comparison (handle both string and numeric SKUs)
             sku_code_normalized = str(sku_code).strip()
             
+            # Debug: log what we're searching for and what we have
+            print(f"DEBUG _show_sku_form: Searching for SKU: '{sku_code_normalized}' (type: {type(sku_code_normalized)})")
+            print(f"DEBUG _show_sku_form: Available SKUs (first 10): {[f'{s.sku}' for s in skus[:10]]}")
+            
             current_sku = next((s for s in skus if str(s.sku).strip() == sku_code_normalized), None)
             if not current_sku:
+                # Additional debug: show exact match attempts
+                print(f"DEBUG _show_sku_form: Failed to find match. Trying detailed comparison:")
+                for s in skus[:10]:  # Check first 10
+                    s_sku = str(s.sku).strip()
+                    print(f"  '{s_sku}' == '{sku_code_normalized}' ? {s_sku == sku_code_normalized} (repr: {repr(s_sku)} vs {repr(sku_code_normalized)})")
+                
                 messagebox.showerror("Error", f"SKU '{sku_code}' not found.")
                 popup.destroy()
                 return
