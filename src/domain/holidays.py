@@ -42,7 +42,8 @@ class HolidayRule:
         params: Type-specific parameters:
             - single: {"date": "YYYY-MM-DD"}
             - range: {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}
-            - fixed: {"month": int, "day": int}
+            - fixed (annual): {"month": int, "day": int} - e.g., December 25
+            - fixed (monthly): {"day": int} - e.g., 1st of every month
     """
     name: str
     scope: str
@@ -74,8 +75,13 @@ class HolidayRule:
             return start <= check_date <= end
             
         elif self.type == HolidayType.FIXED_DATE:
-            return (check_date.month == self.params["month"] and
-                    check_date.day == self.params["day"])
+            # Monthly recurrence: only day specified (e.g., "1st of every month")
+            if "month" not in self.params:
+                return check_date.day == self.params["day"]
+            # Annual recurrence: month + day specified (e.g., "December 25")
+            else:
+                return (check_date.month == self.params["month"] and
+                        check_date.day == self.params["day"])
         
         return False
 
@@ -213,14 +219,20 @@ class HolidayCalendar:
                                 raise ValueError(f"Range rule '{rule.name}': start > end")
                                 
                         elif rule.type == HolidayType.FIXED_DATE:
-                            if "month" not in rule.params or "day" not in rule.params:
-                                raise ValueError(f"Fixed-date rule '{rule.name}' missing month/day params")
-                            month = int(rule.params["month"])
+                            # Monthly recurrence: only day required (e.g., "1st of every month")
+                            # Annual recurrence: month + day required (e.g., "December 25")
+                            if "day" not in rule.params:
+                                raise ValueError(f"Fixed-date rule '{rule.name}' missing 'day' param")
+                            
                             day = int(rule.params["day"])
-                            if not (1 <= month <= 12):
-                                raise ValueError(f"Invalid month {month} in rule '{rule.name}'")
                             if not (1 <= day <= 31):
                                 raise ValueError(f"Invalid day {day} in rule '{rule.name}'")
+                            
+                            # If month is specified, validate it (annual recurrence)
+                            if "month" in rule.params:
+                                month = int(rule.params["month"])
+                                if not (1 <= month <= 12):
+                                    raise ValueError(f"Invalid month {month} in rule '{rule.name}'")
                         
                         rules.append(rule)
                         
