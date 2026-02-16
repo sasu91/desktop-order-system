@@ -4524,10 +4524,12 @@ class DesktopOrderApp:
                 continue
             
             status = "In assortimento" if sku.in_assortment else "Fuori assortimento"
-            self.admin_treeview.insert(
+            # Store the actual SKU code in tags to preserve leading zeros
+            item_id = self.admin_treeview.insert(
                 "",
                 "end",
                 values=(sku.sku, sku.description, sku.ean or "", status),
+                tags=(sku.sku,)  # Store original SKU in tags
             )
     
     def _search_skus(self):
@@ -4544,10 +4546,12 @@ class DesktopOrderApp:
                 continue
             
             status = "In assortimento" if sku.in_assortment else "Fuori assortimento"
+            # Store the actual SKU code in tags to preserve leading zeros
             self.admin_treeview.insert(
                 "",
                 "end",
                 values=(sku.sku, sku.description, sku.ean or "", status),
+                tags=(sku.sku,)  # Store original SKU in tags
             )
     
     def _clear_search(self):
@@ -4566,10 +4570,15 @@ class DesktopOrderApp:
             messagebox.showwarning("Nessuna Selezione", "Seleziona uno SKU da modificare.")
             return
         
-        # Get selected SKU data
+        # Get selected SKU data - use tags to preserve original SKU (with leading zeros)
         item = self.admin_treeview.item(selected[0])
-        values = item["values"]
-        selected_sku = values[0]  # SKU code
+        tags = item.get("tags", [])
+        if tags:
+            selected_sku = tags[0]  # Original SKU from tags
+        else:
+            # Fallback to values if tags not available
+            values = item["values"]
+            selected_sku = values[0]  # SKU code
         
         self._show_sku_form(mode="edit", sku_code=selected_sku)
     
@@ -4580,10 +4589,15 @@ class DesktopOrderApp:
             messagebox.showwarning("Nessuna Selezione", "Seleziona uno SKU da eliminare.")
             return
         
-        # Get selected SKU data
+        # Get selected SKU data - use tags to preserve original SKU (with leading zeros)
         item = self.admin_treeview.item(selected[0])
-        values = item["values"]
-        sku_code = values[0]
+        tags = item.get("tags", [])
+        if tags:
+            sku_code = tags[0]  # Original SKU from tags
+        else:
+            # Fallback to values if tags not available
+            values = item["values"]
+            sku_code = values[0]
         
         # Check if can delete
         can_delete, reason = self.csv_layer.can_delete_sku(sku_code)
@@ -4692,18 +4706,8 @@ class DesktopOrderApp:
             # Normalize SKU code for comparison (handle both string and numeric SKUs)
             sku_code_normalized = str(sku_code).strip()
             
-            # Debug: log what we're searching for and what we have
-            print(f"DEBUG: Searching for SKU: '{sku_code_normalized}' (type: {type(sku_code_normalized)})")
-            print(f"DEBUG: Available SKUs: {[f'{s.sku}' for s in skus[:5]]}")  # First 5 for brevity
-            
             current_sku = next((s for s in skus if str(s.sku).strip() == sku_code_normalized), None)
             if not current_sku:
-                # Additional debug: show exact match attempts
-                print(f"DEBUG: Failed to find match. Trying detailed comparison:")
-                for s in skus[:10]:  # Check first 10
-                    s_sku = str(s.sku).strip()
-                    print(f"  '{s_sku}' == '{sku_code_normalized}' ? {s_sku == sku_code_normalized} (repr: {repr(s_sku)} vs {repr(sku_code_normalized)})")
-                
                 messagebox.showerror("Error", f"SKU '{sku_code}' not found.")
                 popup.destroy()
                 return
