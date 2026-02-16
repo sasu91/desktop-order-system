@@ -1,5 +1,5 @@
-order_id,date,sku,qty_ordered,qty_received,status,receipt_date
-ORD_20260115_SKU_A_01,2026-01-15,SKU_A,60,60,RECEIVED,2026-01-18
-ORD_20260202_SKU_A_02,2026-02-02,SKU_A,50,50,RECEIVED,2026-02-05
-ORD_20260120_SKU_B_01,2026-01-20,SKU_B,100,100,RECEIVED,2026-01-27
-ORD_20260204_SKU_B_02,2026-02-04,SKU_B,80,80,RECEIVED,2026-02-10
+order_id,date,sku,qty_ordered,qty_received,status,receipt_date,promo_prebuild_enabled,promo_start_date,target_open_qty,projected_stock_on_promo_start,prebuild_delta_qty,prebuild_qty,prebuild_coverage_days,prebuild_distribution_note,event_uplift_active,event_delivery_date,event_reason,event_u_store_day,event_quantile,event_fallback_level,event_beta_i,event_beta_fallback_level,event_m_i,event_explain_short
+ORD_20260115_SKU_A_01,2026-01-15,SKU_A,60,60,RECEIVED,2026-01-18,,,,,,,,,,,,,,,,,,
+ORD_20260202_SKU_A_02,2026-02-02,SKU_A,50,50,RECEIVED,2026-02-05,,,,,,,,,,,,,,,,,,
+ORD_20260120_SKU_B_01,2026-01-20,SKU_B,100,100,RECEIVED,2026-01-27,,,,,,,,,,,,,,,,,,
+ORD_20260204_SKU_B_02,2026-02-04,SKU_B,80,80,RECEIVED,2026-02-10,,,,,,,,,,,,,,,,,,
