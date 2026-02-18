@@ -150,8 +150,6 @@ class Transaction:
     note: Optional[str] = None
     
     def __post_init__(self):
-        if self.date > Date.today():
-            raise ValueError("Transaction date cannot be in the future")
         if self.event == EventType.SNAPSHOT and self.qty < 0:
             raise ValueError("SNAPSHOT qty must be non-negative")
 

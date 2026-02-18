@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).parent
 DATA_DIR = PROJECT_ROOT / "data"
 
 # Storage backend configuration
-STORAGE_BACKEND: Literal['csv', 'sqlite'] = 'csv'  # Default: CSV mode
+STORAGE_BACKEND: Literal['csv', 'sqlite'] = 'sqlite'  # Default: SQLite mode
 DATABASE_PATH = DATA_DIR / "app.db"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 

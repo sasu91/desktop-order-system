@@ -38,7 +38,7 @@
     },
     "oos_detection_mode": {
       "value": "strict",
-      "description": "Modalità rilevamento OOS: strict (on_hand=0) o relaxed (on_hand+on_order=0)"
+      "description": "Modalit\u00e0 rilevamento OOS: strict (on_hand=0) o relaxed (on_hand+on_order=0)"
     },
     "forecast_method": {
       "value": "simple",
@@ -72,7 +72,7 @@
     "random_seed": {
       "value": 42,
       "auto_apply_to_new_sku": true,
-      "description": "Seed deterministico per riproducibilità (0 = random)"
+      "description": "Seed deterministico per riproducibilit\u00e0 (0 = random)"
     },
     "output_stat": {
       "value": "mean",
@@ -103,7 +103,7 @@
   "auto_variability": {
     "enabled": {
       "value": true,
-      "description": "Abilita classificazione automatica variabilità domanda"
+      "description": "Abilita classificazione automatica variabilit\u00e0 domanda"
     },
     "min_observations": {
       "value": 30,
@@ -149,12 +149,12 @@
     "waste_penalty_mode": {
       "value": "soft",
       "auto_apply_to_new_sku": false,
-      "description": "Modalità penalty per waste risk: soft (riduzione qty), hard (blocco ordine)"
+      "description": "Modalit\u00e0 penalty per waste risk: soft (riduzione qty), hard (blocco ordine)"
     },
     "waste_penalty_factor": {
       "value": 0.5,
       "auto_apply_to_new_sku": false,
-      "description": "Fattore riduzione quantità in soft penalty (0.0-1.0, 0.5 = -50%)"
+      "description": "Fattore riduzione quantit\u00e0 in soft penalty (0.0-1.0, 0.5 = -50%)"
     },
     "waste_risk_threshold": {
       "value": 15.0,
@@ -196,5 +196,6 @@
       "value": 10,
       "description": "Prezzo unitario medio per calcolo valore stock"
     }
-  }
+  },
+  "storage_backend": "sqlite"
 }

@@ -130,7 +130,7 @@ class StorageAdapter(CSVLayer):
         if self.is_sqlite_mode():
             # SQLite: Use repository
             try:
-                skus_dict = self.repos.skus().list_all()
+                skus_dict = self.repos.skus().list()
                 return [self._dict_to_sku(s) for s in skus_dict]
             except Exception as e:
                 print(f"⚠ SQLite read_skus failed, falling back to CSV: {e}")
@@ -157,7 +157,7 @@ class StorageAdapter(CSVLayer):
         """Get list of all SKU identifiers"""
         if self.is_sqlite_mode():
             try:
-                skus = self.repos.skus().list_all()
+                skus = self.repos.skus().list()
                 return [s['sku'] for s in skus]
             except Exception as e:
                 print(f"⚠ SQLite get_all_sku_ids failed, falling back to CSV: {e}")
