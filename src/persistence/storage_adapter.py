@@ -129,6 +129,7 @@ class StorageAdapter(CSVLayer):
         """Read all SKUs from storage"""
         if self.is_sqlite_mode():
             # SQLite: Use repository
+            assert self.repos is not None
             try:
                 skus_dict = self.repos.skus().list()
                 return [self._dict_to_sku(s) for s in skus_dict]
@@ -143,6 +144,7 @@ class StorageAdapter(CSVLayer):
         """Write SKU to storage"""
         if self.is_sqlite_mode():
             # SQLite: Use repository
+            assert self.repos is not None
             try:
                 sku_dict = self._sku_to_dict(sku)
                 self.repos.skus().upsert(sku_dict)
@@ -156,6 +158,7 @@ class StorageAdapter(CSVLayer):
     def get_all_sku_ids(self) -> List[str]:
         """Get list of all SKU identifiers"""
         if self.is_sqlite_mode():
+            assert self.repos is not None
             try:
                 skus = self.repos.skus().list()
                 return [s['sku'] for s in skus]
@@ -168,6 +171,7 @@ class StorageAdapter(CSVLayer):
     def sku_exists(self, sku_id: str) -> bool:
         """Check if SKU exists"""
         if self.is_sqlite_mode():
+            assert self.repos is not None
             try:
                 return self.repos.skus().exists(sku_id)
             except Exception as e:
@@ -184,6 +188,7 @@ class StorageAdapter(CSVLayer):
     def update_sku_object(self, old_sku_id: str, sku_object: SKU) -> bool:
         """Update SKU (with potential SKU ID change)"""
         if self.is_sqlite_mode():
+            assert self.repos is not None
             try:
                 sku_dict = self._sku_to_dict(sku_object)
                 
@@ -204,6 +209,7 @@ class StorageAdapter(CSVLayer):
     def delete_sku(self, sku_id: str) -> bool:
         """Delete SKU"""
         if self.is_sqlite_mode():
+            assert self.repos is not None
             try:
                 self.repos.skus().delete(sku_id)
                 return True
@@ -225,6 +231,7 @@ class StorageAdapter(CSVLayer):
     def read_transactions(self) -> List[Transaction]:
         """Read all transactions"""
         if self.is_sqlite_mode():
+            assert self.repos is not None
             try:
                 txns_dict = self.repos.ledger().list_transactions(limit=10000)
                 return [self._dict_to_transaction(t) for t in txns_dict]
@@ -237,6 +244,7 @@ class StorageAdapter(CSVLayer):
     def write_transaction(self, txn: Transaction):
         """Write single transaction"""
         if self.is_sqlite_mode():
+            assert self.repos is not None
             try:
                 self.repos.ledger().append_transaction(
                     date=txn.date.isoformat(),
@@ -255,6 +263,7 @@ class StorageAdapter(CSVLayer):
     def write_transactions_batch(self, txns: List[Transaction]):
         """Write multiple transactions (batch mode)"""
         if self.is_sqlite_mode():
+            assert self.repos is not None
             try:
                 batch = []
                 for txn in txns:
@@ -303,6 +312,7 @@ class StorageAdapter(CSVLayer):
         """Write single sales record"""
         if self.is_sqlite_mode():
             # SQLite sales insertion via SQL (no repository method yet)
+            assert self.conn is not None
             try:
                 cursor = self.conn.cursor()
                 cursor.execute("""
@@ -368,20 +378,25 @@ class StorageAdapter(CSVLayer):
     def read_order_logs(self):
         return self.csv_layer.read_order_logs()
     
-    def write_order_log(self, order_log):
-        self.csv_layer.write_order_log(order_log)
+    def write_order_log(self, *args, **kwargs):
+        self.csv_layer.write_order_log(*args, **kwargs)
     
     def read_receiving_logs(self):
         return self.csv_layer.read_receiving_logs()
     
-    def write_receiving_log(self, receiving_log):
-        self.csv_layer.write_receiving_log(receiving_log)
+    def write_receiving_log(self, *args, **kwargs):
+        self.csv_layer.write_receiving_log(*args, **kwargs)
     
     def read_audit_log(self, sku: Optional[str] = None, limit: Optional[int] = None):
         return self.csv_layer.read_audit_log(sku, limit)
     
     def write_audit_log(self, audit_log: AuditLog):
-        self.csv_layer.write_audit_log(audit_log)
+        self.csv_layer.log_audit(
+            operation=audit_log.operation,
+            details=audit_log.details if hasattr(audit_log, 'details') else '',
+            sku=audit_log.sku if hasattr(audit_log, 'sku') else None,
+            user=audit_log.user if hasattr(audit_log, 'user') else 'system',
+        )
     
     def read_lots(self) -> List[Lot]:
         return self.csv_layer.read_lots()
@@ -433,7 +448,7 @@ class StorageAdapter(CSVLayer):
             forecast_method=d.get('forecast_method', ''),
             mc_distribution=d.get('mc_distribution', 'normal'),
             mc_n_simulations=d.get('mc_n_simulations', 1000),
-            mc_random_seed=d.get('mc_random_seed'),
+            mc_random_seed=d.get('mc_random_seed') or 0,
             mc_output_stat=d.get('mc_output_stat', 'mean'),
             mc_output_percentile=d.get('mc_output_percentile', 50),
             mc_horizon_mode=d.get('mc_horizon_mode', ''),
