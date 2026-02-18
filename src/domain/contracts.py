@@ -47,6 +47,17 @@ from typing import Dict, List, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
+# Date-basis constants
+# ---------------------------------------------------------------------------
+
+#: Modifier window evaluated against the ORDER date (when the order is placed).
+DATE_BASIS_ORDER = "ORDER_DATE"
+
+#: Modifier window evaluated against the DELIVERY / receipt date.
+DATE_BASIS_DELIVERY = "DELIVERY_DATE"
+
+
+# ---------------------------------------------------------------------------
 # DemandDistribution
 # ---------------------------------------------------------------------------
 
@@ -70,11 +81,23 @@ class DemandDistribution:
     n_censored : int
         Number of days excluded as censored (OOS / unavailable).
     quantiles : dict
-        Optional quantile estimates, e.g. {"p50": …, "p80": …, "p90": …, "p95": …}.
-        Populated by Monte Carlo builds; empty for simple method.
+        Quantile estimates over horizon P (not per-day).
+        Keys are alpha values as strings: "0.50", "0.80", "0.90", "0.95", etc.
+        For MC: computed from distribution D_P (sum over P days per trajectory).
+        For simple: empty dict.
     sigma_adj_multiplier : float
         The multiplier applied to sigma_base when modifiers were combined.
         1.0 means no adjustment (no modifiers applied, or all multipliers ≈ 1).
+    mc_n_simulations : int
+        Number of Monte Carlo simulations (0 if not MC).
+    mc_random_seed : int
+        Random seed used (0 if not MC or random).
+    mc_distribution : str
+        Distribution type: "empirical" | "normal" | "lognormal" | "residuals" | "".
+    mc_horizon_days : int
+        Horizon days used in MC simulation (0 if not MC).
+    mc_output_percentile : int
+        Percentile used for mu_P if output_stat="percentile" (0 if mean).
     """
 
     mu_P: float
@@ -85,6 +108,24 @@ class DemandDistribution:
     n_censored: int = 0
     quantiles: Dict[str, float] = field(default_factory=dict)
     sigma_adj_multiplier: float = 1.0
+    mc_n_simulations: int = 0
+    mc_random_seed: int = 0
+    mc_distribution: str = ""
+    mc_horizon_days: int = 0
+    mc_output_percentile: int = 0
+    
+    # Intermittent forecast metadata
+    intermittent_classification: bool = False  # True if classified as intermittent
+    intermittent_adi: float = 0.0  # Average Demand Interval
+    intermittent_cv2: float = 0.0  # Squared coefficient of variation
+    intermittent_method: str = ""  # "croston", "sba", "tsb", or ""
+    intermittent_alpha: float = 0.0  # Smoothing parameter used (0 if not intermittent)
+    intermittent_p_t: float = 0.0  # Final smoothed interval (Croston/SBA) or 0
+    intermittent_z_t: float = 0.0  # Final smoothed size
+    intermittent_b_t: float = 0.0  # Final smoothed probability (TSB only)
+    intermittent_backtest_wmape: float = 0.0  # Backtest WMAPE performance (0 if not tested)
+    intermittent_backtest_bias: float = 0.0  # Backtest bias (mean error)
+    intermittent_n_nonzero: int = 0  # Count of non-zero demands in lookback
 
     def __post_init__(self) -> None:
         if self.mu_P < 0:
@@ -159,6 +200,93 @@ class DemandDistribution:
             sigma_adj_multiplier=sigma_mult,
         )
         return new_dist, cum_mult
+
+
+# ---------------------------------------------------------------------------
+# Modifier – rule / definition template (resolved before apply)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Modifier:
+    """
+    Immutable definition of a single demand modifier rule.
+
+    This represents the *template* loaded from promo_calendar, event_rules,
+    holidays.json, or settings – before it is applied to a specific
+    DemandDistribution.  The result of applying it is an ``AppliedModifier``.
+
+    Fields
+    ------
+    id           : unique stable key (e.g. "promo_2026-02-18_SKU001")
+    name         : human-readable display label
+    scope_type   : "global" | "store" | "category" | "department" | "sku"
+    scope_key    : value for scope_type; empty string = applies to all
+    date_basis   : DATE_BASIS_ORDER | DATE_BASIS_DELIVERY
+    kind         : "multiplicative" | "additive"
+    value        : factor (1.2 = +20%) or additive delta
+    precedence   : EVENT=1, PROMO=2, CANNIBALIZATION=3, HOLIDAY=4
+    modifier_type: "event" | "promo" | "cannibalization" | "holiday"
+    start / end  : window bounds (inclusive).  None = open-ended.
+    """
+    id: str
+    name: str
+    scope_type: str
+    scope_key: str
+    date_basis: str
+    kind: str
+    value: float
+    precedence: int
+    modifier_type: str
+    start: Optional[date] = None
+    end: Optional[date] = None
+
+    def is_active_for_date(self, check_date: date) -> bool:
+        """Return True if check_date falls within [start, end] (inclusive)."""
+        if self.start and check_date < self.start:
+            return False
+        if self.end and check_date > self.end:
+            return False
+        return True
+
+
+# ---------------------------------------------------------------------------
+# ModifierContext – input to list_modifiers / apply_modifiers
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ModifierContext:
+    """
+    All contextual information needed to resolve which Modifier rules apply.
+
+    Fields
+    ------
+    sku_id        : target SKU identifier
+    category      : SKU category (for scope filtering)
+    department    : SKU department (for scope filtering)
+    order_date    : the date the order is being computed (→ DATE_BASIS_ORDER)
+    horizon_dates : list of dates in the forecast window [d+1 … d+P]
+    promo_windows : raw PromoWindow objects from storage
+    event_rules   : raw EventUpliftRule objects from storage
+    holidays      : list of holiday dicts from holidays.json
+    settings      : global settings dict
+    delivery_date : expected delivery / receipt date (→ DATE_BASIS_DELIVERY)
+    all_skus      : all SKU objects (for cannibalization group resolution)
+    sales_records : pre-loaded sales records
+    transactions  : pre-loaded transactions
+    """
+    sku_id: str
+    category: str
+    department: str
+    order_date: date
+    horizon_dates: List[date]
+    promo_windows: List
+    event_rules: List
+    holidays: List
+    settings: Dict
+    delivery_date: Optional[date] = None
+    all_skus: List = field(default_factory=list)
+    sales_records: List = field(default_factory=list)
+    transactions: List = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +387,11 @@ class AppliedModifier:
     source_sku: Optional[str] = None
     confidence: str = ""
     note: str = ""
+    # Modifiers Engine (Feb 2026): provenance and step trace
+    precedence: int = 0           # Fixed: EVENT=1, PROMO=2, CANNIBALIZATION=3, HOLIDAY=4
+    date_basis: str = DATE_BASIS_DELIVERY  # DATE_BASIS_ORDER or DATE_BASIS_DELIVERY
+    mu_before: float = 0.0        # mu_P immediately before this modifier was applied
+    mu_after: float = 0.0         # mu_P immediately after this modifier was applied
 
     def __post_init__(self) -> None:
         valid_scopes = {"mu_only", "sigma", "both", "qty_correction"}
@@ -323,6 +456,8 @@ class OrderExplain:
 
     # ---- Policy outputs ----
     reorder_point: float = 0.0
+    reorder_point_method: str = ""  # "quantile" | "z_score" | "z_score_fallback" | "legacy"
+    quantile_used: Optional[float] = None  # Value of Q(alpha) if quantile method used
     order_raw: float = 0.0
     constraints_applied: List[str] = field(default_factory=list)
     order_final: int = 0
@@ -330,6 +465,43 @@ class OrderExplain:
     # ---- Legacy-specific ----
     safety_stock: int = 0
     equivalent_csl_legacy: float = 0.0
+
+    def _build_modifier_trace(self) -> Dict[str, float]:
+        """
+        Reconstruct step-by-step mu_P trace from applied modifiers.
+
+        Uses mu_before / mu_after on each AppliedModifier.  Falls back to the
+        final mu_P if those fields were not populated (backward-compat).
+
+        Keys: mu_base, mu_after_event, mu_after_promo,
+              mu_after_cannibalization, mu_after_holiday, mu_final.
+        """
+        actual = [m for m in self.modifiers if m.scope != "qty_correction"]
+
+        # mu_base: mu_P before any modifier
+        if actual and actual[0].mu_before > 0:
+            mu_base = actual[0].mu_before
+        else:
+            # Fallback: back-calculate from the first modifier's multiplier
+            if actual and actual[0].multiplier and actual[0].multiplier != 0:
+                mu_base = self.demand.mu_P / actual[0].multiplier
+            else:
+                mu_base = self.demand.mu_P
+
+        current_mu = mu_base
+        trace: Dict[str, float] = {"mu_base": round(mu_base, 4)}
+
+        for type_key in ("event", "promo", "cannibalization", "holiday"):
+            mods = [m for m in actual if m.modifier_type == type_key]
+            if mods:
+                last = mods[-1]
+                if last.mu_after > 0:
+                    current_mu = last.mu_after
+                # else: trust cumulative mu from demand
+            trace[f"mu_after_{type_key}"] = round(current_mu, 4)
+
+        trace["mu_final"] = round(self.demand.mu_P, 4)
+        return trace
 
     def to_dict(self) -> Dict:
         """Flat dict representation – safe for CSV row or JSON export."""
@@ -365,6 +537,22 @@ class OrderExplain:
             "n_samples": self.demand.n_samples,
             "n_censored": self.demand.n_censored,
             "quantiles_json": json.dumps(self.demand.quantiles) if self.demand.quantiles else "",
+            "mc_n_simulations": self.demand.mc_n_simulations,
+            "mc_random_seed": self.demand.mc_random_seed,
+            "mc_distribution": self.demand.mc_distribution,
+            "mc_horizon_days": self.demand.mc_horizon_days,
+            "mc_output_percentile": self.demand.mc_output_percentile,
+            "intermittent_classification": self.demand.intermittent_classification,
+            "intermittent_adi": round(self.demand.intermittent_adi, 4),
+            "intermittent_cv2": round(self.demand.intermittent_cv2, 4),
+            "intermittent_method": self.demand.intermittent_method,
+            "intermittent_alpha": round(self.demand.intermittent_alpha, 4),
+            "intermittent_p_t": round(self.demand.intermittent_p_t, 4),
+            "intermittent_z_t": round(self.demand.intermittent_z_t, 4),
+            "intermittent_b_t": round(self.demand.intermittent_b_t, 4),
+            "intermittent_backtest_wmape": round(self.demand.intermittent_backtest_wmape, 4),
+            "intermittent_backtest_bias": round(self.demand.intermittent_backtest_bias, 4),
+            "intermittent_n_nonzero": self.demand.intermittent_n_nonzero,
             "on_hand": self.position.on_hand,
             "on_order": self.position.on_order,
             "unfulfilled": self.position.unfulfilled,
@@ -372,7 +560,10 @@ class OrderExplain:
             "alpha_target": self.alpha_target if self.alpha_target is not None else "",
             "z_score": round(self.z_score, 4) if self.z_score is not None else "",
             "reorder_point": round(self.reorder_point, 4),
+            "reorder_point_method": self.reorder_point_method,
+            "quantile_used": round(self.quantile_used, 4) if self.quantile_used is not None else "",
             "modifiers_json": json.dumps(modifiers_summary, ensure_ascii=False),
+            "modifier_trace_json": json.dumps(self._build_modifier_trace(), ensure_ascii=False),
             "constraints_applied": "; ".join(self.constraints_applied),
             "order_raw": round(self.order_raw, 4),
             "order_final": self.order_final,
@@ -391,9 +582,13 @@ class OrderExplain:
         "mu_P", "sigma_P", "sigma_adj_multiplier",
         "protection_period_days", "n_samples", "n_censored",
         "quantiles_json",
+        "mc_n_simulations", "mc_random_seed", "mc_distribution", "mc_horizon_days", "mc_output_percentile",
+        "intermittent_classification", "intermittent_adi", "intermittent_cv2",
+        "intermittent_method", "intermittent_alpha", "intermittent_p_t", "intermittent_z_t", "intermittent_b_t",
+        "intermittent_backtest_wmape", "intermittent_backtest_bias", "intermittent_n_nonzero",
         "on_hand", "on_order", "unfulfilled", "inventory_position",
-        "alpha_target", "z_score", "reorder_point",
-        "modifiers_json", "constraints_applied",
+        "alpha_target", "z_score", "reorder_point", "reorder_point_method", "quantile_used",
+        "modifiers_json", "modifier_trace_json", "constraints_applied",
         "order_raw", "order_final",
         "safety_stock", "equivalent_csl_legacy",
     ])

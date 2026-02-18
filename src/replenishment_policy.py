@@ -524,11 +524,37 @@ def compute_order_v2(
     # Step 2: alpha – no boost here (censored boost already baked into demand if needed)
     alpha_eff = min(0.99, alpha)  # Hard cap; caller passes boosted alpha if desired
 
-    # Step 3: z-score
-    z = _z_score_for_csl(alpha_eff)
+    # Step 3: Reorder point calculation – quantile-first for Monte Carlo
+    # NEW (Feb 2026): If forecast_method='monte_carlo' and quantiles available,
+    # use S = Q(alpha) directly from simulated distribution D_P.
+    # Otherwise, fallback to S = mu_P + z * sigma_P.
+    
+    reorder_point_method = "z_score"  # Default
+    quantile_used = None
+    z = None
 
-    # Step 4: Reorder point  S = mu_P + z × sigma_P
-    S = mu_P + z * sigma_P
+    if demand.forecast_method == "monte_carlo" and demand.quantiles:
+        # Try to find quantile for target alpha
+        alpha_key = f"{alpha:.2f}"  # e.g., "0.95"
+        if alpha_key in demand.quantiles:
+            # Use quantile directly
+            S = demand.quantiles[alpha_key]
+            reorder_point_method = "quantile"
+            quantile_used = S
+            # z_score is not used, but we can compute equivalent z for display
+            if sigma_P > 0:
+                z = (S - mu_P) / sigma_P
+            else:
+                z = 0.0
+        else:
+            # Quantile not available for exact alpha → fallback to z-score
+            z = _z_score_for_csl(alpha_eff)
+            S = mu_P + z * sigma_P
+            reorder_point_method = "z_score_fallback"
+    else:
+        # Simple method or no quantiles → use z-score
+        z = _z_score_for_csl(alpha_eff)
+        S = mu_P + z * sigma_P
 
     # Step 5: Inventory position as-of end of protection period
     from src.domain.calendar import next_receipt_date as _nrd
@@ -573,7 +599,7 @@ def compute_order_v2(
         # CSL parameters
         "alpha": alpha,
         "alpha_eff": alpha_eff,
-        "z_score": z,
+        "z_score": z if z is not None else 0.0,
         # Demand
         "forecast_demand": mu_P,
         "sigma_daily": sigma_P / max(P ** 0.5, 1.0),
@@ -589,6 +615,8 @@ def compute_order_v2(
         "inventory_position": IP,
         # Order computation
         "reorder_point": S,
+        "reorder_point_method": reorder_point_method,
+        "quantile_used": quantile_used if quantile_used is not None else 0.0,
         "order_raw": order_raw,
         "order_after_pack": order_after_pack,
         "order_after_moq": order_after_moq,

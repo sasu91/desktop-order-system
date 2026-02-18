@@ -4981,7 +4981,7 @@ class DesktopOrderApp:
         content_mc = section_mc.get_content_frame()
         
         forecast_method_var = tk.StringVar(value=current_sku.forecast_method if current_sku else "")
-        add_field_row(content_mc, 0, "Metodo Forecast:", "simple/monte_carlo/vuoto=globale", forecast_method_var, "combobox", choices=["", "simple", "monte_carlo"])
+        add_field_row(content_mc, 0, "Metodo Forecast:", "simple/monte_carlo/croston/sba/tsb/intermittent_auto/vuoto=globale", forecast_method_var, "combobox", choices=["", "simple", "monte_carlo", "croston", "sba", "tsb", "intermittent_auto"])
         
         mc_distribution_var = tk.StringVar(value=current_sku.mc_distribution if current_sku else "")
         add_field_row(content_mc, 1, "MC Distribuzione:", "empirical/normal/lognormal/residuals/vuoto=globale", mc_distribution_var, "combobox", choices=["", "empirical", "normal", "lognormal", "residuals"])
@@ -6126,18 +6126,7 @@ class DesktopOrderApp:
             from src.domain.contracts import OrderExplain
 
             # CSV header from OrderExplain column spec
-            columns = [
-                "sku", "asof_date", "forecast_method", "policy_mode",
-                "mu_P", "sigma_P", "sigma_adj_multiplier",
-                "protection_period_days", "n_samples", "n_censored",
-                "quantiles_json",
-                "on_hand", "on_order", "unfulfilled", "inventory_position",
-                "alpha_target", "z_score", "reorder_point",
-                "modifiers_json", "constraints_applied",
-                "order_raw", "order_final",
-                "safety_stock", "equivalent_csl_legacy",
-                "error",
-            ]
+            columns = OrderExplain.CSV_COLUMNS + ["error"]
 
             today = date.today()
             row_count = 0
@@ -7096,6 +7085,7 @@ class DesktopOrderApp:
         self._build_reorder_settings_tab()
         self._build_auto_variability_settings_tab()
         self._build_monte_carlo_settings_tab()
+        self._build_intermittent_settings_tab()  # New: Intermittent forecast (Croston/SBA/TSB)
         self._build_expiry_alerts_settings_tab()
         self._build_shelf_life_settings_tab()
         self._build_dashboard_settings_tab()
@@ -7688,6 +7678,161 @@ class DesktopOrderApp:
         ]
         
         self._create_param_rows(scrollable_frame, mc_params, "monte_carlo")
+    
+    def _build_intermittent_settings_tab(self):
+        """Build Intermittent Forecast Parameters sub-tab (Croston/SBA/TSB)."""
+        tab_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(tab_frame, text="🔢 Intermittente")
+        
+        # Scrollable container
+        scroll_container = ttk.Frame(tab_frame)
+        scroll_container.pack(fill="both", expand=True)
+        
+        canvas = tk.Canvas(scroll_container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Enable mouse wheel scrolling
+        def _on_mousewheel(event):
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
+        
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        
+        # Info label with description
+        info_frame = ttk.Frame(scrollable_frame)
+        info_frame.pack(fill="x", pady=(0, 10))
+        info_label = ttk.Label(
+            info_frame,
+            text="ℹ️ Metodi forecast per domanda intermittente (molti zeri): Croston, SBA, TSB",
+            font=("Helvetica", 9, "italic"),
+            foreground="gray"
+        )
+        info_label.pack(anchor="w")
+        
+        # Parameters
+        intermittent_params = [
+            {
+                "key": "intermittent_enabled",
+                "label": "✓ Abilita Forecast Intermittente",
+                "description": "Abilita rilevamento e forecast per domanda intermittente (Croston/SBA/TSB)",
+                "type": "bool"
+            },
+            {
+                "key": "intermittent_adi_threshold",
+                "label": "Soglia ADI",
+                "description": "Average Demand Interval: >1.32 = intermittente (Syntetos et al.)",
+                "type": "float",
+                "min": 1.0,
+                "max": 10.0
+            },
+            {
+                "key": "intermittent_cv2_threshold",
+                "label": "Soglia CV²",
+                "description": "Squared Coefficient of Variation: >0.49 = variabile (Syntetos et al.)",
+                "type": "float",
+                "min": 0.0,
+                "max": 5.0
+            },
+            {
+                "key": "intermittent_alpha_default",
+                "label": "Alpha Smoothing",
+                "description": "Parametro smoothing per Croston/SBA/TSB (0 < alpha <= 1, default 0.1)",
+                "type": "float",
+                "min": 0.01,
+                "max": 1.0
+            },
+            {
+                "key": "intermittent_lookback_days",
+                "label": "Lookback Giorni",
+                "description": "Giorni lookback per classificazione e fitting (min 56, raccomandato 90)",
+                "type": "int",
+                "min": 28,
+                "max": 365
+            },
+            {
+                "key": "intermittent_min_nonzero_observations",
+                "label": "Min Osservazioni Non-Zero",
+                "description": "Minimo numero osservazioni non-zero richieste per fitting affidabile",
+                "type": "int",
+                "min": 3,
+                "max": 50
+            },
+            {
+                "key": "intermittent_backtest_enabled",
+                "label": "✓ Abilita Backtest",
+                "description": "Abilita backtest rolling per selezione metodo intermittente",
+                "type": "bool"
+            },
+            {
+                "key": "intermittent_backtest_periods",
+                "label": "Periodi Backtest",
+                "description": "Numero periodi test nel rolling origin backtest",
+                "type": "int",
+                "min": 2,
+                "max": 12
+            },
+            {
+                "key": "intermittent_backtest_metric",
+                "label": "Metrica Backtest",
+                "description": "Metrica per selezione metodo: wmape (MAPE pesato) o bias (errore medio)",
+                "type": "choice",
+                "choices": ["wmape", "bias"]
+            },
+            {
+                "key": "intermittent_backtest_min_history",
+                "label": "Min Storico Backtest",
+                "description": "Giorni minimi storici richiesti per eseguire backtest (se <, usa default method)",
+                "type": "int",
+                "min": 14,
+                "max": 180
+            },
+            {
+                "key": "intermittent_default_method",
+                "label": "Metodo Default",
+                "description": "Metodo default per intermittenti quando backtest non disponibile (SBA raccomandato)",
+                "type": "choice",
+                "choices": ["croston", "sba", "tsb"]
+            },
+            {
+                "key": "intermittent_fallback_to_simple",
+                "label": "✓ Fallback a Simple",
+                "description": "Fallback a simple se dati insufficienti per intermittente (raccomandato)",
+                "type": "bool"
+            },
+            {
+                "key": "intermittent_obsolescence_window",
+                "label": "Finestra Obsolescenza",
+                "description": "Finestra giorni per rilevare obsolescenza (declining trend), favorisce TSB",
+                "type": "int",
+                "min": 7,
+                "max": 60
+            },
+            {
+                "key": "intermittent_sigma_estimation_mode",
+                "label": "Modalità Stima Sigma",
+                "description": "Modalità stima sigma_P: rolling (residui rolling), bootstrap, o fallback (proxy da z_t)",
+                "type": "choice",
+                "choices": ["rolling", "bootstrap", "fallback"]
+            },
+        ]
+        
+        self._create_param_rows(scrollable_frame, intermittent_params, "intermittent_forecast")
     
     def _build_expiry_alerts_settings_tab(self):
         """Build Expiry Alerts Thresholds sub-tab."""

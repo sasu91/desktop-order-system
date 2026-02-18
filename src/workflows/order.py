@@ -514,21 +514,34 @@ class OrderWorkflow:
             forecast_qty = int(daily_sales_avg * forecast_period)
             lead_time_demand = int(daily_sales_avg * effective_lead_time)
         
-        # === PROMO-ADJUSTED FORECAST (BASELINE × UPLIFT) ===
-        # Apply promotional uplift to baseline forecast if promo_adjustment enabled
+        # === UNIFIED MODIFIER BRIDGE ===
+        # Single canonical point for ALL pre-policy demand modifiers
+        # (promo uplift, event uplift, cannibalization, holiday) for BOTH
+        # legacy and CSL policy modes.
+        #
+        # Design rationale:
+        #   • Replaces two separate inline blocks that diverged on flag-gating;
+        #     the former inline block only fed CSL when promo_adjustment_enabled=True,
+        #     meaning event-only adjustments were silently excluded from CSL.
+        #   • Holiday modifiers are new (no inline equivalent to replace).
+        #   • apply_modifiers() is deterministic: same inputs → same outputs.
+        #
+        # Stop condition (architecture): modifiers applied at ONE point
+        # pre-policy for both modes; no silent flag-gated exclusions.
         baseline_forecast_qty = forecast_qty  # Store baseline for traceability
         promo_adjusted_forecast_qty = forecast_qty  # Default: same as baseline
         promo_adjustment_note = ""
         promo_uplift_factor_used = 1.0
-        
-        # Cannibalization (downlift) tracking
+        _modifiers_applied = False  # Track whether any modifier changed forecast_qty
+
+        # Cannibalization tracking
         cannibalization_applied_val = False
         cannibalization_driver_sku_val = ""
         cannibalization_downlift_factor_val = 1.0
         cannibalization_confidence_val = ""
         cannibalization_note_val = ""
-        
-        # Event uplift (delivery-date-based demand driver) tracking
+
+        # Event uplift tracking
         event_uplift_active_val = False
         event_uplift_factor_val = 1.0
         event_u_store_day_val = 1.0
@@ -540,205 +553,143 @@ class OrderWorkflow:
         event_fallback_level_val = ""
         event_beta_fallback_level_val = ""
         event_explain_short_val = ""
-        
-        # Check if promo adjustment is enabled in settings
+
+        # Read modifier enable flags (kept as variables for downstream CSL check)
         promo_adj_settings = settings.get("promo_adjustment", {})
         promo_adjustment_enabled = promo_adj_settings.get("enabled", {}).get("value", False)
-        
-        # Check if event uplift is enabled (independent from promo)
         event_uplift_settings = settings.get("event_uplift", {})
         event_uplift_enabled = event_uplift_settings.get("enabled", {}).get("value", False)
-        
-        if promo_adjustment_enabled:
-            # Build horizon dates for forecast period
-            horizon_dates = [date.today() + timedelta(days=i) for i in range(1, forecast_period + 1)]
-            
-            # Load required data for promo adjustment
-            all_sales_records = self.csv_layer.read_sales()
-            all_transactions = self.csv_layer.read_transactions() if transactions is None else transactions
-            promo_windows = self.csv_layer.read_promo_calendar()
-            all_skus = self.csv_layer.read_skus()
-            
-            # Call promo_adjusted_forecast
+        _holiday_mod_enabled = settings.get("holiday_modifier", {}).get("enabled", {}).get("value", False)
+
+        _any_modifier_enabled = promo_adjustment_enabled or event_uplift_enabled or _holiday_mod_enabled
+
+        if _any_modifier_enabled and forecast_qty > 0:
             try:
-                from ..forecast import promo_adjusted_forecast
-                
-                promo_result = promo_adjusted_forecast(
-                    sku_id=sku,
-                    horizon_dates=horizon_dates,
-                    sales_records=all_sales_records,
-                    transactions=all_transactions,
-                    promo_windows=promo_windows,
-                    all_skus=all_skus,
-                    csv_layer=self.csv_layer,
-                    store_id=None,  # Global promo only (user decision)
-                    settings=settings,
-                )
-                
-                # Extract adjusted forecast total (sum over horizon)
-                adjusted_total = sum(promo_result["adjusted_forecast"].values())
-                promo_adjusted_forecast_qty = int(adjusted_total)
-                
-                # Build adjustment note for traceability
-                any_promo_active = any(promo_result["promo_active"].values())
-                if any_promo_active and promo_result["uplift_report"]:
-                    uplift_factor = promo_result["uplift_report"].uplift_factor
-                    promo_uplift_factor_used = uplift_factor
-                    confidence = promo_result["uplift_report"].confidence
-                    promo_adjustment_note = f"Promo attiva: Uplift {uplift_factor:.2f}x ({confidence})"
-                    
-                    # Use adjusted forecast instead of baseline
-                    forecast_qty = promo_adjusted_forecast_qty
-                elif any_promo_active and not promo_result["uplift_report"]:
-                    # Promo active but uplift estimation failed → fallback to baseline
-                    promo_adjustment_note = "Promo attiva: Uplift non disponibile (baseline usata)"
-                else:
-                    promo_adjustment_note = "Nessuna promo attiva (baseline usata)"
-                
-                # === CANNIBALIZATION (DOWNLIFT) ===
-                # Track downlift se SKU non in promo ma driver gruppo in promo
-                cannibalization_applied_val = promo_result.get("cannibalization_applied", False)
-                cannibalization_driver_sku_val = ""
-                cannibalization_downlift_factor_val = 1.0
-                cannibalization_confidence_val = ""
-                cannibalization_note_val = ""
-                
-                if cannibalization_applied_val and promo_result.get("downlift_report"):
-                    downlift_rep = promo_result["downlift_report"]
-                    cannibalization_driver_sku_val = downlift_rep.driver_sku
-                    cannibalization_downlift_factor_val = downlift_rep.downlift_factor
-                    cannibalization_confidence_val = downlift_rep.confidence
-                    reduction_pct = (1.0 - downlift_rep.downlift_factor) * 100
-                    cannibalization_note_val = f"Riduzione cannibalizzazione: -{reduction_pct:.1f}% (driver: {downlift_rep.driver_sku}, confidence {downlift_rep.confidence})"
-                    
-                    # Use adjusted forecast (già ridotto da downlift in forecast.py)
-                    forecast_qty = promo_adjusted_forecast_qty
-                
-                # === EVENT UPLIFT (DELIVERY-DATE-BASED DEMAND DRIVER) ===
-                # Extract event metadata from promo_result for traceability
-                event_uplift_active_val = False
-                event_uplift_factor_val = 1.0
-                event_u_store_day_val = 1.0
-                event_beta_i_val = 1.0
-                event_m_i_val = 1.0
-                event_reason_val = ""
-                event_delivery_date_val = None
-                event_quantile_val = 0.0
-                event_fallback_level_val = ""
-                event_beta_fallback_level_val = ""
-                event_explain_short_val = ""
-                
-                # Check if event uplift was active on any date in horizon
-                event_active_map = promo_result.get("event_active", {})
-                any_event_active = any(event_active_map.values())
-                
-                if any_event_active and promo_result.get("event_explain_map"):
-                    # Extract explain from first active date (all dates share same explain)
-                    event_explain_map = promo_result["event_explain_map"]
-                    first_event_date = next((d for d in horizon_dates if event_active_map.get(d, False)), None)
-                    
-                    if first_event_date and first_event_date in event_explain_map:
-                        explain_obj = event_explain_map[first_event_date]
-                        
-                        # Populate event fields
-                        event_uplift_active_val = True
-                        event_m_i_val = explain_obj.m_i
-                        event_uplift_factor_val = event_m_i_val
-                        event_u_store_day_val = explain_obj.u_store_day
-                        event_beta_i_val = explain_obj.beta_i
-                        event_delivery_date_val = explain_obj.delivery_date
-                        event_quantile_val = explain_obj.u_quantile
-                        event_fallback_level_val = explain_obj.u_fallback_level
-                        event_beta_fallback_level_val = explain_obj.beta_fallback_level
-                        
-                        # Extract reason from matched rule
-                        if explain_obj.rule_matched:
-                            event_reason_val = explain_obj.rule_matched.reason if hasattr(explain_obj.rule_matched, 'reason') else ""
-                        
-                        # Build short explanation
-                        change_pct = (event_m_i_val - 1.0) * 100
-                        sign = "+" if change_pct >= 0 else ""
-                        event_explain_short_val = (
-                            f"Event {sign}{change_pct:.0f}% "
-                            f"({event_reason_val if event_reason_val else 'no reason'}, "
-                            f"P{int(event_quantile_val*100)}, "
-                            f"{event_fallback_level_val})"
-                        )
-            
-            except Exception as e:
-                logging.warning(f"Promo adjustment failed for SKU {sku}: {e}. Using baseline forecast.")
-                promo_adjustment_note = f"Errore promo adjustment: {str(e)[:50]}..."
-        
-        # === EVENT UPLIFT (INDEPENDENT FROM PROMO) ===
-        # Apply event-driven demand uplift if enabled (works with or without promo)
-        if event_uplift_enabled and sku_obj and target_receipt_date:
-            try:
-                # Load required data
-                all_sales_records = self.csv_layer.read_sales() if sales_records is None else sales_records
-                all_transactions = self.csv_layer.read_transactions() if transactions is None else transactions
-                all_skus = self.csv_layer.read_skus()
-                event_rules = self.csv_layer.read_event_uplift_rules()
-                
-                if event_rules:
-                    # Import event uplift module
+                import re as _re
+                from ..domain.modifier_builder import apply_modifiers as _apply_mods
+                from ..domain.contracts import DemandDistribution as _DD
+
+                # Load inputs (lazy; each branch only if the flag is enabled)
+                _sales_for_mods = self.csv_layer.read_sales() if sales_records is None else sales_records
+                _trans_for_mods = self.csv_layer.read_transactions() if transactions is None else transactions
+                _all_skus_mods = self.csv_layer.read_skus()
+                _promo_wins = self.csv_layer.read_promo_calendar() if promo_adjustment_enabled else []
+                _evt_rules = self.csv_layer.read_event_uplift_rules() if event_uplift_enabled else []
+                _holidays_mods: list = []
+                if _holiday_mod_enabled:
                     try:
-                        from ..domain.event_uplift import apply_event_uplift_to_forecast
-                    except ImportError:
-                        from domain.event_uplift import apply_event_uplift_to_forecast
-                    
-                    # Build horizon for forecast period
-                    horizon_dates = [date.today() + timedelta(days=i) for i in range(1, forecast_period + 1)]
-                    
-                    # Build baseline forecast dict (constant daily rate for simplicity)
-                    baseline_fc_dict = {d: daily_sales_avg for d in horizon_dates}
-                    
-                    # Apply event uplift using target_receipt_date as delivery_date
-                    event_adjusted_fc, event_explain = apply_event_uplift_to_forecast(
-                        sku_obj=sku_obj,
-                        delivery_date=target_receipt_date,
-                        horizon_dates=horizon_dates,
-                        baseline_forecast=baseline_fc_dict,
-                        event_rules=event_rules,
-                        all_skus=all_skus,
-                        sales_records=all_sales_records,
-                        settings=settings,
-                    )
-                    
-                    # If event active, update forecast_qty
-                    if event_explain.rule_matched is not None:
+                        _holidays_mods = self.csv_layer.read_holidays()
+                    except Exception:
+                        _holidays_mods = []
+
+                # Horizon: delivery_date is the anchor (or today + 1..period as fallback)
+                if target_receipt_date:
+                    _anchor = target_receipt_date
+                    _horizon = [
+                        _anchor - timedelta(days=forecast_period - 1 - i)
+                        for i in range(forecast_period)
+                    ]
+                else:
+                    _horizon = [
+                        date.today() + timedelta(days=i + 1)
+                        for i in range(forecast_period)
+                    ]
+
+                _base_dd = _DD(
+                    mu_P=float(forecast_qty),
+                    sigma_P=max(1.0, float(daily_sales_avg) * (forecast_period ** 0.5)),
+                    protection_period_days=forecast_period,
+                    forecast_method="legacy",
+                )
+
+                _adj_dd, _applied_mods = _apply_mods(
+                    base_demand=_base_dd,
+                    sku_id=sku,
+                    sku_obj=sku_obj,
+                    horizon_dates=_horizon,
+                    target_receipt_date=target_receipt_date,
+                    asof_date=date.today(),
+                    settings=settings,
+                    all_skus=_all_skus_mods,
+                    promo_windows=_promo_wins,
+                    event_rules=_evt_rules,
+                    sales_records=_sales_for_mods,
+                    transactions=_trans_for_mods,
+                    holidays=_holidays_mods,
+                )
+
+                # Apply adjusted forecast
+                _new_fc = int(round(_adj_dd.mu_P))
+                if _new_fc != forecast_qty:
+                    _modifiers_applied = True
+                    forecast_qty = _new_fc
+
+                # ── Extract legacy tracking vars from applied_modifiers ──
+                for _mod in _applied_mods:
+                    _mtype = _mod.modifier_type
+
+                    if _mtype == "promo":
+                        promo_uplift_factor_used = _mod.multiplier
+                        _conf = _mod.confidence or ""
+                        promo_adjusted_forecast_qty = int(round(_mod.mu_after)) if _mod.mu_after else forecast_qty
+                        if abs(_mod.multiplier - 1.0) > 0.01:
+                            promo_adjustment_note = (
+                                f"Promo attiva: Uplift {_mod.multiplier:.2f}x"
+                                + (f" ({_conf})" if _conf else "")
+                            )
+                        else:
+                            promo_adjustment_note = "Nessuna promo attiva (baseline usata)"
+
+                    elif _mtype == "cannibalization":
+                        cannibalization_applied_val = True
+                        cannibalization_driver_sku_val = _mod.source_sku or ""
+                        cannibalization_downlift_factor_val = _mod.multiplier
+                        cannibalization_confidence_val = _mod.confidence or ""
+                        _red = (1.0 - _mod.multiplier) * 100
+                        cannibalization_note_val = (
+                            f"Riduzione cannibalizzazione: -{_red:.1f}% "
+                            f"(driver: {cannibalization_driver_sku_val}, "
+                            f"confidence {cannibalization_confidence_val})"
+                        )
+
+                    elif _mtype == "event":
                         event_uplift_active_val = True
-                        event_m_i_val = event_explain.m_i
-                        event_uplift_factor_val = event_m_i_val
-                        event_u_store_day_val = event_explain.u_store_day
-                        event_beta_i_val = event_explain.beta_i
-                        event_delivery_date_val = event_explain.delivery_date
-                        event_quantile_val = event_explain.u_quantile
-                        event_fallback_level_val = event_explain.u_fallback_level
-                        event_beta_fallback_level_val = event_explain.beta_fallback_level
-                        
-                        # Extract reason from matched rule
-                        if event_explain.rule_matched:
-                            event_reason_val = event_explain.rule_matched.reason if hasattr(event_explain.rule_matched, 'reason') else ""
-                        
-                        # Build short explanation
-                        change_pct = (event_m_i_val - 1.0) * 100
-                        sign = "+" if change_pct >= 0 else ""
+                        event_m_i_val = _mod.multiplier
+                        event_uplift_factor_val = _mod.multiplier
+                        event_delivery_date_val = target_receipt_date
+                        # Parse display-only detail fields from note string
+                        # Note format: "U_store=X.XXX, beta=Y.YYY, m_i=Z.ZZZ, PNNN, level"
+                        _nm = _re.search(
+                            r"U_store=([\d.]+).*?beta=([\d.]+).*?P(\d+),\s*(\S+)",
+                            _mod.note or "",
+                        )
+                        if _nm:
+                            event_u_store_day_val = float(_nm.group(1))
+                            event_beta_i_val = float(_nm.group(2))
+                            event_quantile_val = int(_nm.group(3)) / 100.0
+                            event_fallback_level_val = _nm.group(4)
+                        _ename = _mod.name or ""
+                        event_reason_val = _ename.replace("event_uplift_", "") if "event_uplift_" in _ename else ""
+                        _chg = (event_m_i_val - 1.0) * 100
                         event_explain_short_val = (
-                            f"Event {sign}{change_pct:.0f}% "
-                            f"({event_reason_val if event_reason_val else 'no reason'}, "
-                            f"P{int(event_quantile_val*100)}, "
+                            f"Event {'+' if _chg >= 0 else ''}{_chg:.0f}% "
+                            f"({event_reason_val or 'no reason'}, "
+                            f"P{int(event_quantile_val * 100)}, "
                             f"{event_fallback_level_val})"
                         )
-                        
-                        # Apply uplift to forecast_qty
-                        event_adjusted_total = sum(event_adjusted_fc.values())
-                        event_adjusted_forecast_qty = int(event_adjusted_total)
-                        forecast_qty = event_adjusted_forecast_qty
-                        
-                        logging.info(f"Event uplift applied to {sku}: m_i={event_m_i_val:.3f}, forecast adjusted from {baseline_forecast_qty} to {event_adjusted_forecast_qty}")
-            
-            except Exception as e:
-                logging.warning(f"Event uplift failed for SKU {sku}: {e}. Using baseline forecast.")
+                        logging.info(
+                            "Event uplift applied to %s: m_i=%.3f, "
+                            "forecast adjusted from %d to %d",
+                            sku, event_m_i_val, baseline_forecast_qty, forecast_qty,
+                        )
+
+            except Exception as _bridge_exc:
+                logging.warning(
+                    "Unified modifier bridge failed for SKU %s: %s. "
+                    "Using baseline forecast.",
+                    sku, _bridge_exc,
+                )
+                forecast_qty = baseline_forecast_qty
         
         S = forecast_qty + safety_stock
         
@@ -878,11 +829,12 @@ class OrderWorkflow:
                 else:
                     history = []
                 
-                # Prepare forecast override from promo-adjusted forecast (includes event uplift)
-                # This enables event/promo-adjusted demand to flow into CSL policy
+                # Feed modifier-adjusted forecast into CSL policy.
+                # Previously gated on promo_adjustment_enabled only; now always
+                # set when any modifier (event / promo / holiday) changed the forecast.
                 forecast_demand_override = None
-                if promo_adjustment_enabled and promo_adjusted_forecast_qty > 0:
-                    forecast_demand_override = float(promo_adjusted_forecast_qty)
+                if _modifiers_applied or forecast_qty != baseline_forecast_qty:
+                    forecast_demand_override = float(forecast_qty)
                 
                 # Call compute_order with optional forecast override
                 csl_result = compute_order(
@@ -1951,6 +1903,7 @@ def propose_order_for_sku(
     all_skus: Optional[List] = None,
     censored_flags: Optional[List] = None,
     expected_waste_rate: float = 0.0,
+    holidays: Optional[List] = None,
 ) -> Tuple["OrderProposal", "OrderExplain"]:
     """
     Pure facade for a single-SKU order proposal. No I/O.
@@ -2078,6 +2031,7 @@ def propose_order_for_sku(
         event_rules=event_uplift_rules,
         sales_records=sales_records,
         transactions=transactions,
+        holidays=holidays,
     )
 
     # ------------------------------------------------------------------ #
@@ -2158,6 +2112,9 @@ def propose_order_for_sku(
     # ------------------------------------------------------------------ #
     # Step 5: Build OrderExplain                                           #
     # ------------------------------------------------------------------ #
+    reorder_point_method = csl_breakdown.get("reorder_point_method", "legacy") if policy_mode == "csl" else "legacy"
+    quantile_used = csl_breakdown.get("quantile_used") if policy_mode == "csl" else None
+    
     explain = OrderExplain(
         sku=sku_id,
         asof_date=asof_date,
@@ -2168,6 +2125,8 @@ def propose_order_for_sku(
         alpha_target=alpha_target,
         z_score=z_score,
         reorder_point=reorder_point,
+        reorder_point_method=reorder_point_method,
+        quantile_used=quantile_used,
         order_raw=order_raw,
         constraints_applied=constraints_applied,
         order_final=proposed_qty,

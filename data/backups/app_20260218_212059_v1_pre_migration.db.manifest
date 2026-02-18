@@ -1,0 +1,6 @@
+# Backup Manifest
+# Created: 2026-02-18T21:20:59.506316
+# Reason: v1_pre_migration
+# Source: data/app.db
+#
+app_20260218_212059_v1_pre_migration.db

@@ -1493,6 +1493,8 @@ class CSVLayer:
                 },
                 "forecast_method": {
                     "value": "simple",
+                    "choices": ["", "simple", "monte_carlo", "croston", "sba", "tsb", "intermittent_auto"],
+                    "description": "Metodo forecast: simple, monte_carlo, croston, sba, tsb, intermittent_auto (scelta automatica per intermittenti)",
                     "auto_apply_to_new_sku": False
                 },
                 "policy_mode": {
@@ -1532,6 +1534,67 @@ class CSVLayer:
                 "show_comparison": {
                     "value": False,
                     "description": "Mostra risultati MC come colonna informativa nella proposta ordini"
+                }
+            },
+            "intermittent_forecast": {
+                "enabled": {
+                    "value": True,
+                    "description": "Abilita rilevamento e forecast intermittente (Croston/SBA/TSB)"
+                },
+                "adi_threshold": {
+                    "value": 1.32,
+                    "description": "Soglia ADI (Average Demand Interval) per classificare domanda intermittente (>1.32 = intermittente)"
+                },
+                "cv2_threshold": {
+                    "value": 0.49,
+                    "description": "Soglia CV² (squared coefficient of variation) per classificare domanda variabile (>0.49 = variabile)"
+                },
+                "alpha_default": {
+                    "value": 0.1,
+                    "description": "Parametro smoothing alpha per Croston/SBA/TSB (0 < alpha <= 1, default 0.1)"
+                },
+                "lookback_days": {
+                    "value": 90,
+                    "description": "Giorni lookback per classificazione e fitting intermittente (min 56, raccomandato 90)"
+                },
+                "min_nonzero_observations": {
+                    "value": 5,
+                    "description": "Minimo numero osservazioni non-zero richieste per fitting affidabile"
+                },
+                "backtest_enabled": {
+                    "value": True,
+                    "description": "Abilita backtest rolling per selezione metodo intermittente"
+                },
+                "backtest_periods": {
+                    "value": 4,
+                    "description": "Numero periodi test nel rolling origin backtest"
+                },
+                "backtest_metric": {
+                    "value": "wmape",
+                    "choices": ["wmape", "bias"],
+                    "description": "Metrica per selezione metodo: wmape (weighted MAPE) o bias (mean error)"
+                },
+                "backtest_min_history": {
+                    "value": 28,
+                    "description": "Giorni minimi storici richiesti per eseguire backtest (se <, usa default method)"
+                },
+                "default_method": {
+                    "value": "sba",
+                    "choices": ["croston", "sba", "tsb"],
+                    "description": "Metodo default per intermittenti quando backtest non disponibile (SBA raccomandato)"
+                },
+                "fallback_to_simple": {
+                    "value": True,
+                    "description": "Fallback a simple se dati insufficienti per intermittente (True raccomandato)"
+                },
+                "obsolescence_window": {
+                    "value": 14,
+                    "description": "Finestra giorni per rilevare obsolescenza (declining trend), favorisce TSB"
+                },
+                "sigma_estimation_mode": {
+                    "value": "rolling",
+                    "choices": ["rolling", "bootstrap", "fallback"],
+                    "description": "Modalità stima sigma_P: rolling (residui rolling), bootstrap (simulazione), fallback (proxy da z_t)"
                 }
             },
             "dashboard": {
@@ -1644,6 +1707,19 @@ class CSVLayer:
                 "beta_normalization_mode": {
                     "value": "mean_one",
                     "description": "Modalità normalizzazione beta_i: 'mean_one', 'weighted_sum_one', 'none'"
+                }
+            },
+            "holiday_modifier": {
+                "enabled": {
+                    "value": False,
+                    "description": "Abilita moltiplicatore domanda per festività (disattivo di default)"
+                },
+                "default_multiplier": {
+                    "value": 1.0,
+                    "description": (
+                        "Moltiplicatore di default per festività che non hanno un campo "
+                        "'demand_multiplier' esplicito in holidays.json (1.0 = neutro)"
+                    )
                 }
             },
             "promo_prebuild": {
