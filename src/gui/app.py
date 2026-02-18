@@ -163,6 +163,7 @@ class DesktopOrderApp:
         export_menu.add_command(label="Log Ricevimenti", command=self._export_receiving_logs)
         export_menu.add_separator()
         export_menu.add_command(label="📊 Ordini + KPI + Breakdown", command=self._export_order_kpi_breakdown)
+        export_menu.add_command(label="🔍 Order Explain (Audit Trail)", command=self._export_order_explain)
         
         file_menu.add_separator()
         file_menu.add_command(label="Esci", command=self.root.quit)
@@ -6084,9 +6085,124 @@ class DesktopOrderApp:
         except Exception as e:
             import traceback
             messagebox.showerror("Errore Esportazione", f"Impossibile esportare Order+KPI+Breakdown:\n{str(e)}\n\n{traceback.format_exc()}")
-    
+
+    def _export_order_explain(self):
+        """
+        Export order_explain CSV: one row per SKU with the full forecast→policy
+        audit chain (mu_P, sigma_P, IP, modifiers, constraints, Q).
+
+        Uses explain_order() from the new facade layer so the output is
+        guaranteed to reflect the canonical pipeline, not ad-hoc fields.
+        """
+        try:
+            from datetime import datetime as _dt
+            timestamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+            suggested_filename = f"order_explain_{timestamp}.csv"
+
+            export_dir = self.csv_layer.data_dir / "export"
+            export_dir.mkdir(parents=True, exist_ok=True)
+
+            file_path = filedialog.asksaveasfilename(
+                title="Export Order Explain (Audit Trail)",
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialfile=suggested_filename,
+                initialdir=export_dir,
+            )
+            if not file_path:
+                return
+
+            all_skus = self.csv_layer.read_skus()
+            transactions = self.csv_layer.read_transactions()
+            sales_records = self.csv_layer.read_sales()
+            settings = self.csv_layer.read_settings()
+            promo_calendar = self.csv_layer.read_promo_calendar()
+            event_rules = self.csv_layer.read_event_uplift_rules()
+
+            from src.workflows.order import explain_order, calculate_daily_sales_average
+            from src.domain.ledger import StockCalculator
+            from src.analytics.pipeline import build_open_pipeline
+            from src.domain.calendar import next_receipt_date, calculate_protection_period_days, Lane
+            from src.domain.contracts import OrderExplain
+
+            # CSV header from OrderExplain column spec
+            columns = [
+                "sku", "asof_date", "forecast_method", "policy_mode",
+                "mu_P", "sigma_P", "sigma_adj_multiplier",
+                "protection_period_days", "n_samples", "n_censored",
+                "quantiles_json",
+                "on_hand", "on_order", "unfulfilled", "inventory_position",
+                "alpha_target", "z_score", "reorder_point",
+                "modifiers_json", "constraints_applied",
+                "order_raw", "order_final",
+                "safety_stock", "equivalent_csl_legacy",
+                "error",
+            ]
+
+            today = date.today()
+            row_count = 0
+
+            with open(file_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
+                writer.writeheader()
+
+                for sku_obj in all_skus:
+                    row: dict = {"sku": sku_obj.sku, "asof_date": today.isoformat(), "error": ""}
+                    try:
+                        stock = StockCalculator.calculate_asof(
+                            sku=sku_obj.sku,
+                            asof_date=today + timedelta(days=1),
+                            transactions=transactions,
+                            sales_records=None,
+                        )
+                        pipeline = build_open_pipeline(self.csv_layer, sku_obj.sku, today)
+                        history = [
+                            {"date": s.date, "qty_sold": s.qty_sold}
+                            for s in sales_records if s.sku == sku_obj.sku
+                        ]
+
+                        # Use STANDARD lane for export (representative)
+                        receipt_dt = next_receipt_date(today, Lane.STANDARD)
+                        pp_days = calculate_protection_period_days(today, Lane.STANDARD)
+
+                        explain_dict = explain_order(
+                            sku_id=sku_obj.sku,
+                            asof_date=today,
+                            history=history,
+                            stock=stock,
+                            pipeline=pipeline,
+                            target_receipt_date=receipt_dt,
+                            protection_period_days=pp_days,
+                            settings=settings,
+                            sku_obj=sku_obj,
+                            promo_calendar=promo_calendar,
+                            event_uplift_rules=event_rules,
+                            sales_records=sales_records,
+                            transactions=transactions,
+                            all_skus=all_skus,
+                        )
+                        row.update(explain_dict)
+                    except Exception as exc:
+                        row["error"] = str(exc)[:200]
+
+                    writer.writerow(row)
+                    row_count += 1
+
+            messagebox.showinfo(
+                "Successo",
+                f"Order Explain export completato:\n{file_path}\n\n{row_count} SKU esportati."
+            )
+            self.csv_layer.log_audit(
+                operation="EXPORT_LOG",
+                details=f"order_explain export: {row_count} SKUs, file={Path(file_path).name}",
+                sku=None,
+            )
+        except Exception as e:
+            import traceback
+            messagebox.showerror("Errore Export Explain", f"Impossibile esportare:\n{str(e)}\n\n{traceback.format_exc()}")
+
     # === IMPORT FUNCTIONALITY ===
-    
+
     def _import_sku_from_csv(self):
         """
         Import SKUs from external CSV file with preview and validation wizard.

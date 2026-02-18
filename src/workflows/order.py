@@ -1935,6 +1935,414 @@ def calculate_daily_sales_average(
         return (avg_sales, oos_days_count)
 
 
+def propose_order_for_sku(
+    sku_obj: "SKU",
+    history: List[Dict],
+    stock: "Stock",
+    pipeline: List[Dict],
+    asof_date: date,
+    target_receipt_date: date,
+    protection_period_days: int,
+    settings: Dict,
+    promo_calendar: Optional[List] = None,
+    event_uplift_rules: Optional[List] = None,
+    sales_records: Optional[List] = None,
+    transactions: Optional[List] = None,
+    all_skus: Optional[List] = None,
+    censored_flags: Optional[List] = None,
+    expected_waste_rate: float = 0.0,
+) -> Tuple["OrderProposal", "OrderExplain"]:
+    """
+    Pure facade for a single-SKU order proposal. No I/O.
+
+    This is the SINGLE canonical entry-point for the forecast→policy pipeline:
+
+        build_demand_distribution()
+            → apply_modifiers()
+                → compute_order_v2() (CSL) | legacy_formula (legacy)
+                    → apply_order_constraints()
+                        → (OrderProposal, OrderExplain)
+
+    Parameters
+    ----------
+    sku_obj : SKU
+        Full SKU domain object.
+    history : list[{"date": date, "qty_sold": float}]
+        Raw sales history, oldest-first.
+    stock : Stock
+        Current inventory state (ledger-derived asof today).
+    pipeline : list[{"receipt_date": date, "qty": int}]
+        Open pipeline orders (from build_open_pipeline).
+    asof_date : date
+        Date of computation – MUST NOT be date.today() inside domain logic.
+    target_receipt_date : date
+        Expected delivery date for the order being proposed.
+    protection_period_days : int
+        Forecast horizon P (days from order to receipt + review).
+    settings : dict
+        Global settings (read_settings() output).
+    promo_calendar, event_uplift_rules, sales_records, transactions, all_skus :
+        Pre-loaded domain data.  Pass None to skip that modifier class.
+    censored_flags : list[bool] or None
+        Censoring mask (same length as history).
+    expected_waste_rate : float
+        Shelf-life waste adjustment passed to Monte Carlo (0–1).
+
+    Returns
+    -------
+    (OrderProposal, OrderExplain)
+    """
+    from ..domain.contracts import DemandDistribution, InventoryPosition, OrderExplain
+    from ..domain.demand_builder import build_demand_distribution
+    from ..domain.modifier_builder import apply_modifiers
+    from ..replenishment_policy import compute_order_v2, OrderConstraints
+
+    sku_id = sku_obj.sku
+    policy_mode = settings.get("reorder_engine", {}).get("policy_mode", {}).get("value", "legacy")
+    forecast_method = (
+        sku_obj.forecast_method
+        if sku_obj.forecast_method
+        else settings.get("reorder_engine", {}).get("forecast_method", {}).get("value", "simple")
+    )
+
+    # ------------------------------------------------------------------ #
+    # SKU parameters                                                       #
+    # ------------------------------------------------------------------ #
+    pack_size = sku_obj.pack_size
+    moq = sku_obj.moq
+    max_stock = sku_obj.max_stock
+    safety_stock_base = sku_obj.safety_stock
+    lead_time = sku_obj.lead_time_days
+    review_period = sku_obj.review_period
+
+    # Demand variability multiplier for legacy safety stock
+    from ..domain.models import DemandVariability
+    demand_variability = sku_obj.demand_variability
+    safety_stock = safety_stock_base
+    if demand_variability == DemandVariability.HIGH:
+        safety_stock = int(safety_stock_base * 1.5)
+    elif demand_variability == DemandVariability.STABLE:
+        safety_stock = int(safety_stock_base * 0.8)
+
+    # ------------------------------------------------------------------ #
+    # Step 1: Build DemandDistribution                                     #
+    # ------------------------------------------------------------------ #
+    mc_section = settings.get("monte_carlo", {})
+    mc_params = {
+        "distribution": mc_section.get("distribution", {}).get("value", "empirical"),
+        "n_simulations": mc_section.get("n_simulations", {}).get("value", 1000),
+        "random_seed": mc_section.get("random_seed", {}).get("value", 42),
+        "output_stat": mc_section.get("output_stat", {}).get("value", "mean"),
+        "output_percentile": mc_section.get("output_percentile", {}).get("value", 80),
+    }
+    # Override with SKU-specific MC params where set
+    if sku_obj.mc_distribution:
+        mc_params["distribution"] = sku_obj.mc_distribution
+    if sku_obj.mc_n_simulations > 0:
+        mc_params["n_simulations"] = sku_obj.mc_n_simulations
+    if sku_obj.mc_random_seed > 0:
+        mc_params["random_seed"] = sku_obj.mc_random_seed
+    if sku_obj.mc_output_stat:
+        mc_params["output_stat"] = sku_obj.mc_output_stat
+    if sku_obj.mc_output_percentile > 0:
+        mc_params["output_percentile"] = sku_obj.mc_output_percentile
+
+    window_weeks = settings.get("reorder_engine", {}).get("sigma_window_weeks", {}).get("value", 8)
+
+    base_demand = build_demand_distribution(
+        method=forecast_method,
+        history=history,
+        protection_period_days=protection_period_days,
+        asof_date=asof_date,
+        censored_flags=censored_flags,
+        window_weeks=window_weeks,
+        mc_params=mc_params,
+        expected_waste_rate=expected_waste_rate,
+    )
+
+    # ------------------------------------------------------------------ #
+    # Step 2: Apply modifiers                                              #
+    # ------------------------------------------------------------------ #
+    horizon_dates = [asof_date + timedelta(days=i + 1) for i in range(protection_period_days)]
+
+    adjusted_demand, applied_modifiers = apply_modifiers(
+        base_demand=base_demand,
+        sku_id=sku_id,
+        sku_obj=sku_obj,
+        horizon_dates=horizon_dates,
+        target_receipt_date=target_receipt_date,
+        asof_date=asof_date,
+        settings=settings,
+        all_skus=all_skus,
+        promo_windows=promo_calendar,
+        event_rules=event_uplift_rules,
+        sales_records=sales_records,
+        transactions=transactions,
+    )
+
+    # ------------------------------------------------------------------ #
+    # Step 3: Compute policy                                               #
+    # ------------------------------------------------------------------ #
+    # Build InventoryPosition
+    on_hand_eff = stock.on_hand   # caller may pass shelf-life-adjusted value
+    on_order_eff = float(stock.on_order)
+    unfulfilled = float(getattr(stock, "unfulfilled_qty", 0.0))
+
+    pos = InventoryPosition(
+        on_hand=on_hand_eff,
+        on_order=on_order_eff,
+        unfulfilled=unfulfilled,
+        pipeline=pipeline,
+    )
+
+    constraints_applied: List[str] = []
+    order_raw: float = 0.0
+    reorder_point: float = 0.0
+    alpha_target: Optional[float] = None
+    z_score: Optional[float] = None
+    csl_result: Dict = {}
+    proposed_qty_raw: int = 0
+    csl_breakdown: Dict = {}
+
+    if policy_mode == "csl":
+        from ..analytics.target_resolver import TargetServiceLevelResolver
+        from ..domain.calendar import Lane, next_receipt_date as _nrd
+
+        resolver = TargetServiceLevelResolver(settings)
+        alpha_target = resolver.get_target_csl(sku_obj)
+
+        lane = _deduce_lane_for_facade(target_receipt_date, protection_period_days, asof_date)
+
+        csl_result = compute_order_v2(
+            demand=adjusted_demand,
+            position=pos,
+            alpha=alpha_target,
+            constraints=OrderConstraints(pack_size=pack_size, moq=moq, max_stock=max_stock),
+            order_date=asof_date,
+            lane=lane,
+        )
+
+        proposed_qty_raw = int(csl_result.get("order_final", 0))
+        reorder_point = csl_result.get("reorder_point", 0.0)
+        order_raw = csl_result.get("order_raw", 0.0)
+        z_score = csl_result.get("z_score")
+        constraints_applied = csl_result.get("constraints_applied", [])
+        csl_breakdown = csl_result
+
+    else:
+        # Legacy formula: S = forecast_qty + safety_stock;  Q = max(0, S - IP)
+        forecast_qty = adjusted_demand.mu_P  # mu_P already includes modifiers
+        S = forecast_qty + safety_stock
+        reorder_point = S
+        order_raw = max(0.0, S - pos.inventory_position)
+        proposed_qty_raw = int(order_raw)
+        csl_breakdown = {"policy_mode": "legacy"}
+
+    # ------------------------------------------------------------------ #
+    # Step 4: Apply constraints                                            #
+    # ------------------------------------------------------------------ #
+    # Use centralized apply_order_constraints for consistency with generate_proposal()
+    constraint_result = apply_order_constraints(
+        proposed_qty_raw=proposed_qty_raw,
+        pack_size=pack_size,
+        moq=moq,
+        max_stock=max_stock,
+        inventory_position=int(pos.inventory_position),
+        demand_variability=demand_variability,
+        settings=settings,
+        sku_obj=sku_obj,
+    )
+    proposed_qty = constraint_result["final_qty"]
+    constraints_applied = constraints_applied + constraint_result["constraints_applied"]
+
+    # ------------------------------------------------------------------ #
+    # Step 5: Build OrderExplain                                           #
+    # ------------------------------------------------------------------ #
+    explain = OrderExplain(
+        sku=sku_id,
+        asof_date=asof_date,
+        demand=adjusted_demand,
+        position=pos,
+        modifiers=list(applied_modifiers),
+        policy_mode=policy_mode,
+        alpha_target=alpha_target,
+        z_score=z_score,
+        reorder_point=reorder_point,
+        order_raw=order_raw,
+        constraints_applied=constraints_applied,
+        order_final=proposed_qty,
+        safety_stock=safety_stock if policy_mode != "csl" else 0,
+        equivalent_csl_legacy=_equiv_csl_legacy(safety_stock, adjusted_demand.mu_P, protection_period_days)
+        if policy_mode != "csl" else 0.0,
+    )
+
+    # ------------------------------------------------------------------ #
+    # Step 6: Build lightweight OrderProposal for backward compatibility   #
+    # ------------------------------------------------------------------ #
+    daily_sales_avg = adjusted_demand.mu_P / max(protection_period_days, 1)
+    receipt_date = target_receipt_date
+
+    # Extract modifier fields for OrderProposal
+    promo_mod = next((m for m in applied_modifiers if m.modifier_type == "promo" and m.scope != "qty_correction"), None)
+    event_mod = next((m for m in applied_modifiers if m.modifier_type == "event"), None)
+    cannib_mod = next((m for m in applied_modifiers if m.modifier_type == "cannibalization"), None)
+
+    proposal = OrderProposal(
+        sku=sku_id,
+        description=sku_obj.description,
+        current_on_hand=stock.on_hand,
+        current_on_order=stock.on_order,
+        daily_sales_avg=daily_sales_avg,
+        proposed_qty=proposed_qty,
+        receipt_date=receipt_date,
+        notes=f"propose_order_for_sku: mu_P={adjusted_demand.mu_P:.1f}, sigma_P={adjusted_demand.sigma_P:.1f}, IP={pos.inventory_position:.1f}",
+        # Forecast details
+        forecast_period_days=protection_period_days,
+        forecast_qty=int(adjusted_demand.mu_P),
+        safety_stock=safety_stock,
+        target_S=int(reorder_point),
+        inventory_position=pos.inventory_position,
+        unfulfilled_qty=int(unfulfilled),
+        proposed_qty_before_rounding=proposed_qty_raw,
+        pack_size=pack_size,
+        moq=moq,
+        max_stock=max_stock,
+        forecast_method=forecast_method,
+        policy_mode=policy_mode,
+        baseline_forecast_qty=int(base_demand.mu_P),
+        promo_adjusted_forecast_qty=int(adjusted_demand.mu_P),
+        promo_adjustment_note=promo_mod.note if promo_mod else "",
+        promo_uplift_factor_used=promo_mod.multiplier if promo_mod else 1.0,
+        event_uplift_active=event_mod is not None,
+        event_uplift_factor=event_mod.multiplier if event_mod else 1.0,
+        event_m_i=event_mod.multiplier if event_mod else 1.0,
+        cannibalization_applied=cannib_mod is not None,
+        cannibalization_driver_sku=cannib_mod.source_sku or "" if cannib_mod else "",
+        cannibalization_downlift_factor=cannib_mod.multiplier if cannib_mod else 1.0,
+        cannibalization_confidence=cannib_mod.confidence if cannib_mod else "",
+        # CSL breakdown
+        target_csl=alpha_target or 0.0,
+        sigma_horizon=adjusted_demand.sigma_P,
+        reorder_point=reorder_point,
+        csl_policy_mode=policy_mode,
+        csl_alpha_target=alpha_target or 0.0,
+        csl_alpha_eff=csl_result.get("alpha_eff", alpha_target or 0.0),
+        csl_reorder_point=reorder_point,
+        csl_forecast_demand=adjusted_demand.mu_P,
+        csl_sigma_horizon=adjusted_demand.sigma_P,
+        csl_z_score=z_score or 0.0,
+        csl_lane=csl_result.get("lane", ""),
+        csl_n_censored=adjusted_demand.n_censored,
+        constraints_applied_pack=constraint_result["constraints_pack"],
+        constraints_applied_moq=constraint_result["constraints_moq"],
+        constraints_applied_max=constraint_result["constraints_max"],
+        constraint_details="; ".join(constraints_applied) if constraints_applied else "",
+        capped_by_max_stock=constraint_result["capped_by_max_stock"],
+    )
+
+    return proposal, explain
+
+
+def explain_order(
+    sku_id: str,
+    asof_date: date,
+    history: List[Dict],
+    stock: "Stock",
+    pipeline: List[Dict],
+    target_receipt_date: date,
+    protection_period_days: int,
+    settings: Dict,
+    sku_obj: Optional["SKU"] = None,
+    promo_calendar: Optional[List] = None,
+    event_uplift_rules: Optional[List] = None,
+    sales_records: Optional[List] = None,
+    transactions: Optional[List] = None,
+    all_skus: Optional[List] = None,
+    censored_flags: Optional[List] = None,
+) -> Dict:
+    """
+    Return a JSON-serialisable dict with the complete order decision chain.
+
+    This is a thin wrapper around ``propose_order_for_sku()`` that
+    immediately serialises the ``OrderExplain`` to a flat dict.
+
+    The dict is suitable for:
+    - Logging / debugging
+    - CSV export (order_explain row)
+    - GUI display
+    - Regression / golden tests
+
+    See ``OrderExplain.to_dict()`` for the full column list.
+    """
+    if sku_obj is None:
+        raise ValueError("sku_obj is required for explain_order()")
+
+    _, explain = propose_order_for_sku(
+        sku_obj=sku_obj,
+        history=history,
+        stock=stock,
+        pipeline=pipeline,
+        asof_date=asof_date,
+        target_receipt_date=target_receipt_date,
+        protection_period_days=protection_period_days,
+        settings=settings,
+        promo_calendar=promo_calendar,
+        event_uplift_rules=event_uplift_rules,
+        sales_records=sales_records,
+        transactions=transactions,
+        all_skus=all_skus,
+        censored_flags=censored_flags,
+    )
+    return explain.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Private helpers for facade
+# ---------------------------------------------------------------------------
+
+def _deduce_lane_for_facade(
+    target_receipt_date: Optional[date],
+    protection_period_days: Optional[int],
+    order_date: date,
+) -> "Lane":
+    """Re-use existing lane deduction logic (standalone, no self)."""
+    from ..domain.calendar import Lane, next_receipt_date, calculate_protection_period_days
+
+    if not target_receipt_date or not protection_period_days:
+        return Lane.STANDARD
+
+    for lane_candidate in [Lane.SATURDAY, Lane.MONDAY, Lane.STANDARD]:
+        try:
+            exp_rd = next_receipt_date(order_date, lane_candidate)
+            exp_pp = calculate_protection_period_days(order_date, lane_candidate)
+            if exp_rd == target_receipt_date and exp_pp == protection_period_days:
+                return lane_candidate
+        except ValueError:
+            continue
+    return Lane.STANDARD
+
+
+def _equiv_csl_legacy(safety_stock: int, forecast_qty: float, period: int) -> float:
+    """Approximate equivalent CSL for legacy mode (informational, non-binding)."""
+    if safety_stock <= 0 or forecast_qty <= 0 or period <= 0:
+        return 0.0
+    approx_variability = 0.2
+    daily_demand = forecast_qty / period
+    approx_sigma_daily = daily_demand * approx_variability
+    approx_sigma_horizon = approx_sigma_daily * (period ** 0.5)
+    if approx_sigma_horizon <= 0:
+        return 0.0
+    approx_z = safety_stock / approx_sigma_horizon
+    if approx_z < 0:
+        return 0.5
+    elif approx_z < 1:
+        return 0.5 + 0.341 * approx_z
+    elif approx_z < 2:
+        return 0.84 + 0.14 * (approx_z - 1)
+    else:
+        return min(0.999, 0.98 + 0.019 * (approx_z - 2))
+
+
 def calculate_prebuild_target(
     sku: str,
     promo_start_date: date,

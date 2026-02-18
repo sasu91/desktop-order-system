@@ -5,13 +5,21 @@ Handles:
 - Single order generation for standard days (Monday-Thursday)
 - Dual order generation for Friday (Saturday + Monday lanes)
 - Pipeline update between Friday orders to avoid double-counting
+
+New in Feb 2026: generate_order_for_sku() and generate_orders_for_date() are
+thin wrappers that delegate to compute_order() (existing) or compute_order_v2()
+(new typed-contract API).  They retain their original signatures for backward
+compatibility.
 """
 from datetime import date
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 
 from ..domain.calendar import Lane, next_receipt_date
-from ..replenishment_policy import compute_order, OrderConstraints
+from ..replenishment_policy import compute_order, compute_order_v2, OrderConstraints
+
+# Re-export contract types so callers can import from this module
+from ..domain.contracts import DemandDistribution, InventoryPosition, AppliedModifier, OrderExplain  # noqa: F401
 
 
 @dataclass
@@ -205,6 +213,62 @@ def generate_order_for_sku(
         sigma_horizon=result["sigma_horizon"],
         alpha=alpha,
         breakdown=result
+    )
+
+
+def generate_order_for_sku_v2(
+    demand: "DemandDistribution",
+    position: "InventoryPosition",
+    sku: str,
+    order_date: date,
+    lane: Lane,
+    constraints: OrderConstraints,
+    alpha: float = 0.95,
+) -> "OrderSuggestion":
+    """
+    Typed-contract wrapper: generates an OrderSuggestion using the
+    pre-built DemandDistribution and InventoryPosition.
+
+    Unlike ``generate_order_for_sku()``, this function does NOT call
+    ``fit_forecast_model`` or ``estimate_demand_uncertainty`` internally –
+    it delegates entirely to ``compute_order_v2()``.
+
+    Parameters
+    ----------
+    demand : DemandDistribution
+        Output of demand_builder.build_demand_distribution() after modifiers.
+    position : InventoryPosition
+        Current inventory state.
+    sku : str
+    order_date : date
+    lane : Lane
+    constraints : OrderConstraints
+    alpha : float
+
+    Returns
+    -------
+    OrderSuggestion
+    """
+    result = compute_order_v2(
+        demand=demand,
+        position=position,
+        alpha=alpha,
+        constraints=constraints,
+        order_date=order_date,
+        lane=lane,
+    )
+    return OrderSuggestion(
+        sku=sku,
+        order_date=order_date,
+        lane=lane,
+        receipt_date=result["receipt_date"],
+        order_qty=result["order_final"],
+        reorder_point=result["reorder_point"],
+        inventory_position=result["inventory_position"],
+        forecast_demand=result["forecast_demand"],
+        sigma_horizon=result["sigma_horizon"],
+        alpha=alpha,
+        breakdown=result,
     )
 
 

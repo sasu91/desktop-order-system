@@ -1,6 +1,0 @@
-# Backup Manifest
-# Created: 2026-02-18T11:25:27.585646
-# Reason: startup
-# Source: /tmp/pytest-of-codespace/pytest-1/test_automatic_backup_on_start0/test.db
-#
-test_20260218_112527_startup.db

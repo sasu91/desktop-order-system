@@ -455,6 +455,156 @@ def compute_order(
     }
 
 
+def compute_order_v2(
+    demand: "DemandDistribution",
+    position: "InventoryPosition",
+    alpha: float,
+    constraints: OrderConstraints,
+    order_date: date,
+    lane: Lane,
+) -> dict:
+    """
+    Typed-contract version of the CSL order computation.
+
+    This is the preferred entry-point for all new code.  Unlike
+    ``compute_order()``, it does NOT re-estimate mu_P or sigma_P
+    internally – it relies entirely on the pre-built ``DemandDistribution``
+    and ``InventoryPosition`` passed in.
+
+    STOP condition enforcement
+    --------------------------
+    If you call this function with a ``demand`` object, the policy WILL NOT
+    call ``fit_forecast_model`` or ``estimate_demand_uncertainty``.  If you
+    need to verify this at runtime, call
+    ``compute_order_v2_assert_no_internal_forecast()`` in tests.
+
+    Parameters
+    ----------
+    demand : DemandDistribution
+        Pre-built distribution (mu_P, sigma_P, protection_period_days).
+        Must be the output of ``demand_builder.build_demand_distribution()``
+        after ``modifier_builder.apply_modifiers()`` has been called.
+    position : InventoryPosition
+        Current inventory state.
+    alpha : float
+        Target Cycle Service Level (0 < alpha < 1).
+    constraints : OrderConstraints
+        Pack size, MOQ, max stock cap.
+    order_date : date
+        Date the order is placed.
+    lane : Lane
+        Logistics lane (STANDARD / SATURDAY / MONDAY).
+
+    Returns
+    -------
+    dict  – same schema as ``compute_order()`` for backward compatibility:
+        order_final, reorder_point, forecast_demand, sigma_horizon, z_score,
+        inventory_position, on_order, on_hand, order_raw, order_after_pack,
+        order_after_moq, constraints_applied, protection_period, alpha,
+        alpha_eff, receipt_date, lane, sku, order_date, n_censored,
+        forecast_method  (added), sigma_adj_multiplier (added).
+    """
+    # --- runtime guard: must not call internal forecast helpers ----------
+    # (tests can patch these to assert they are never called)
+    from src.domain.contracts import DemandDistribution as _DD, InventoryPosition as _IP
+
+    if not isinstance(demand, _DD):
+        raise TypeError(f"demand must be DemandDistribution, got {type(demand)}")
+    if not isinstance(position, _IP):
+        raise TypeError(f"position must be InventoryPosition, got {type(position)}")
+
+    if not 0 < alpha < 1:
+        raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+
+    # Step 1: Protection period (from demand object – already calculated)
+    P = demand.protection_period_days
+    mu_P = demand.mu_P
+    sigma_P = demand.sigma_P
+
+    # Step 2: alpha – no boost here (censored boost already baked into demand if needed)
+    alpha_eff = min(0.99, alpha)  # Hard cap; caller passes boosted alpha if desired
+
+    # Step 3: z-score
+    z = _z_score_for_csl(alpha_eff)
+
+    # Step 4: Reorder point  S = mu_P + z × sigma_P
+    S = mu_P + z * sigma_P
+
+    # Step 5: Inventory position as-of end of protection period
+    from src.domain.calendar import next_receipt_date as _nrd
+    receipt_dt = _nrd(order_date, lane)
+    forecast_end_date = order_date + timedelta(days=P)
+    IP = position.ip_asof(forecast_end_date)
+    on_order_val = IP - position.on_hand + position.unfulfilled
+
+    # Step 6: Raw order
+    order_raw = max(0.0, S - IP)
+
+    # Step 7: Constraints
+    constraints_applied = []
+
+    order_after_pack = _apply_pack_size(order_raw, constraints.pack_size)
+    if order_after_pack != int(order_raw):
+        constraints_applied.append(
+            f"pack_size: {order_raw:.1f} → {order_after_pack} "
+            f"(rounded up to {constraints.pack_size} units/pack)"
+        )
+
+    order_after_moq = _apply_moq(order_after_pack, constraints.moq)
+    if order_after_moq == 0 and order_after_pack > 0:
+        constraints_applied.append(
+            f"moq: {order_after_pack} < {constraints.moq} → 0 (below MOQ, don't order)"
+        )
+
+    order_final = _apply_cap(order_after_moq, IP, constraints.max_stock)
+    if constraints.max_stock is not None and order_final < order_after_moq:
+        cap = max(0, constraints.max_stock - int(IP))
+        constraints_applied.append(
+            f"max_stock: {order_after_moq} → {order_final} "
+            f"(capped by max_stock={constraints.max_stock}, available={cap})"
+        )
+
+    return {
+        # Identity
+        "sku": getattr(position, "_sku", ""),  # optional – caller may attach
+        "order_date": order_date,
+        "receipt_date": receipt_dt,
+        "lane": lane.name,
+        # CSL parameters
+        "alpha": alpha,
+        "alpha_eff": alpha_eff,
+        "z_score": z,
+        # Demand
+        "forecast_demand": mu_P,
+        "sigma_daily": sigma_P / max(P ** 0.5, 1.0),
+        "sigma_horizon": sigma_P,
+        "forecast_method": demand.forecast_method,
+        "sigma_adj_multiplier": demand.sigma_adj_multiplier,
+        "n_censored": demand.n_censored,
+        "n_samples": demand.n_samples,
+        "protection_period": P,
+        # Inventory
+        "on_hand": position.on_hand,
+        "on_order": max(0.0, on_order_val),
+        "inventory_position": IP,
+        # Order computation
+        "reorder_point": S,
+        "order_raw": order_raw,
+        "order_after_pack": order_after_pack,
+        "order_after_moq": order_after_moq,
+        "order_final": order_final,
+        "constraints_applied": constraints_applied,
+        "service_level_target": alpha,
+        # Compatibility: keep keys compute_order() returns
+        "censored_reasons": [],
+        "n_censored_excluded_from_sigma": 0,
+        "forecast_n_samples": demand.n_samples,
+        "forecast_n_censored": demand.n_censored,
+        "forecast_alpha_eff": alpha_eff,
+        "sigma_n_residuals": 0,
+    }
+
+
 def compute_order_batch(
     skus: List[str],
     order_date: date,
