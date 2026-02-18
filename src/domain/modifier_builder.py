@@ -338,6 +338,9 @@ class _ModifierWithMeta:
 
 def _eval_event_modifier(ctx: ModifierContext) -> Optional["_ModifierWithMeta"]:
     """Evaluate event uplift; return a _ModifierWithMeta or None."""
+    if ctx.delivery_date is None:
+        return None
+
     try:
         try:
             from src.domain.event_uplift import apply_event_uplift_to_forecast
@@ -413,18 +416,18 @@ def _eval_promo_modifiers(ctx: ModifierContext) -> List["_ModifierWithMeta"]:
         logger.warning("promo_uplift / promo_calendar unavailable; skipping.")
         return []
 
-    promo_days = [d for d in ctx.horizon_dates if is_promo(ctx.sku_id, d, ctx.promo_windows)]
+    promo_days = [d for d in ctx.horizon_dates if is_promo(check_date=d, sku=ctx.sku_id, promo_windows=ctx.promo_windows)]
     if not promo_days:
         return []
 
     try:
         uplift_report = estimate_uplift(
             sku_id=ctx.sku_id,
+            all_skus=ctx.all_skus,
             promo_windows=ctx.promo_windows,
             sales_records=ctx.sales_records,
             transactions=ctx.transactions,
-            all_skus=ctx.all_skus,
-            asof_date=ctx.order_date,
+            settings=ctx.settings,
         )
     except Exception as exc:
         logger.warning("Promo uplift estimation failed for %s: %s", ctx.sku_id, exc)
@@ -484,18 +487,29 @@ def _eval_cannibalization_modifier(ctx: ModifierContext) -> Optional["_ModifierW
 
     non_promo_days = [
         d for d in ctx.horizon_dates
-        if not is_promo(ctx.sku_id, d, ctx.promo_windows)
+        if not is_promo(check_date=d, sku=ctx.sku_id, promo_windows=ctx.promo_windows)
     ]
     if not non_promo_days:
         return None
 
+    cannib_cfg = ctx.settings.get("cannibalization", {})
+    substitute_groups = cannib_cfg.get("substitute_groups", {}).get("value", {})
+    if not substitute_groups:
+        return None  # no groups configured → cannot estimate
+
     try:
         downlift_report = estimate_cannibalization_downlift(
-            sku_id=ctx.sku_id,
+            target_sku=ctx.sku_id,
+            substitute_groups=substitute_groups,
             promo_windows=ctx.promo_windows,
             sales_records=ctx.sales_records,
             transactions=ctx.transactions,
             all_skus=ctx.all_skus,
+            downlift_min=float(cannib_cfg.get("downlift_min", {}).get("value", 0.6)),
+            downlift_max=float(cannib_cfg.get("downlift_max", {}).get("value", 1.0)),
+            min_events=int(cannib_cfg.get("min_events_target_sku", {}).get("value", 2)),
+            min_valid_days=int(cannib_cfg.get("min_valid_days", {}).get("value", 7)),
+            epsilon=float(cannib_cfg.get("denominator_epsilon", {}).get("value", 0.1)),
             asof_date=ctx.order_date,
         )
     except Exception as exc:

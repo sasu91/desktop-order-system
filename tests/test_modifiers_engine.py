@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 from datetime import date, timedelta
-from typing import List
+from typing import Any, Dict, List
 from unittest.mock import patch
 
 import pytest
@@ -48,7 +48,7 @@ try:
         _PREC_HOLIDAY,
     )
 except ImportError:
-    from domain.contracts import (
+    from domain.contracts import (  # type: ignore[import-unresolved]
         AppliedModifier,
         DemandDistribution,
         DATE_BASIS_DELIVERY,
@@ -56,7 +56,7 @@ except ImportError:
         Modifier,
         ModifierContext,
     )
-    from domain.modifier_builder import (
+    from domain.modifier_builder import (  # type: ignore[import-unresolved]
         _ModifierWithMeta,
         _apply_single_modifier,
         _effective_multiplier,
@@ -140,7 +140,7 @@ def _minimal_ctx(sku_id: str = "SKU_A") -> ModifierContext:
     )
 
 
-_MINIMAL_APPLY_KWARGS = dict(
+_MINIMAL_APPLY_KWARGS: Dict[str, Any] = dict(
     sku_id="SKU_A",
     sku_obj=None,
     horizon_dates=[TODAY + timedelta(days=i + 1) for i in range(7)],

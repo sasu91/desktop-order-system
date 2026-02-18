@@ -2,8 +2,11 @@
 Order workflow: proposal generation and confirmation.
 """
 from datetime import date, timedelta
-from typing import List, Tuple, Optional, Dict, Any
+from typing import TYPE_CHECKING, List, Tuple, Optional, Dict, Any
 import logging
+
+if TYPE_CHECKING:
+    from ..domain.contracts import OrderExplain
 
 from ..domain.models import Stock, OrderProposal, OrderConfirmation, Transaction, EventType, SKU, SalesRecord
 from ..persistence.csv_layer import CSVLayer
@@ -2160,7 +2163,7 @@ def propose_order_for_sku(
         forecast_qty=int(adjusted_demand.mu_P),
         safety_stock=safety_stock,
         target_S=int(reorder_point),
-        inventory_position=pos.inventory_position,
+        inventory_position=int(pos.inventory_position),
         unfulfilled_qty=int(unfulfilled),
         proposed_qty_before_rounding=proposed_qty_raw,
         pack_size=pack_size,
@@ -2182,7 +2185,7 @@ def propose_order_for_sku(
         # CSL breakdown
         target_csl=alpha_target or 0.0,
         sigma_horizon=adjusted_demand.sigma_P,
-        reorder_point=reorder_point,
+        reorder_point=int(reorder_point),
         csl_policy_mode=policy_mode,
         csl_alpha_target=alpha_target or 0.0,
         csl_alpha_eff=csl_result.get("alpha_eff", alpha_target or 0.0),
