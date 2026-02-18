@@ -41,7 +41,7 @@ except ImportError:
     BARCODE_AVAILABLE = False
     print("Warning: python-barcode or Pillow not installed. Barcode rendering disabled.")
 
-from ..persistence.csv_layer import CSVLayer
+from ..persistence.storage_adapter import StorageAdapter
 from ..domain.ledger import StockCalculator, validate_ean
 from ..domain.models import SKU, EventType, OrderProposal, Stock, Transaction, PromoWindow
 from ..domain.promo_uplift import estimate_uplift, UpliftReport
@@ -75,8 +75,8 @@ class DesktopOrderApp:
         self.root.geometry("1000x600")
         
         try:
-            # Initialize CSV layer
-            self.csv_layer = CSVLayer(data_dir=data_dir)
+            # Initialize storage layer (StorageAdapter - transparent CSV/SQLite routing)
+            self.csv_layer = StorageAdapter(data_dir=data_dir)
             
             # Load expiry thresholds from settings
             settings = self.csv_layer.read_settings()
@@ -6976,6 +6976,7 @@ class DesktopOrderApp:
         self.settings_notebook.pack(fill="both", expand=True, pady=10)
         
         # Create sub-tabs
+        self._build_storage_backend_tab()  # New: Storage backend selection
         self._build_reorder_settings_tab()
         self._build_auto_variability_settings_tab()
         self._build_monte_carlo_settings_tab()
@@ -7012,6 +7013,217 @@ class DesktopOrderApp:
         
         # Load current settings
         self._refresh_settings_tab()
+    
+    def _build_storage_backend_tab(self):
+        """Build Storage Backend selection sub-tab."""
+        from config import get_storage_backend, set_storage_backend, is_sqlite_available
+        
+        tab_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(tab_frame, text="💾 Storage")
+        
+        # Title and description
+        title_label = ttk.Label(
+            tab_frame,
+            text="Storage Backend Configuration",
+            font=("Helvetica", 14, "bold")
+        )
+        title_label.pack(anchor="w", pady=(0, 5))
+        
+        desc_label = ttk.Label(
+            tab_frame,
+            text="Seleziona il backend di storage per i dati. CSV è sempre disponibile, SQLite offre prestazioni migliori.",
+            font=("Helvetica", 9),
+            foreground="gray"
+        )
+        desc_label.pack(anchor="w", pady=(0, 15))
+        
+        # Backend selection frame
+        backend_frame = ttk.LabelFrame(tab_frame, text="Backend Selection", padding=15)
+        backend_frame.pack(fill="x", pady=(0, 15))
+        
+        # Radio buttons for backend selection
+        self.storage_backend_var = tk.StringVar(value=get_storage_backend())
+        
+        csv_radio = ttk.Radiobutton(
+            backend_frame,
+            text="📄 CSV Files (Predefinito)",
+            variable=self.storage_backend_var,
+            value="csv"
+        )
+        csv_radio.pack(anchor="w", pady=5)
+        
+        csv_desc = ttk.Label(
+            backend_frame,
+            text="  → Archiviazione in file CSV/JSON. Sempre disponibile, facile da ispezionare.",
+            font=("Helvetica", 9),
+            foreground="gray"
+        )
+        csv_desc.pack(anchor="w", padx=(20, 0), pady=(0, 10))
+        
+        sqlite_radio = ttk.Radiobutton(
+            backend_frame,
+            text="🗄️ SQLite Database",
+            variable=self.storage_backend_var,
+            value="sqlite"
+        )
+        sqlite_radio.pack(anchor="w", pady=5)
+        
+        sqlite_desc = ttk.Label(
+            backend_frame,
+            text="  → Database SQLite. Prestazioni migliori, transazioni atomiche, query complesse.",
+            font=("Helvetica", 9),
+            foreground="gray"
+        )
+        sqlite_desc.pack(anchor="w", padx=(20, 0))
+        
+        # Status frame
+        status_frame = ttk.LabelFrame(tab_frame, text="Status", padding=15)
+        status_frame.pack(fill="x", pady=(0, 15))
+        
+        # Check SQLite availability
+        sqlite_available = is_sqlite_available()
+        
+        if sqlite_available:
+            status_text = "✓ Database SQLite inizializzato e pronto"
+            status_color = "green"
+        else:
+            status_text = "⚠ Database SQLite non inizializzato (eseguire migrazione)"
+            status_color = "orange"
+        
+        status_label = ttk.Label(
+            status_frame,
+            text=status_text,
+            font=("Helvetica", 10, "bold"),
+            foreground=status_color
+        )
+        status_label.pack(anchor="w")
+        
+        # Migration frame
+        migration_frame = ttk.LabelFrame(tab_frame, text="Migrazione Dati", padding=15)
+        migration_frame.pack(fill="x", pady=(0, 15))
+        
+        migration_desc = ttk.Label(
+            migration_frame,
+            text=(
+                "Migra i dati esistenti da CSV/JSON a SQLite. Questa operazione:\n"
+                "• Legge tutti i dati dai file CSV/JSON\n"
+                "• Valida i dati e verifica la coerenza\n"
+                "• Crea il database SQLite e popola le tabelle\n"
+                "• Genera un report dettagliato\n"
+                "\n"
+                "⚠ Backup raccomandato prima della migrazione."
+            ),
+            font=("Helvetica", 9),
+            foreground="gray",
+            justify="left"
+        )
+        migration_desc.pack(anchor="w", pady=(0, 10))
+        
+        migrate_button = ttk.Button(
+            migration_frame,
+            text="🚀 Avvia Migrazione CSV → SQLite",
+            command=self._run_migration_wizard
+        )
+        migrate_button.pack(anchor="w")
+        
+        # Apply button
+        action_frame = ttk.Frame(tab_frame)
+        action_frame.pack(fill="x", pady=(15, 0))
+        
+        apply_button = ttk.Button(
+            action_frame,
+            text="💾 Applica Cambiamenti Backend",
+            command=self._apply_storage_backend_change
+        )
+        apply_button.pack(side="left", padx=5)
+        
+        info_label = ttk.Label(
+            action_frame,
+            text="ℹ️ Riavvio richiesto dopo il cambio backend",
+            font=("Helvetica", 9),
+            foreground="blue"
+        )
+        info_label.pack(side="left", padx=10)
+    
+    def _apply_storage_backend_change(self):
+        """Apply storage backend change (requires restart)."""
+        from config import get_storage_backend, set_storage_backend
+        from typing import Literal
+        
+        new_backend_str = self.storage_backend_var.get()
+        current_backend = get_storage_backend()
+        
+        # Validate backend choice
+        if new_backend_str not in ('csv', 'sqlite'):
+            messagebox.showerror(
+                "Errore",
+                f"Backend non valido: '{new_backend_str}'"
+            )
+            return
+        
+        # Type-safe cast (validated above)
+        new_backend: Literal['csv', 'sqlite'] = new_backend_str  # type: ignore
+        
+        if new_backend == current_backend:
+            messagebox.showinfo(
+                "Nessun Cambio",
+                f"Backend già impostato su '{new_backend}'."
+            )
+            return
+        
+        # Confirm change
+        confirm = messagebox.askyesno(
+            "Conferma Cambio Backend",
+            f"Cambiare backend da '{current_backend}' a '{new_backend}'?\n\n"
+            f"⚠ L'applicazione dovrà essere riavviata per applicare le modifiche."
+        )
+        
+        if not confirm:
+            return
+        
+        # Validate SQLite availability if switching to sqlite
+        if new_backend == 'sqlite':
+            from config import is_sqlite_available
+            if not is_sqlite_available():
+                messagebox.showerror(
+                    "Database Non Disponibile",
+                    "Database SQLite non inizializzato.\n\n"
+                    "Eseguire prima la migrazione CSV → SQLite."
+                )
+                return
+        
+        # Save backend choice
+        set_storage_backend(new_backend)
+        
+        messagebox.showinfo(
+            "Backend Cambiato",
+            f"Backend aggiornato a '{new_backend}'.\n\n"
+            f"⚠ Riavviare l'applicazione per applicare le modifiche."
+        )
+        
+        logger.info(f"Storage backend changed: {current_backend} → {new_backend}")
+    
+    def _run_migration_wizard(self):
+        """Launch migration wizard dialog."""
+        from .migration_wizard import MigrationWizardDialog
+        
+        def on_migration_complete(success: bool):
+            """Callback when migration completes"""
+            if success:
+                logger.info("CSV → SQLite migration completed successfully")
+                # Refresh storage backend tab status
+                messagebox.showinfo(
+                    "Migrazione Completata",
+                    "Database SQLite creato con successo!\n\n"
+                    "È ora possibile selezionare 'SQLite Database' "
+                    "come backend di storage."
+                )
+            else:
+                logger.error("CSV → SQLite migration failed")
+        
+        # Launch wizard dialog
+        wizard = MigrationWizardDialog(self.root, on_complete=on_migration_complete)
+        wizard.show()
     
     def _build_reorder_settings_tab(self):
         """Build Reorder Engine Parameters sub-tab."""

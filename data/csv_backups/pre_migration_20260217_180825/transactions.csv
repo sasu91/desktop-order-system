@@ -1,0 +1,5 @@
+date,sku,event,qty,receipt_date,note
+01/01/2024,SKU001,SNAPSHOT,100,,
+2024-01-02,SKU001,INVALID_EVENT,10,,
+2024-01-03,SKU001,SALE,invalid,,
+2024-01-04,,SALE,5,,

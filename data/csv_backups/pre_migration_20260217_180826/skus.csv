@@ -1,0 +1,3 @@
+sku,description,ean,moq,lead_time_days
+SKU001,Test Product 1,1234567890123,10,7
+SKU002,Test Product 2,9876543210987,5,14

@@ -1,0 +1,4 @@
+date,sku,event,qty,receipt_date,note
+2024-01-01,SKU001,SNAPSHOT,100,,Initial inventory
+2024-01-02,SKU001,SALE,-10,,
+2024-01-03,SKU002,ORDER,50,2024-01-10,

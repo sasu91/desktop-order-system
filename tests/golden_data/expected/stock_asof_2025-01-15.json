@@ -1,0 +1,202 @@
+{
+  "SKU001": {
+    "on_hand": 36,
+    "on_order": 0
+  },
+  "SKU002": {
+    "on_hand": 97,
+    "on_order": 0
+  },
+  "SKU003": {
+    "on_hand": 59,
+    "on_order": 0
+  },
+  "SKU004": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU005": {
+    "on_hand": 37,
+    "on_order": 0
+  },
+  "SKU006": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU007": {
+    "on_hand": 0,
+    "on_order": 20
+  },
+  "SKU008": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU009": {
+    "on_hand": 1,
+    "on_order": 0
+  },
+  "SKU010": {
+    "on_hand": 11,
+    "on_order": 0
+  },
+  "SKU011": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU012": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU013": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU014": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU015": {
+    "on_hand": 26,
+    "on_order": 0
+  },
+  "SKU016": {
+    "on_hand": 42,
+    "on_order": 0
+  },
+  "SKU017": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU018": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU019": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU020": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU021": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU022": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU023": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU024": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU025": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU026": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU027": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU028": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU029": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU030": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU031": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU032": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU033": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU034": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU035": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU036": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU037": {
+    "on_hand": 31,
+    "on_order": 0
+  },
+  "SKU038": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU039": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU040": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU041": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU042": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU043": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU044": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU045": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU046": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU047": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU048": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU049": {
+    "on_hand": 0,
+    "on_order": 0
+  },
+  "SKU050": {
+    "on_hand": 0,
+    "on_order": 0
+  }
+}

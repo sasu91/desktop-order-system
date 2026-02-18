@@ -1,0 +1,6 @@
+{
+  "default_lead_time": 7,
+  "default_moq": 10,
+  "target_csl": 0.95,
+  "warehouse_id": "WH001"
+}
