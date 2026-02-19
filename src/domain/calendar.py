@@ -413,3 +413,75 @@ def calculate_protection_period_days(
     """
     _, _, P_days = protection_window(order_date, lane, config)
     return P_days
+
+
+def resolve_receipt_and_protection(
+    order_date: Date,
+    lane: Lane,
+    config: CalendarConfig,
+    receipt_override: Optional[Date] = None,
+) -> Tuple[Date, int]:
+    """
+    Resolve receipt date (r1) and protection period P for an order.
+
+    This is the single authoritative entry point for computing (r1, P):
+
+    - Without override: delegates to protection_window(order_date, lane, config).
+      r1 is the calendar-derived first delivery; P = r2 - r1 where r2 is the
+      first delivery of the immediately following order opportunity.
+
+    - With override: r1 = receipt_override (user-specified delivery date).
+      r2 is derived by finding the first order opportunity after r1 (exclusive)
+      and computing its STANDARD-lane delivery date.  If r2 <= r1 (e.g., holiday
+      chain), the loop advances until r2 > r1, guaranteeing P >= 1.
+
+    Formula:  P = r2 - r1
+
+    Note: P is the "protection window" — the number of days the ordered stock
+    must cover before the next replenishment arrives.  It is always >= 1.
+
+    Args:
+        order_date: Date the order is placed (YYYY-MM-DD); used only when
+                    receipt_override is None.
+        lane:       Lane.STANDARD / Lane.SATURDAY / Lane.MONDAY.
+        config:     CalendarConfig with holidays and delivery rules.
+        receipt_override: Explicit delivery date provided by the user.  When
+                    given, bypasses calendar r1 derivation; r2 (and thus P) is
+                    still computed via the standard rhythm.
+
+    Returns:
+        (r1, P_days) — first receipt date and protection period in days.
+
+    Raises:
+        ValueError: If order_date is not a valid order day (override=None) or
+                    if calendar loop cannot converge (should never happen with
+                    valid config).
+    """
+    if receipt_override is None:
+        # Standard path: full calendar + lane logic
+        r1, _r2, P = protection_window(order_date, lane, config)
+        return r1, P
+
+    # Override path: r1 is fixed by the caller
+    r1 = receipt_override
+
+    # Derive r2 via STANDARD rhythm: first order opportunity strictly after r1,
+    # then its expected delivery.
+    next_ord = next_order_opportunity(r1, config)
+    r2 = next_receipt_date(next_ord, Lane.STANDARD, config)
+
+    # Safety loop: guarantee r2 > r1 even in degenerate holiday chains
+    max_iter = 30
+    for _ in range(max_iter):
+        if r2 > r1:
+            break
+        next_ord = next_order_opportunity(r2, config)
+        r2 = next_receipt_date(next_ord, Lane.STANDARD, config)
+    else:
+        raise ValueError(
+            f"resolve_receipt_and_protection: could not find r2 > r1={r1} "
+            f"within {max_iter} iterations (check holiday config)"
+        )
+
+    P = (r2 - r1).days
+    return r1, P

@@ -1312,35 +1312,73 @@ class DesktopOrderApp:
         # Read default values from settings
         settings = self.csv_layer.read_settings()
         engine = settings.get("reorder_engine", {})
-        
-        # Parameters row - first line
-        params_row = ttk.Frame(param_frame)
-        params_row.pack(side="top", fill="x", pady=5)
-        
-        ttk.Label(params_row, text="Lead Time (giorni):", width=15).pack(side="left", padx=(0, 5))
-        self.lead_time_var = tk.StringVar(value=str(engine.get("lead_time_days", {}).get("value", 7)))
-        ttk.Entry(params_row, textvariable=self.lead_time_var, width=10).pack(side="left", padx=(0, 20))
-        
-        # Second parameter row - global receipt date
-        params_row2 = ttk.Frame(param_frame)
-        params_row2.pack(side="top", fill="x", pady=(0, 5))
-        
-        ttk.Label(params_row2, text="Data Ricevimento:", width=15).pack(side="left", padx=(0, 5))
-        self.global_receipt_date_var = tk.StringVar(value="")
-        ttk.Entry(params_row2, textvariable=self.global_receipt_date_var, width=12).pack(side="left", padx=(0, 5))
-        ttk.Label(params_row2, text="(YYYY-MM-DD, vuoto = usa calendario)", font=("Helvetica", 8), foreground="gray").pack(side="left")
-        
-        # Third parameter row - lane selector
-        params_row3 = ttk.Frame(param_frame)
-        params_row3.pack(side="top", fill="x", pady=(0, 5))
-        
-        ttk.Label(params_row3, text="Corsia Logistica:", width=15).pack(side="left", padx=(0, 5))
+
+        # ── Row 1: Data Ordine ───────────────────────────────────────────────
+        row_order = ttk.Frame(param_frame)
+        row_order.pack(side="top", fill="x", pady=2)
+        ttk.Label(row_order, text="Data Ordine:", width=22).pack(side="left", padx=(0, 5))
+        self.order_date_var = tk.StringVar(value=date.today().isoformat())
+        ttk.Entry(row_order, textvariable=self.order_date_var, width=12).pack(side="left", padx=(0, 5))
+        ttk.Label(row_order, text="(YYYY-MM-DD, default = oggi)", font=("Helvetica", 8), foreground="gray").pack(side="left")
+
+        # ── Row 2: Corsia Logistica ──────────────────────────────────────────
+        row_lane = ttk.Frame(param_frame)
+        row_lane.pack(side="top", fill="x", pady=2)
+        ttk.Label(row_lane, text="Corsia Logistica:", width=22).pack(side="left", padx=(0, 5))
         self.lane_var = tk.StringVar(value="STANDARD")
-        lane_combo = ttk.Combobox(params_row3, textvariable=self.lane_var, width=10, state="readonly")
-        lane_combo['values'] = ("STANDARD", "SATURDAY", "MONDAY")
-        lane_combo.pack(side="left", padx=(0, 5))
-        ttk.Label(params_row3, text="(Lun-Gio: STANDARD, Ven: SATURDAY/MONDAY)", font=("Helvetica", 8), foreground="gray").pack(side="left")
-        
+        self.lane_combo = ttk.Combobox(row_lane, textvariable=self.lane_var, width=12, state="readonly")
+        self.lane_combo['values'] = ("STANDARD", "SATURDAY", "MONDAY")
+        self.lane_combo.pack(side="left", padx=(0, 5))
+        ttk.Label(row_lane, text="(Lun-Gio → STANDARD  |  Ven → SATURDAY o MONDAY)", font=("Helvetica", 8), foreground="gray").pack(side="left")
+
+        # ── Row 3: Override Data Ricevimento ─────────────────────────────────
+        row_override = ttk.Frame(param_frame)
+        row_override.pack(side="top", fill="x", pady=2)
+        self.force_receipt_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row_override, text="Forza Data Ricevimento:", variable=self.force_receipt_var, width=22).pack(side="left", padx=(0, 5))
+        self.override_receipt_var = tk.StringVar(value="")
+        self.override_receipt_entry = ttk.Entry(row_override, textvariable=self.override_receipt_var, width=12, state="disabled")
+        self.override_receipt_entry.pack(side="left", padx=(0, 5))
+        ttk.Label(row_override, text="(YYYY-MM-DD)", font=("Helvetica", 8), foreground="gray").pack(side="left")
+
+        # ── Row 4: Motivo override (enabled only when force_receipt active) ──
+        row_reason = ttk.Frame(param_frame)
+        row_reason.pack(side="top", fill="x", pady=2)
+        ttk.Label(row_reason, text="Motivo Override:", width=22).pack(side="left", padx=(0, 5))
+        self.override_reason_var = tk.StringVar(value="")
+        self.override_reason_combo = ttk.Combobox(row_reason, textvariable=self.override_reason_var, width=30, state="disabled")
+        self.override_reason_combo['values'] = (
+            "Chiusura fornitore", "Festività", "Variazione logistica",
+            "Richiesta cliente", "Altro",
+        )
+        self.override_reason_combo.pack(side="left", padx=(0, 5))
+
+        # ── Info section: read-only calendar preview ─────────────────────────
+        info_frame = ttk.LabelFrame(param_frame, text="Pianificazione Calcolata (solo lettura)", padding=5)
+        info_frame.pack(side="top", fill="x", pady=(6, 2))
+        info_grid = ttk.Frame(info_frame)
+        info_grid.pack(fill="x")
+        ttk.Label(info_grid, text="Ricevimento calcolato:", foreground="gray", width=22).grid(row=0, column=0, sticky="w", padx=(0, 5))
+        self.info_receipt_lbl = ttk.Label(info_grid, text="—", foreground="#0066cc", font=("Helvetica", 9, "bold"))
+        self.info_receipt_lbl.grid(row=0, column=1, sticky="w", padx=(0, 20))
+        ttk.Label(info_grid, text="Lead time effettivo:", foreground="gray", width=20).grid(row=0, column=2, sticky="w", padx=(0, 5))
+        self.info_lt_lbl = ttk.Label(info_grid, text="—", foreground="#0066cc", font=("Helvetica", 9, "bold"))
+        self.info_lt_lbl.grid(row=0, column=3, sticky="w")
+        ttk.Label(info_grid, text="P (giorni copertura):", foreground="gray", width=22).grid(row=1, column=0, sticky="w", padx=(0, 5))
+        self.info_p_lbl = ttk.Label(info_grid, text="—", foreground="#0066cc", font=("Helvetica", 9, "bold"))
+        self.info_p_lbl.grid(row=1, column=1, sticky="w", padx=(0, 20))
+        ttk.Label(info_grid, text="Corsia attiva:", foreground="gray", width=20).grid(row=1, column=2, sticky="w", padx=(0, 5))
+        self.info_lane_lbl = ttk.Label(info_grid, text="—", foreground="#0066cc", font=("Helvetica", 9, "bold"))
+        self.info_lane_lbl.grid(row=1, column=3, sticky="w")
+
+        # Wire auto-update callbacks
+        self.order_date_var.trace_add("write", self._update_order_info)
+        self.lane_var.trace_add("write", self._update_order_info)
+        self.force_receipt_var.trace_add("write", self._update_order_info)
+        self.override_receipt_var.trace_add("write", self._update_order_info)
+        # Trigger initial info display after widgets are created
+        param_frame.after(50, self._update_order_info)
+
         # Buttons row with workflow guidance
         buttons_row = ttk.Frame(param_frame)
         buttons_row.pack(side="top", fill="x", pady=5)
@@ -1871,97 +1909,108 @@ class DesktopOrderApp:
         self.proposal_details_text.config(state="disabled")
     
     def _generate_all_proposals(self):
-        """Generate order proposals for all SKUs using settings or user input."""
-        try:
-            # Read settings for defaults
-            settings = self.csv_layer.read_settings()
-            engine = settings.get("reorder_engine", {})
-            
-            # Use user input if provided, otherwise use settings defaults
-            lead_time = int(self.lead_time_var.get()) if self.lead_time_var.get() else engine.get("lead_time_days", {}).get("value", 7)
-            
-        except ValueError:
-            messagebox.showerror("Errore di Validazione", "I parametri devono essere numeri interi.")
-            return
-        
-        # Update workflow lead time
+        """Generate order proposals for all SKUs using calendar-driven planning."""
+        # Read settings for workflow defaults
+        settings = self.csv_layer.read_settings()
+        engine = settings.get("reorder_engine", {})
+        lead_time = engine.get("lead_time_days", {}).get("value", 7)
+
+        # Update workflow lead time (used internally by generate_proposal fallback path)
         self.order_workflow.lead_time_days = lead_time
-        
+
         # === CALENDAR-AWARE RECEIPT DATE & PROTECTION PERIOD ===
-        # Determine target receipt date and protection period using calendar or manual override
-        from ..domain.calendar import Lane, next_receipt_date, calculate_protection_period_days, next_order_opportunity, create_calendar_with_holidays
-        
-        order_date = date.today()
+        from ..domain.calendar import (
+            Lane, resolve_receipt_and_protection,
+            next_order_opportunity, create_calendar_with_holidays, is_order_day,
+        )
+
+        # Parse order date from UI (default: today)
+        try:
+            order_date = date.fromisoformat(self.order_date_var.get().strip())
+        except (ValueError, AttributeError):
+            order_date = date.today()
+
         calendar_config = create_calendar_with_holidays(self.csv_layer.data_dir)
-        global_receipt_date_str = self.global_receipt_date_var.get().strip()
-        lane_str = self.lane_var.get()
-        
+
         # Parse lane
         try:
-            lane = Lane[lane_str] if lane_str else Lane.STANDARD
+            lane = Lane[self.lane_var.get() or "STANDARD"]
         except KeyError:
             lane = Lane.STANDARD
-        
-        # Determine target receipt date and protection period
-        if global_receipt_date_str:
-            # Manual override: use provided receipt date
+
+        # Determine effective planning date (prompt if non-order day)
+        planning_date = order_date
+        if not is_order_day(order_date, calendar_config):
             try:
-                target_receipt_date = date.fromisoformat(global_receipt_date_str)
-                # Calculate protection period as (target - today) or use review period as fallback
-                protection_period = max(1, (target_receipt_date - order_date).days)
+                next_valid = next_order_opportunity(
+                    order_date - timedelta(days=1), calendar_config
+                )
             except ValueError:
-                # Invalid format: fallback to calendar
-                global_receipt_date_str = ""
+                next_valid = order_date
+            if next_valid != order_date:
+                use_next = messagebox.askyesno(
+                    "Giorno ordine non valido",
+                    (
+                        f"{order_date.strftime('%d/%m/%Y')} non è un giorno d'ordine valido.\n"
+                        f"Vuoi usare il prossimo giorno valido ({next_valid.strftime('%d/%m/%Y')})?\n\n"
+                        "Se scegli No, l'operazione verrà annullata."
+                    ),
+                )
+                if not use_next:
+                    logger.info(
+                        f"Proposal generation cancelled: {order_date} not order day, next={next_valid}."
+                    )
+                    return
+                planning_date = next_valid
 
-        if not global_receipt_date_str:
-            # Calendar logic with robust fallback for non-order days and invalid lane/day combos
-            calendar_order_date = order_date
+        # If SATURDAY/MONDAY lane requested but planning_date is not Friday → downgrade
+        if lane in (Lane.SATURDAY, Lane.MONDAY) and planning_date.weekday() != 4:
+            logger.warning(
+                f"Lane {lane} requires Friday; planning_date={planning_date}. Downgrading to STANDARD."
+            )
+            lane = Lane.STANDARD
+
+        # Resolve receipt override
+        force_override = getattr(self, "force_receipt_var", None) and self.force_receipt_var.get()
+        receipt_override = None
+        if force_override:
             try:
-                target_receipt_date = next_receipt_date(calendar_order_date, lane, calendar_config)
-                protection_period = calculate_protection_period_days(calendar_order_date, lane, calendar_config)
-            except ValueError as e:
-                try:
-                    next_valid_order_date = next_order_opportunity(order_date, calendar_config)
-                except ValueError:
-                    next_valid_order_date = order_date
+                receipt_override = date.fromisoformat(self.override_receipt_var.get().strip())
+            except (ValueError, AttributeError):
+                messagebox.showerror(
+                    "Data Override non valida",
+                    "La data ricevimento forzata non è nel formato YYYY-MM-DD.\n"
+                    "Correggi il campo oppure disattiva l'override.",
+                )
+                return
+            # Validate: receipt must be >= planning_date
+            if receipt_override < planning_date:
+                messagebox.showerror(
+                    "Data Override non valida",
+                    f"La data ricevimento forzata ({receipt_override}) "
+                    f"è anteriore alla data ordine ({planning_date}).",
+                )
+                return
 
-                if next_valid_order_date != order_date:
-                    use_next_day = messagebox.askyesno(
-                        "Giorno ordine non valido",
-                        (
-                            f"{order_date.strftime('%d/%m/%Y')} non è un giorno d'ordine valido.\n"
-                            f"Vuoi usare il prossimo giorno valido ({next_valid_order_date.strftime('%d/%m/%Y')})?\n\n"
-                            "Se scegli No, l'operazione verrà annullata."
-                        )
-                    )
-                    if not use_next_day:
-                        logger.info(
-                            f"Proposal generation cancelled by user: invalid order day {order_date}, next valid {next_valid_order_date}."
-                        )
-                        return
-                    calendar_order_date = next_valid_order_date
-                else:
-                    calendar_order_date = order_date
+        # Compute (r1, P) via single authoritative domain function
+        try:
+            target_receipt_date, protection_period = resolve_receipt_and_protection(
+                planning_date, lane, calendar_config, receipt_override
+            )
+        except ValueError as final_error:
+            logger.warning(
+                f"resolve_receipt_and_protection failed ({final_error}). "
+                f"Forcing STANDARD fallback on {planning_date}."
+            )
+            lane = Lane.STANDARD
+            try:
+                target_receipt_date, protection_period = resolve_receipt_and_protection(
+                    planning_date, Lane.STANDARD, calendar_config, None
+                )
+            except ValueError:
+                target_receipt_date = planning_date + timedelta(days=max(1, lead_time))
+                protection_period = max(1, (target_receipt_date - planning_date).days)
 
-                if lane in (Lane.SATURDAY, Lane.MONDAY) and calendar_order_date.weekday() != 4:
-                    logger.warning(
-                        f"Lane {lane} requires Friday order; next valid order date is {calendar_order_date}. Using STANDARD."
-                    )
-                    lane = Lane.STANDARD
-
-                try:
-                    target_receipt_date = next_receipt_date(calendar_order_date, lane, calendar_config)
-                    protection_period = calculate_protection_period_days(calendar_order_date, lane, calendar_config)
-                    logger.warning(
-                        f"Invalid order context for {order_date} ({e}). Using calendar_order_date={calendar_order_date}, lane={lane}."
-                    )
-                except ValueError as final_error:
-                    logger.warning(
-                        f"Calendar fallback failed ({final_error}). Forcing STANDARD lane on original order date {order_date}."
-                    )
-                    lane = Lane.STANDARD
-                    target_receipt_date = order_date + timedelta(days=max(1, int(lead_time)))
-                    protection_period = max(1, (target_receipt_date - order_date).days)
         
         # Get all SKUs
         sku_ids = self.csv_layer.get_all_sku_ids()
@@ -2391,7 +2440,77 @@ class DesktopOrderApp:
                 values=self._build_proposal_row_values(proposal),
                 tags=tags
             )
-    
+
+    def _update_order_info(self, *_):
+        """Auto-update the read-only planning info section when order inputs change."""
+        from ..domain.calendar import (
+            Lane, resolve_receipt_and_protection,
+            create_calendar_with_holidays, next_order_opportunity, is_order_day,
+        )
+
+        # Parse order date
+        order_date_str = self.order_date_var.get().strip()
+        try:
+            order_date = date.fromisoformat(order_date_str)
+        except ValueError:
+            for lbl in (self.info_receipt_lbl, self.info_p_lbl, self.info_lt_lbl, self.info_lane_lbl):
+                lbl.config(text="— data non valida —", foreground="red")
+            return
+
+        # Load calendar config (non-blocking; default config on error)
+        try:
+            calendar_config = create_calendar_with_holidays(self.csv_layer.data_dir)
+        except Exception:
+            from ..domain.calendar import DEFAULT_CONFIG
+            calendar_config = DEFAULT_CONFIG
+
+        force = self.force_receipt_var.get()
+
+        # Enable/disable widgets based on override mode
+        self.override_receipt_entry.config(state="normal" if force else "disabled")
+        self.override_reason_combo.config(state="readonly" if force else "disabled")
+        self.lane_combo.config(state="disabled" if force else "readonly")
+
+        # Parse lane
+        try:
+            lane = Lane[self.lane_var.get() or "STANDARD"]
+        except KeyError:
+            lane = Lane.STANDARD
+
+        # Resolve override date if active
+        receipt_override = None
+        if force:
+            try:
+                receipt_override = date.fromisoformat(self.override_receipt_var.get().strip())
+            except ValueError:
+                self.info_receipt_lbl.config(text="— data override non valida —", foreground="red")
+                for lbl in (self.info_p_lbl, self.info_lt_lbl, self.info_lane_lbl):
+                    lbl.config(text="—", foreground="gray")
+                return
+
+        # If today is not a valid order day, silently use next valid day for preview
+        preview_order_date = order_date
+        if not is_order_day(order_date, calendar_config):
+            try:
+                preview_order_date = next_order_opportunity(
+                    order_date - timedelta(days=1), calendar_config
+                )
+            except ValueError:
+                preview_order_date = order_date
+
+        # Compute (r1, P) via the domain function
+        try:
+            r1, P = resolve_receipt_and_protection(preview_order_date, lane, calendar_config, receipt_override)
+            lead_time_eff = (r1 - order_date).days
+            self.info_receipt_lbl.config(text=r1.strftime("%d/%m/%Y (%a)"), foreground="#0066cc")
+            self.info_lt_lbl.config(text=f"{lead_time_eff} giorni", foreground="#0066cc")
+            self.info_p_lbl.config(text=f"{P} giorni", foreground="#0066cc")
+            self.info_lane_lbl.config(text=lane.value, foreground="#0066cc")
+        except ValueError as exc:
+            self.info_receipt_lbl.config(text=f"— {exc} —", foreground="red")
+            for lbl in (self.info_p_lbl, self.info_lt_lbl, self.info_lane_lbl):
+                lbl.config(text="—", foreground="gray")
+
     def _refresh_order_stock_data(self):
         """Refresh stock data without regenerating proposals."""
         messagebox.showinfo("Info", "Dati stock aggiornati. Clicca 'Genera Tutte le Proposte' per ricalcolare.")

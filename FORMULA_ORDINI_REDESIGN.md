@@ -355,5 +355,45 @@ Output:
 
 ---
 
+## Aggiornamento: P = r2 − r1 (Finestra di Protezione dal Calendario)
+
+**Data**: Gennaio 2026 — Refactoring pianificazione ordine
+
+### Formula Fondamentale
+
+```
+P = r2 - r1   (in giorni)
+```
+
+Dove:
+- **r1** = data primo ricevimento (questo ordine)
+- **r2** = data primo ricevimento dell'ordine *successivo* (ritmo STANDARD)
+- **P** = numero di giorni che lo stock ordinato deve coprire prima del prossimo rifornimento
+
+### Perché P ≠ lead_time + review_period
+
+Il calcolo tradizionale `P = lead_time + review_period` era un'approssimazione fissa.  
+Il nuovo calcolo è **deterministico e dipendente dal calendario**: tiene conto di festività,
+corsie logistiche (SAB/LUN) e giorni non lavorativi.
+
+### Modalità override
+
+Quando l'utente forza una data ricevimento (`receipt_override`):
+- `r1 = receipt_override` (usato così com'è)
+- `r2` è calcolato dalla prima opportunità d'ordine *dopo r1* → corsia STANDARD
+- `P` è sempre ≥ 1 (garantito dal loop di sicurezza in `resolve_receipt_and_protection`)
+
+### Funzione di dominio
+
+```python
+# src/domain/calendar.py
+r1, P = resolve_receipt_and_protection(order_date, lane, config, receipt_override=None)
+```
+
+Questa è l'**unica funzione autorizzata** per calcolare (r1, P) sia nel percorso normale
+che in override — la GUI e `_generate_all_proposals` la chiamano entrambi.
+
+---
+
 **Autore**: GitHub Copilot  
 **Revisione**: Gennaio 2026

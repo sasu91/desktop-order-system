@@ -13,7 +13,7 @@ import pytest
 
 from src.domain.models import SKU, Transaction, EventType, Stock, SalesRecord, DemandVariability
 from src.domain.ledger import StockCalculator
-from src.domain.calendar import Lane, next_receipt_date, calculate_protection_period_days
+from src.domain.calendar import Lane, next_receipt_date, calculate_protection_period_days, resolve_receipt_and_protection, DEFAULT_CONFIG
 from src.workflows.order import OrderWorkflow
 from src.persistence.csv_layer import CSVLayer
 
@@ -305,19 +305,21 @@ def test_protection_period_replaces_lead_review():
 
 def test_manual_receipt_date_override():
     """
-    Test that manual receipt_date override works and uses derived protection period.
-    
-    When user provides manual receipt_date:
-    - Receipt date should be used as-is
-    - Protection period should be calculated as (target - today)
+    Test that manual receipt_date override works and uses calendar-derived P.
+
+    When user provides manual receipt_date (override mode):
+    - Receipt date (r1) should be the override as-is.
+    - Protection period P = (r2 - r1).days where r2 is the next standard
+      delivery after the first order opportunity following r1.
+      This is computed via resolve_receipt_and_protection(receipt_override=...).
     """
     import tempfile
     test_dir = tempfile.mkdtemp()
-    
+
     try:
         csv_layer = CSVLayer(data_dir=Path(test_dir))
         workflow = OrderWorkflow(csv_layer=csv_layer, lead_time_days=1)
-        
+
         sku_id = "TEST_MANUAL"
         sku = SKU(
             sku=sku_id,
@@ -335,19 +337,27 @@ def test_manual_receipt_date_override():
             in_assortment=True
         )
         csv_layer.write_sku(sku)
-        
+
         transactions = [
             Transaction(date=date(2026, 2, 5), sku=sku_id, event=EventType.SNAPSHOT, qty=100)
         ]
         for txn in transactions:
             csv_layer.write_transaction(txn)
-        
+
         stock = Stock(sku=sku_id, on_hand=100, on_order=0, unfulfilled_qty=0, asof_date=date(2026, 2, 6))
-        
-        # Manual receipt date: 5 days from today
-        manual_receipt_date = date(2026, 2, 11)  # Friday 2026-02-06 + 5 days
-        expected_protection = 5
-        
+
+        # Manual receipt date override: user forces delivery to 2026-02-11 (Wednesday).
+        # P is calendar-derived: r1=2026-02-11, r2=2026-02-13 (Thu→Fri), P=2
+        order_date = date(2026, 2, 6)  # Friday
+        manual_receipt_date = date(2026, 2, 11)  # Wednesday override
+
+        # Derive (r1, P) the same way the UI would via resolve_receipt_and_protection
+        r1, expected_protection = resolve_receipt_and_protection(
+            order_date, Lane.STANDARD, DEFAULT_CONFIG, receipt_override=manual_receipt_date
+        )
+        assert r1 == manual_receipt_date, f"r1 should equal the override date, got {r1}"
+        assert expected_protection >= 1, f"P must be >= 1, got {expected_protection}"
+
         proposal = workflow.generate_proposal(
             sku=sku_id,
             description="Test",
@@ -355,20 +365,64 @@ def test_manual_receipt_date_override():
             daily_sales_avg=5.0,
             sku_obj=sku,
             target_receipt_date=manual_receipt_date,
-            protection_period_days=expected_protection,  # Derived by UI from (target - today)
+            protection_period_days=expected_protection,  # Derived via resolve_receipt_and_protection
             transactions=transactions,
         )
-        
+
         assert proposal.receipt_date == manual_receipt_date, \
             f"Receipt date should be {manual_receipt_date}, got {proposal.receipt_date}"
-        
+
         assert proposal.forecast_period_days == expected_protection, \
-            f"Protection period should be {expected_protection}, got {proposal.forecast_period_days}"
-        
+            f"Protection period should be {expected_protection} (calendar-derived P=r2-r1), got {proposal.forecast_period_days}"
+
     finally:
         import shutil
         shutil.rmtree(test_dir, ignore_errors=True)
 
+
+def test_resolve_receipt_and_protection_override():
+    """
+    Pure domain test: resolve_receipt_and_protection with receipt_override.
+
+    Verifies that:
+    - r1 == receipt_override (used as-is)
+    - r2 is derived via STANDARD rhythm (first order opp after r1 → its receipt)
+    - P = (r2 - r1).days >= 1
+    - No crash for any reasonable delivery-day override
+    """
+    cfg = DEFAULT_CONFIG  # lead_time=1, Mon–Sat delivery, Mon–Fri order
+
+    # Override to Monday 2026-02-09 (from a Friday 2026-02-06 order)
+    fri = date(2026, 2, 6)
+    override_mon = date(2026, 2, 9)  # Monday
+    r1, P = resolve_receipt_and_protection(fri, Lane.STANDARD, cfg, receipt_override=override_mon)
+    assert r1 == override_mon, f"r1 should be override, got {r1}"
+    assert P >= 1, f"P must be >= 1, got {P}"
+    # next_order(Mon)=Tue, r2=Wed, P=2
+    assert P == 2, f"Expected P=2 for Mon override (r2=Wed), got {P}"
+
+    # Override to Wednesday 2026-02-11
+    override_wed = date(2026, 2, 11)
+    r1, P = resolve_receipt_and_protection(fri, Lane.STANDARD, cfg, receipt_override=override_wed)
+    assert r1 == override_wed
+    assert P >= 1
+    # next_order(Wed)=Thu, r2=Fri, P=2
+    assert P == 2, f"Expected P=2 for Wed override (r2=Fri), got {P}"
+
+    # Override to Friday 2026-02-13
+    override_fri = date(2026, 2, 13)
+    r1, P = resolve_receipt_and_protection(fri, Lane.STANDARD, cfg, receipt_override=override_fri)
+    assert r1 == override_fri
+    assert P >= 1
+    # next_order(Fri)=Mon, r2=Tue, P=4 (Fri→Tue across weekend)
+    assert P == 4, f"Expected P=4 for Fri override (r2=Tue), got {P}"
+
+    # No override: verify output matches protection_window
+    r1_std, P_std = resolve_receipt_and_protection(fri, Lane.SATURDAY, cfg)
+    from src.domain.calendar import protection_window
+    r1_pw, _, P_pw = protection_window(fri, Lane.SATURDAY, cfg)
+    assert r1_std == r1_pw
+    assert P_std == P_pw
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
