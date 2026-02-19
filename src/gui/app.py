@@ -5,6 +5,7 @@ Tkinter-based desktop UI with multiple tabs.
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
+from typing import cast, Literal
 from datetime import date, timedelta, datetime
 from pathlib import Path
 import tempfile
@@ -2863,162 +2864,239 @@ class DesktopOrderApp:
 
     
     def _build_receiving_tab(self):
-        """Build Receiving tab (pending orders + close receipt form + history)."""
-        main_frame = ttk.Frame(self.receiving_tab)
-        main_frame.pack(fill="both", expand=True, padx=5, pady=5)
-        
-        # Title
-        title_frame = ttk.Frame(main_frame)
-        title_frame.pack(side="top", fill="x", pady=(0, 10))
-        ttk.Label(title_frame, text="3️⃣ Gestione Ricevimenti", font=("Helvetica", 14, "bold")).pack(side="left")
-        ttk.Label(title_frame, text="(Chiudi ordini quando arriva la merce)", font=("Helvetica", 9, "italic"), foreground="gray").pack(side="left", padx=(10, 0))
-        
-        # === PENDING ORDERS SECTION ===
-        pending_frame = ttk.LabelFrame(main_frame, text="Ordini in Sospeso (Non Completamente Ricevuti)", padding=5)
-        pending_frame.pack(side="top", fill="both", expand=True, pady=(0, 10))
-        
-        # Toolbar con ricerca
-        pending_toolbar = ttk.Frame(pending_frame)
-        pending_toolbar.pack(side="top", fill="x", pady=(0, 5))
-        ttk.Button(pending_toolbar, text="🔄 Aggiorna Sospesi", command=self._refresh_pending_orders).pack(side="left", padx=5)
-        ttk.Label(pending_toolbar, text="Cerca:").pack(side="left", padx=(20, 5))
+        """Build Receiving tab - layout matching Goods Receiving Management mockup."""
+        # ── Outer scrollable canvas ──────────────────────────────────────────
+        outer = ttk.Frame(self.receiving_tab)
+        outer.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(outer, highlightthickness=0)
+        vscroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vscroll.set)
+        vscroll.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        main_frame = ttk.Frame(canvas)
+        canvas_window = canvas.create_window((0, 0), window=main_frame, anchor="nw")
+
+        def _on_frame_configure(e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        def _on_canvas_configure(e):
+            canvas.itemconfig(canvas_window, width=e.width)
+        main_frame.bind("<Configure>", _on_frame_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        # Mouse-wheel scrolling
+        def _on_mousewheel(e):
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        PAD = dict(padx=12, pady=4)
+
+        # ── PAGE HEADER ──────────────────────────────────────────────────────
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill="x", padx=16, pady=(14, 4))
+
+        header_left = ttk.Frame(header_frame)
+        header_left.pack(side="left", fill="x", expand=True)
+        ttk.Label(
+            header_left,
+            text="Gestione Ricevimenti",
+            font=("Helvetica", 17, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(
+            header_left,
+            text="Gestisci le spedizioni in arrivo, verifica le quantità e traccia le informazioni sui lotti.",
+            font=("Helvetica", 9),
+            foreground="gray",
+        ).pack(anchor="w")
+
+        ttk.Button(
+            header_frame,
+            text="↻  Aggiorna Dati",
+            command=lambda: (self._refresh_pending_orders(), self._refresh_receiving_history()),
+        ).pack(side="right", padx=(0, 2), pady=4)
+
+        ttk.Separator(main_frame, orient="horizontal").pack(fill="x", padx=16, pady=(6, 10))
+
+        # ── SECTION 1 — PENDING RECEIPTS ─────────────────────────────────────
+        pending_card = ttk.LabelFrame(main_frame, text="  📋  Ricevimenti in Sospeso  —  Ordini in attesa di conferma", padding=(10, 6))
+        pending_card.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+
+        # Card toolbar: title info left, search right
+        p_toolbar = ttk.Frame(pending_card)
+        p_toolbar.pack(fill="x", pady=(0, 6))
+
         self.pending_search_var = tk.StringVar()
-        
-        # Autocomplete per SKU/descrizione
+        search_frame = ttk.Frame(p_toolbar)
+        search_frame.pack(side="right")
+        ttk.Label(search_frame, text="🔍").pack(side="left")
         pending_search_ac = AutocompleteEntry(
-            pending_toolbar,
+            search_frame,
             textvariable=self.pending_search_var,
             items_callback=self._filter_pending_sku_items,
-            width=30
+            width=32,
         )
-        pending_search_ac.pack(side="left", padx=(0, 5))
-        # Override trace per gestire filtro tabella
-        self.pending_search_var.trace('w', lambda *args: self._filter_pending_orders())
-        
-        ttk.Label(pending_toolbar, text="(SKU o Descrizione)").pack(side="left", padx=5)
-        
-        # Dizionario per quantità modificate in memoria: {tree_item_id: qty_received}
+        pending_search_ac.pack(side="left", padx=(2, 0))
+        self.pending_search_var.trace("w", lambda *_: self._filter_pending_orders())
+        ttk.Label(p_toolbar, text="Cerca SKU o Descrizione…", foreground="gray", font=("Helvetica", 9)).pack(side="left")
+
+        # Pending qty edits dict
         self.pending_qty_edits = {}
-        
-        # Pending orders table
-        pending_scroll = ttk.Scrollbar(pending_frame)
-        pending_scroll.pack(side="right", fill="y")
-        
+
+        # Treeview + scrollbar
+        p_tv_frame = ttk.Frame(pending_card)
+        p_tv_frame.pack(fill="both", expand=True)
+
+        p_scroll = ttk.Scrollbar(p_tv_frame, orient="vertical")
+        p_scroll.pack(side="right", fill="y")
+
+        cols = ("Order ID", "SKU", "Description", "Pack Size",
+                "Colli Ordinati", "Colli Ricevuti", "Colli Sospesi", "Receipt Date")
         self.pending_treeview = ttk.Treeview(
-            pending_frame,
-            columns=("Order ID", "SKU", "Description", "Pack Size", "Colli Ordinati", "Colli Ricevuti", "Colli Sospesi", "Receipt Date"),
+            p_tv_frame,
+            columns=cols,
+            show="headings",
             height=6,
-            yscrollcommand=pending_scroll.set,
+            yscrollcommand=p_scroll.set,
         )
-        pending_scroll.config(command=self.pending_treeview.yview)
-        
-        self.pending_treeview.column("#0", width=0, stretch=tk.NO)
-        self.pending_treeview.column("Order ID", anchor=tk.W, width=120)
-        self.pending_treeview.column("SKU", anchor=tk.W, width=80)
-        self.pending_treeview.column("Description", anchor=tk.W, width=180)
-        self.pending_treeview.column("Pack Size", anchor=tk.CENTER, width=80)
-        self.pending_treeview.column("Colli Ordinati", anchor=tk.CENTER, width=110)
-        self.pending_treeview.column("Colli Ricevuti", anchor=tk.CENTER, width=110)
-        self.pending_treeview.column("Colli Sospesi", anchor=tk.CENTER, width=110)
-        self.pending_treeview.column("Receipt Date", anchor=tk.CENTER, width=100)
-        
-        self.pending_treeview.heading("Order ID", text="ID Ordine", anchor=tk.W)
-        self.pending_treeview.heading("SKU", text="SKU", anchor=tk.W)
-        self.pending_treeview.heading("Description", text="Descrizione", anchor=tk.W)
-        self.pending_treeview.heading("Pack Size", text="Pz/Collo", anchor=tk.CENTER)
-        self.pending_treeview.heading("Colli Ordinati", text="Colli Ordinati", anchor=tk.CENTER)
-        self.pending_treeview.heading("Colli Ricevuti", text="Colli Ricevuti", anchor=tk.CENTER)
-        self.pending_treeview.heading("Colli Sospesi", text="Colli Sospesi", anchor=tk.CENTER)
-        self.pending_treeview.heading("Receipt Date", text="Data Prevista", anchor=tk.CENTER)
-        
+        p_scroll.config(command=self.pending_treeview.yview)
+
+        col_cfg = [
+            ("Order ID",       "ID Ordine",      tk.W,      130),
+            ("SKU",            "SKU",             tk.W,       90),
+            ("Description",    "Descrizione",     tk.W,      200),
+            ("Pack Size",      "Pz/Collo",        tk.CENTER,  72),
+            ("Colli Ordinati", "Ordinati",        tk.CENTER,  80),
+            ("Colli Ricevuti", "Ricevuti",        tk.CENTER,  80),
+            ("Colli Sospesi",  "In Sospeso",      tk.CENTER,  80),
+            ("Receipt Date",   "Data Prevista",   tk.CENTER, 110),
+        ]
+        for col_id, heading, _anchor, width in col_cfg:
+            anchor = cast(Literal["w", "center", "e"], _anchor)
+            self.pending_treeview.column(col_id, anchor=anchor, width=width, stretch=(col_id == "Description"))
+            self.pending_treeview.heading(col_id, text=heading, anchor=anchor)
+
         self.pending_treeview.pack(fill="both", expand=True)
-        
-        # Doppio click per editare quantità ricevuta
         self.pending_treeview.bind("<Double-1>", self._on_pending_qty_double_click)
-        
-        # Tag per evidenziare righe modificate
-        self.pending_treeview.tag_configure("edited", background="#ffffcc")
-        
-        # === BULK RECEIPT CONFIRMATION ===
-        confirm_frame = ttk.Frame(main_frame)
-        confirm_frame.pack(side="top", fill="x", pady=(0, 10))
-        
-        # Lot tracking inputs
-        lot_input_frame = ttk.LabelFrame(confirm_frame, text="Tracciabilità Lotto (opzionale)", padding=5)
-        lot_input_frame.pack(side="top", fill="x", pady=(0, 5))
-        
-        ttk.Label(lot_input_frame, text="Lotto ID:").grid(row=0, column=0, padx=5, sticky="e")
+
+        # Row tags
+        self.pending_treeview.tag_configure("edited",   background="#fffde7")   # yellow tint
+        self.pending_treeview.tag_configure("complete", background="#e8f5e9")   # green tint
+        self.pending_treeview.tag_configure("partial",  background="#fff3e0")   # orange tint
+
+        pending_hint = ttk.Label(
+            pending_card,
+            text="💡 Doppio clic sulla colonna Ricevuti per modificare la quantità.",
+            font=("Helvetica", 8),
+            foreground="gray",
+        )
+        pending_hint.pack(anchor="w", pady=(4, 0))
+
+        # ── SECTION 2 — LOT TRACEABILITY + CONFIRM ───────────────────────────
+        lot_card = ttk.LabelFrame(main_frame, text="  🔍  Dettagli Tracciabilità Lotto  —  Opzionale", padding=(10, 8))
+        lot_card.pack(fill="x", padx=16, pady=(0, 10))
+
+        # Accent left border simulation via a thin Frame
+        accent = tk.Frame(lot_card, width=4, background="#2563EB")
+        accent.pack(side="left", fill="y", padx=(0, 10))
+
+        lot_fields = ttk.Frame(lot_card)
+        lot_fields.pack(side="left", fill="both", expand=True)
+
+        # Three-column grid for fields
+        lot_fields.columnconfigure(0, weight=1)
+        lot_fields.columnconfigure(1, weight=1)
+        lot_fields.columnconfigure(2, weight=1)
+
+        # Field: Lot ID
+        f0 = ttk.Frame(lot_fields)
+        f0.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        ttk.Label(f0, text="Lotto ID", font=("Helvetica", 9, "bold")).pack(anchor="w")
         self.lot_id_var = tk.StringVar()
-        ttk.Entry(lot_input_frame, textvariable=self.lot_id_var, width=25).grid(row=0, column=1, padx=5, sticky="w")
-        ttk.Label(lot_input_frame, text="(es. LOT-2026-001, lasciare vuoto per auto-generare)").grid(row=0, column=2, padx=5, sticky="w")
-        
-        ttk.Label(lot_input_frame, text="Data Scadenza:").grid(row=1, column=0, padx=5, sticky="e")
+        ttk.Entry(f0, textvariable=self.lot_id_var, width=24).pack(fill="x", pady=(2, 0))
+        ttk.Label(f0, text="Lasciare vuoto per auto-generare.", foreground="gray", font=("Helvetica", 8)).pack(anchor="w")
+
+        # Field: Expiry Date
+        f1 = ttk.Frame(lot_fields)
+        f1.grid(row=0, column=1, sticky="nsew", padx=(0, 12))
+        ttk.Label(f1, text="Data Scadenza", font=("Helvetica", 9, "bold")).pack(anchor="w")
         self.expiry_date_var = tk.StringVar()
-        ttk.Entry(lot_input_frame, textvariable=self.expiry_date_var, width=25).grid(row=1, column=1, padx=5, sticky="w")
-        ttk.Label(lot_input_frame, text="(formato YYYY-MM-DD, lasciare vuoto se prodotto non deperibile)").grid(row=1, column=2, padx=5, sticky="w")
-        
-        # Confirmation button
-        button_frame = ttk.Frame(confirm_frame)
-        button_frame.pack(side="top", fill="x", pady=(5, 0))
-        
-        ttk.Label(button_frame, text="Verifica quantità nella tabella (doppio click per modificare), poi:", font=("Helvetica", 10)).pack(side="left", padx=(10, 20))
-        ttk.Button(button_frame, text="✓ Chiudi Ricevimento (Conferma Tutte)", command=self._close_receipt_bulk, style="Accent.TButton").pack(side="left", padx=5)
-        
-        # === RECEIVING HISTORY ===
-        history_frame = ttk.LabelFrame(main_frame, text="Storico Ricevimenti", padding=5)
-        history_frame.pack(side="top", fill="both", expand=True)
-        
-        # Toolbar
-        history_toolbar = ttk.Frame(history_frame)
-        history_toolbar.pack(side="top", fill="x", pady=(0, 5))
-        ttk.Button(history_toolbar, text="🔄 Aggiorna Storico", command=self._refresh_receiving_history).pack(side="left", padx=5)
-        
-        ttk.Label(history_toolbar, text="Filtra SKU:").pack(side="left", padx=(20, 5))
+        ttk.Entry(f1, textvariable=self.expiry_date_var, width=24).pack(fill="x", pady=(2, 0))
+        ttk.Label(f1, text="Obbligatoria per prodotti deperibili  (YYYY-MM-DD).", foreground="gray", font=("Helvetica", 8)).pack(anchor="w")
+
+        # Field: Notes
+        f2 = ttk.Frame(lot_fields)
+        f2.grid(row=0, column=2, sticky="nsew")
+        ttk.Label(f2, text="Note", font=("Helvetica", 9, "bold")).pack(anchor="w")
+        self.receiving_notes_var = tk.StringVar()
+        ttk.Entry(f2, textvariable=self.receiving_notes_var, width=28).pack(fill="x", pady=(2, 0))
+        ttk.Label(f2, text="Eventuali danni o discrepanze…", foreground="gray", font=("Helvetica", 8)).pack(anchor="w")
+
+        # Confirm button — right-aligned, vertically centered
+        confirm_btn_frame = ttk.Frame(lot_card)
+        confirm_btn_frame.pack(side="right", padx=(16, 4), fill="y")
+        ttk.Button(
+            confirm_btn_frame,
+            text="✔  Conferma Ricevimento",
+            command=self._close_receipt_bulk,
+            style="Accent.TButton",
+            width=22,
+        ).pack(expand=True)
+
+        # ── SECTION 3 — RECEIPT HISTORY ──────────────────────────────────────
+        history_card = ttk.LabelFrame(main_frame, text="  🕐  Storico Ricevimenti  —  Articoli recentemente processati", padding=(10, 6))
+        history_card.pack(fill="both", expand=True, padx=16, pady=(0, 14))
+
+        h_toolbar = ttk.Frame(history_card)
+        h_toolbar.pack(fill="x", pady=(0, 6))
+
+        ttk.Label(h_toolbar, text="🔍").pack(side="left")
         self.history_filter_sku_var = tk.StringVar()
-        
-        # Autocomplete per SKU
         history_filter_ac = AutocompleteEntry(
-            history_toolbar,
+            h_toolbar,
             textvariable=self.history_filter_sku_var,
             items_callback=self._filter_sku_items_simple,
-            width=25
+            width=22,
         )
-        history_filter_ac.pack(side="left", padx=(0, 5))
-        ttk.Button(history_toolbar, text="Applica Filtro", command=self._refresh_receiving_history).pack(side="left", padx=5)
-        ttk.Button(history_toolbar, text="Cancella Filtro", command=self._clear_history_filter).pack(side="left", padx=5)
-        
-        # History table
-        history_scroll = ttk.Scrollbar(history_frame)
-        history_scroll.pack(side="right", fill="y")
-        
+        history_filter_ac.pack(side="left", padx=(2, 6))
+        ttk.Label(h_toolbar, text="Filtra per SKU", foreground="gray", font=("Helvetica", 9)).pack(side="left")
+
+        ttk.Button(h_toolbar, text="Applica", command=self._refresh_receiving_history).pack(side="right", padx=(4, 0))
+        ttk.Button(h_toolbar, text="✕ Cancella", command=self._clear_history_filter).pack(side="right", padx=(4, 0))
+
+        h_tv_frame = ttk.Frame(history_card)
+        h_tv_frame.pack(fill="both", expand=True)
+
+        h_scroll = ttk.Scrollbar(h_tv_frame, orient="vertical")
+        h_scroll.pack(side="right", fill="y")
+
+        h_cols = ("Document ID", "Receipt ID", "Date", "SKU", "Qty Received", "Receipt Date", "Order IDs")
         self.receiving_history_treeview = ttk.Treeview(
-            history_frame,
-            columns=("Document ID", "Receipt ID", "Date", "SKU", "Qty Received", "Receipt Date", "Order IDs"),
-            height=8,
-            yscrollcommand=history_scroll.set,
+            h_tv_frame,
+            columns=h_cols,
+            show="headings",
+            height=7,
+            yscrollcommand=h_scroll.set,
         )
-        history_scroll.config(command=self.receiving_history_treeview.yview)
-        
-        self.receiving_history_treeview.column("#0", width=0, stretch=tk.NO)
-        self.receiving_history_treeview.column("Document ID", anchor=tk.W, width=120)
-        self.receiving_history_treeview.column("Receipt ID", anchor=tk.W, width=120)
-        self.receiving_history_treeview.column("Date", anchor=tk.CENTER, width=90)
-        self.receiving_history_treeview.column("SKU", anchor=tk.W, width=80)
-        self.receiving_history_treeview.column("Qty Received", anchor=tk.CENTER, width=90)
-        self.receiving_history_treeview.column("Receipt Date", anchor=tk.CENTER, width=100)
-        self.receiving_history_treeview.column("Order IDs", anchor=tk.W, width=200)
-        
-        self.receiving_history_treeview.heading("Document ID", text="Documento", anchor=tk.W)
-        self.receiving_history_treeview.heading("Receipt ID", text="ID Ricevimento", anchor=tk.W)
-        self.receiving_history_treeview.heading("Date", text="Data Reg.", anchor=tk.CENTER)
-        self.receiving_history_treeview.heading("SKU", text="SKU", anchor=tk.W)
-        self.receiving_history_treeview.heading("Qty Received", text="Q.tà", anchor=tk.CENTER)
-        self.receiving_history_treeview.heading("Receipt Date", text="Data Ric.", anchor=tk.CENTER)
-        self.receiving_history_treeview.heading("Order IDs", text="Ordini Collegati", anchor=tk.W)
-        
+        h_scroll.config(command=self.receiving_history_treeview.yview)
+
+        h_col_cfg = [
+            ("Document ID",  "Documento",        tk.W,      110),
+            ("Receipt ID",   "ID Ricevimento",   tk.W,      120),
+            ("Date",         "Data Reg.",         tk.CENTER,  90),
+            ("SKU",          "SKU",               tk.W,       90),
+            ("Qty Received", "Q.tà",              tk.CENTER,  60),
+            ("Receipt Date", "Data Ric.",         tk.CENTER,  90),
+            ("Order IDs",    "Ordini Collegati",  tk.W,      220),
+        ]
+        for col_id, heading, _anchor, width in h_col_cfg:
+            anchor = cast(Literal["w", "center", "e"], _anchor)
+            self.receiving_history_treeview.column(col_id, anchor=anchor, width=width, stretch=(col_id == "Order IDs"))
+            self.receiving_history_treeview.heading(col_id, text=heading, anchor=anchor)
+
         self.receiving_history_treeview.pack(fill="both", expand=True)
-        
-        # Initial load
+
+        # ── Initial data load ─────────────────────────────────────────────────
         self._refresh_pending_orders()
         self._refresh_receiving_history()
     
@@ -3232,7 +3310,7 @@ class DesktopOrderApp:
                 document_id=document_id,
                 receipt_date=receipt_date_obj,
                 items=items,
-                notes="Bulk receiving via GUI",
+                notes=self.receiving_notes_var.get().strip() or "Bulk receiving via GUI",
             )
             
             if already_processed:
