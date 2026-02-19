@@ -3361,271 +3361,458 @@ class DesktopOrderApp:
         return [sku for sku in all_skus if search_text in sku.lower()]
     
     def _build_exception_tab(self):
-        """Build Exception tab (WASTE, ADJUST, UNFULFILLED)."""
-        main_frame = ttk.Frame(self.exception_tab)
-        main_frame.pack(fill="both", expand=True, padx=5, pady=5)
-        
-        # Title
-        title_frame = ttk.Frame(main_frame)
-        title_frame.pack(side="top", fill="x", pady=(0, 10))
-        ttk.Label(title_frame, text="4️⃣ Gestione Eccezioni", font=("Helvetica", 14, "bold")).pack(side="left")
-        ttk.Label(title_frame, text="(Scarti, correzioni, merce non consegnata)", font=("Helvetica", 9, "italic"), foreground="gray").pack(side="left", padx=(10, 0))
-        
-        # === QUICK ENTRY FORM (GRID LAYOUT) ===
-        form_frame = ttk.LabelFrame(main_frame, text="Inserimento Rapido Eccezione (campi obbligatori marcati con *)", padding=15)
-        form_frame.pack(side="top", fill="x", pady=(0, 10))
-        
-        # Grid configuration (3 columns x 3 rows + buttons)
-        form_frame.columnconfigure(1, weight=1)  # Column per widget input
-        form_frame.columnconfigure(3, weight=1)
-        
-        # ROW 0: SKU (obbligatorio) - PRIMA POSIZIONE con ricerca filtrata
-        ttk.Label(form_frame, text="SKU: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=0, column=0, sticky="e", padx=(0, 8), pady=8)
-        self.exception_sku_var = tk.StringVar()
-        
-        # Entry invece di Combobox per mantenere focus
-        self.exception_sku_entry = ttk.Entry(
-            form_frame,
-            textvariable=self.exception_sku_var,
-            width=35,
-        )
-        self.exception_sku_entry.grid(row=0, column=1, sticky="w", pady=8)
-        
-        # Listbox popup per autocomplete
-        self.exception_sku_listbox = None
-        self.exception_sku_popup = None
-        
-        # Dizionario per mapping display -> codice SKU
-        self.exception_sku_map = {}
-        
-        # Trace per filtro real-time e validazione
-        self.exception_sku_var.trace('w', lambda *args: self._filter_exception_sku())
-        self.exception_sku_var.trace('w', lambda *args: self._validate_exception_form())
-        
-        # Bind eventi per gestire selezione da listbox
-        self.exception_sku_entry.bind('<Down>', self._on_sku_down)
-        self.exception_sku_entry.bind('<Up>', self._on_sku_up)
-        self.exception_sku_entry.bind('<Return>', self._on_sku_select)
-        self.exception_sku_entry.bind('<Escape>', self._on_sku_escape)
-        self.exception_sku_entry.bind('<FocusOut>', self._on_sku_focus_out)
-        
-        # Populate SKU dropdown
-        self._populate_exception_sku_dropdown()
-        
-        # ROW 0 col 2: Tipo Evento (obbligatorio)
-        ttk.Label(form_frame, text="Tipo Evento: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=0, column=2, sticky="e", padx=(20, 8), pady=8)
-        self.exception_type_var = tk.StringVar(value="WASTE")
-        exception_type_combo = ttk.Combobox(
-            form_frame,
-            textvariable=self.exception_type_var,
-            values=["WASTE", "ADJUST", "UNFULFILLED"],
-            state="readonly",
-            width=15,
-        )
-        exception_type_combo.grid(row=0, column=3, sticky="w", pady=8)
-        exception_type_combo.bind("<<ComboboxSelected>>", self._on_exception_type_change)
-        
-        # ROW 1: Quantità (obbligatorio) + Hint dinamico
-        ttk.Label(form_frame, text="Quantità: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=1, column=0, sticky="e", padx=(0, 8), pady=8)
-        qty_frame = ttk.Frame(form_frame)
-        qty_frame.grid(row=1, column=1, sticky="w", pady=8)
-        
-        self.exception_qty_var = tk.StringVar()
-        ttk.Entry(qty_frame, textvariable=self.exception_qty_var, width=12).pack(side="left", padx=(0, 10))
-        self.exception_qty_var.trace('w', lambda *args: self._validate_exception_form())
-        
-        # Hint dinamico per quantità
-        self.exception_qty_hint = ttk.Label(qty_frame, text="(scartato)", font=("Helvetica", 8, "italic"), foreground="#777")
-        self.exception_qty_hint.pack(side="left")
-        
-        # ROW 1 col 2: Data (obbligatorio)
-        ttk.Label(form_frame, text="Data: *", font=("Helvetica", 9, "bold"), foreground="#d9534f").grid(row=1, column=2, sticky="e", padx=(20, 8), pady=8)
-        self.exception_date_var = tk.StringVar(value=self.exception_date.isoformat())
-        if TKCALENDAR_AVAILABLE:
-            DateEntry(  # type: ignore[misc]
-                form_frame,
-                textvariable=self.exception_date_var,
-                width=12,
-                date_pattern="yyyy-mm-dd",
-            ).grid(row=1, column=3, sticky="w", pady=8)
-        else:
-            ttk.Entry(form_frame, textvariable=self.exception_date_var, width=15).grid(row=1, column=3, sticky="w", pady=8)
-        self.exception_date_var.trace('w', lambda *args: self._validate_exception_form())
-        
-        # ROW 2: Notes (opzionale) - span 4 colonne
-        ttk.Label(form_frame, text="Note:", font=("Helvetica", 9)).grid(row=2, column=0, sticky="e", padx=(0, 8), pady=8)
-        self.exception_notes_var = tk.StringVar()
-        ttk.Entry(form_frame, textvariable=self.exception_notes_var, width=70).grid(row=2, column=1, columnspan=3, sticky="ew", pady=8)
-        
-        # ROW 3: Buttons
-        button_frame = ttk.Frame(form_frame)
-        button_frame.grid(row=3, column=0, columnspan=4, sticky="w", pady=(10, 0))
-        
-        self.exception_submit_btn = ttk.Button(button_frame, text="✓ Invia Eccezione", command=self._submit_exception, state="disabled")
-        self.exception_submit_btn.pack(side="left", padx=5)
-        ttk.Button(button_frame, text="✗ Cancella Modulo", command=self._clear_exception_form).pack(side="left", padx=5)
-        
-        # Validation status label
-        self.exception_validation_label = ttk.Label(button_frame, text="", font=("Helvetica", 8), foreground="#d9534f")
-        self.exception_validation_label.pack(side="left", padx=15)
-        
-        # === PROBLEMATIC SKUs SMART FILTERS ===
-        smart_frame = ttk.LabelFrame(main_frame, text="🔍 SKU Problematici (Filtri Smart)", padding=10)
-        smart_frame.pack(side="top", fill="both", expand=True, pady=(0, 10))
-        
-        # Filter controls (checkboxes + thresholds)
-        filter_ctrl_frame = ttk.Frame(smart_frame)
-        filter_ctrl_frame.pack(side="top", fill="x", pady=(0, 10))
-        
-        # Filter checkboxes (4 filtri in una riga)
-        self.filter_oos_var = tk.BooleanVar(value=True)
-        self.filter_otif_var = tk.BooleanVar(value=True)
+        """Build Exception tab — Master-Detail split layout.
+
+        LEFT (55%) : Notebook with Triage + Storico tabs.
+        RIGHT (45%): SKU-context card + exception form card + history-action card.
+        Zero changes to business logic; only layout/wiring updated.
+        """
+        root_frame = ttk.Frame(self.exception_tab)
+        root_frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # ── Title bar ──────────────────────────────────────────────────────
+        title_bar = ttk.Frame(root_frame)
+        title_bar.pack(side="top", fill="x", pady=(0, 8))
+        ttk.Label(title_bar, text="4️⃣ Gestione Eccezioni",
+                  font=("Helvetica", 14, "bold")).pack(side="left")
+        ttk.Label(title_bar, text="(Scarti, correzioni, merce non consegnata)",
+                  font=("Helvetica", 9, "italic"), foreground="gray").pack(side="left", padx=(10, 0))
+
+        # ── PanedWindow (horizontal split) ────────────────────────────────
+        self.ex_paned = ttk.PanedWindow(root_frame, orient="horizontal")
+        self.ex_paned.pack(fill="both", expand=True)
+
+        # ══════════════════════════════════════════════════════════════════
+        # LEFT — MASTER (Notebook: Triage + Storico)
+        # ══════════════════════════════════════════════════════════════════
+        master_outer = ttk.Frame(self.ex_paned)
+        self.ex_paned.add(master_outer, weight=55)
+
+        self.ex_master_nb = ttk.Notebook(master_outer)
+        self.ex_master_nb.pack(fill="both", expand=True)
+
+        # ── Tab 1: Triage ──────────────────────────────────────────────────
+        triage_tab = ttk.Frame(self.ex_master_nb, padding=(8, 6))
+        self.ex_master_nb.add(triage_tab, text="🔍 Triage")
+
+        # Row 1 – filter checkboxes
+        filter_row1 = ttk.Frame(triage_tab)
+        filter_row1.pack(fill="x", pady=(0, 4))
+
+        self.filter_oos_var   = tk.BooleanVar(value=True)
+        self.filter_otif_var  = tk.BooleanVar(value=True)
         self.filter_wmape_var = tk.BooleanVar(value=True)
         self.filter_perish_var = tk.BooleanVar(value=True)
-        
-        ttk.Checkbutton(filter_ctrl_frame, text="OOS Rate Alto", variable=self.filter_oos_var, command=self._refresh_smart_exceptions).pack(side="left", padx=10)
-        ttk.Checkbutton(filter_ctrl_frame, text="OTIF Basso/Unfulfilled", variable=self.filter_otif_var, command=self._refresh_smart_exceptions).pack(side="left", padx=10)
-        ttk.Checkbutton(filter_ctrl_frame, text="WMAPE Alto", variable=self.filter_wmape_var, command=self._refresh_smart_exceptions).pack(side="left", padx=10)
-        ttk.Checkbutton(filter_ctrl_frame, text="Perishability Critica", variable=self.filter_perish_var, command=self._refresh_smart_exceptions).pack(side="left", padx=10)
-        
-        # Threshold controls (seconda riga)
-        threshold_frame = ttk.Frame(smart_frame)
-        threshold_frame.pack(side="top", fill="x", pady=(0, 10))
-        
-        ttk.Label(threshold_frame, text="Soglie:", font=("Helvetica", 9, "bold")).pack(side="left", padx=(0, 10))
-        
-        ttk.Label(threshold_frame, text="OOS%>", font=("Helvetica", 8)).pack(side="left")
+
+        ttk.Checkbutton(filter_row1, text="OOS Rate Alto",      variable=self.filter_oos_var).pack(side="left", padx=(0, 8))
+        ttk.Checkbutton(filter_row1, text="OTIF/Unfulfilled",   variable=self.filter_otif_var).pack(side="left", padx=(0, 8))
+        ttk.Checkbutton(filter_row1, text="WMAPE Alto",         variable=self.filter_wmape_var).pack(side="left", padx=(0, 8))
+        ttk.Checkbutton(filter_row1, text="Perishability",      variable=self.filter_perish_var).pack(side="left")
+
+        # Row 2 – threshold inputs + apply button
+        filter_row2 = ttk.Frame(triage_tab)
+        filter_row2.pack(fill="x", pady=(0, 6))
+
+        ttk.Label(filter_row2, text="OOS%>",     font=("Helvetica", 8)).pack(side="left")
         self.threshold_oos_var = tk.StringVar(value="15.0")
-        ttk.Entry(threshold_frame, textvariable=self.threshold_oos_var, width=6).pack(side="left", padx=(2, 15))
-        
-        ttk.Label(threshold_frame, text="OTIF%<", font=("Helvetica", 8)).pack(side="left")
+        ttk.Entry(filter_row2, textvariable=self.threshold_oos_var, width=5).pack(side="left", padx=(2, 8))
+
+        ttk.Label(filter_row2, text="OTIF%<",    font=("Helvetica", 8)).pack(side="left")
         self.threshold_otif_var = tk.StringVar(value="80.0")
-        ttk.Entry(threshold_frame, textvariable=self.threshold_otif_var, width=6).pack(side="left", padx=(2, 15))
-        
-        ttk.Label(threshold_frame, text="WMAPE%>", font=("Helvetica", 8)).pack(side="left")
+        ttk.Entry(filter_row2, textvariable=self.threshold_otif_var, width=5).pack(side="left", padx=(2, 8))
+
+        ttk.Label(filter_row2, text="WMAPE%>",   font=("Helvetica", 8)).pack(side="left")
         self.threshold_wmape_var = tk.StringVar(value="50.0")
-        ttk.Entry(threshold_frame, textvariable=self.threshold_wmape_var, width=6).pack(side="left", padx=(2, 15))
-        
-        ttk.Label(threshold_frame, text="Shelf Life<", font=("Helvetica", 8)).pack(side="left")
+        ttk.Entry(filter_row2, textvariable=self.threshold_wmape_var, width=5).pack(side="left", padx=(2, 8))
+
+        ttk.Label(filter_row2, text="ShelfLife<", font=("Helvetica", 8)).pack(side="left")
         self.threshold_shelf_var = tk.StringVar(value="7")
-        ttk.Entry(threshold_frame, textvariable=self.threshold_shelf_var, width=6).pack(side="left", padx=(2, 15))
-        
-        ttk.Button(threshold_frame, text="🔄 Aggiorna Filtri", command=self._refresh_smart_exceptions).pack(side="left", padx=10)
-        
-        # Smart exceptions table
-        smart_table_frame = ttk.Frame(smart_frame)
-        smart_table_frame.pack(fill="both", expand=True)
-        
-        smart_scrollbar_y = ttk.Scrollbar(smart_table_frame, orient="vertical")
-        smart_scrollbar_x = ttk.Scrollbar(smart_table_frame, orient="horizontal")
-        
+        ttk.Entry(filter_row2, textvariable=self.threshold_shelf_var, width=4).pack(side="left", padx=(2, 8))
+
+        ttk.Button(filter_row2, text="🔄 Applica",
+                   command=self._refresh_smart_exceptions).pack(side="right")
+
+        # Count label (above treeview, outside it)
+        self.ex_triage_count_lbl = ttk.Label(
+            triage_tab, text="SKU trovati: —",
+            font=("Helvetica", 8, "italic"), foreground="gray")
+        self.ex_triage_count_lbl.pack(anchor="w", pady=(0, 3))
+
+        # Triage treeview
+        triage_tv_frame = ttk.Frame(triage_tab)
+        triage_tv_frame.pack(fill="both", expand=True)
+
+        triage_sby = ttk.Scrollbar(triage_tv_frame, orient="vertical")
+        triage_sbx = ttk.Scrollbar(triage_tv_frame, orient="horizontal")
+        triage_sby.pack(side="right", fill="y")
+        triage_sbx.pack(side="bottom", fill="x")
+
         self.smart_exception_treeview = ttk.Treeview(
-            smart_table_frame,
-            columns=("sku", "description", "oos_rate", "otif", "unfulfilled", "wmape", "shelf_life", "stock", "reason"),
+            triage_tv_frame,
+            columns=("sku", "description", "oos_rate", "otif", "unfulfilled",
+                     "wmape", "shelf_life", "stock", "reason"),
             show="headings",
-            yscrollcommand=smart_scrollbar_y.set,
-            xscrollcommand=smart_scrollbar_x.set,
-            height=10,
+            yscrollcommand=triage_sby.set,
+            xscrollcommand=triage_sbx.set,
+            height=14,
+            selectmode="browse",
         )
-        
-        smart_scrollbar_y.config(command=self.smart_exception_treeview.yview)
-        smart_scrollbar_y.pack(side="right", fill="y")
-        smart_scrollbar_x.config(command=self.smart_exception_treeview.xview)
-        smart_scrollbar_x.pack(side="bottom", fill="x")
-        
+        triage_sby.config(command=self.smart_exception_treeview.yview)
+        triage_sbx.config(command=self.smart_exception_treeview.xview)
         self.smart_exception_treeview.pack(side="left", fill="both", expand=True)
-        
-        # Column headings
-        self.smart_exception_treeview.heading("sku", text="SKU")
-        self.smart_exception_treeview.heading("description", text="Descrizione")
-        self.smart_exception_treeview.heading("oos_rate", text="OOS %")
-        self.smart_exception_treeview.heading("otif", text="OTIF %")
-        self.smart_exception_treeview.heading("unfulfilled", text="Unfulfilled")
-        self.smart_exception_treeview.heading("wmape", text="WMAPE %")
-        self.smart_exception_treeview.heading("shelf_life", text="Shelf Life (d)")
-        self.smart_exception_treeview.heading("stock", text="Stock Attuale")
-        self.smart_exception_treeview.heading("reason", text="Motivo Alert")
-        
-        # Column widths
-        self.smart_exception_treeview.column("sku", width=100)
-        self.smart_exception_treeview.column("description", width=200)
-        self.smart_exception_treeview.column("oos_rate", width=70, anchor="center")
-        self.smart_exception_treeview.column("otif", width=70, anchor="center")
-        self.smart_exception_treeview.column("unfulfilled", width=80, anchor="center")
-        self.smart_exception_treeview.column("wmape", width=80, anchor="center")
-        self.smart_exception_treeview.column("shelf_life", width=100, anchor="center")
-        self.smart_exception_treeview.column("stock", width=100, anchor="center")
-        self.smart_exception_treeview.column("reason", width=250)
-        
-        # Quick action buttons
-        smart_action_frame = ttk.Frame(smart_frame)
-        smart_action_frame.pack(side="top", fill="x", pady=(10, 0))
-        
-        ttk.Button(smart_action_frame, text="📝 Apri in Admin", command=self._open_sku_in_admin_from_smart).pack(side="left", padx=5)
-        ttk.Label(smart_action_frame, text="(oppure doppio-click sulla riga)", font=("Helvetica", 8, "italic"), foreground="gray").pack(side="left", padx=(5, 20))
-        
-        # Bind double-click for quick access
-        self.smart_exception_treeview.bind("<Double-1>", lambda e: self._open_sku_in_admin_from_smart())
-        
-        # === HISTORY TABLE ===
-        history_frame = ttk.LabelFrame(main_frame, text="Storico Eccezioni", padding=5)
-        history_frame.pack(fill="both", expand=True)
-        
-        # Toolbar
-        toolbar_frame = ttk.Frame(history_frame)
-        toolbar_frame.pack(side="top", fill="x", pady=(0, 5))
-        
-        ttk.Label(toolbar_frame, text="Visualizza Data:", font=("Helvetica", 9)).pack(side="left", padx=(0, 5))
+
+        for col, label, width, anchor in [
+            ("sku",        "SKU",          90, "w"),
+            ("description","Descrizione", 155, "w"),
+            ("oos_rate",   "OOS%",         58, "center"),
+            ("otif",       "OTIF%",        58, "center"),
+            ("unfulfilled","Unful.",        52, "center"),
+            ("wmape",      "WMAPE%",       68, "center"),
+            ("shelf_life", "ShelfLife",    68, "center"),
+            ("stock",      "Stock",        62, "center"),
+            ("reason",     "Motivo Alert",210, "w"),
+        ]:
+            self.smart_exception_treeview.heading(col, text=label)
+            self.smart_exception_treeview.column(col, width=width, anchor=anchor)
+
+        self.smart_exception_treeview.bind(
+            "<<TreeviewSelect>>", self._on_select_triage_row)
+        self.smart_exception_treeview.bind(
+            "<Double-1>", lambda e: self._open_sku_in_admin_from_smart())
+
+        # ── Tab 2: Storico ─────────────────────────────────────────────────
+        history_tab = ttk.Frame(self.ex_master_nb, padding=(8, 6))
+        self.ex_master_nb.add(history_tab, text="📋 Storico")
+
+        hist_toolbar = ttk.Frame(history_tab)
+        hist_toolbar.pack(fill="x", pady=(0, 6))
+
+        ttk.Label(hist_toolbar, text="Data:", font=("Helvetica", 9)).pack(side="left")
         self.exception_view_date_var = tk.StringVar(value=self.exception_date.isoformat())
         if TKCALENDAR_AVAILABLE:
             DateEntry(  # type: ignore[misc]
-                toolbar_frame,
+                hist_toolbar,
                 textvariable=self.exception_view_date_var,
                 width=12,
                 date_pattern="yyyy-mm-dd",
-            ).pack(side="left", padx=(0, 5))
+            ).pack(side="left", padx=(4, 6))
         else:
-            ttk.Entry(toolbar_frame, textvariable=self.exception_view_date_var, width=15).pack(side="left", padx=(0, 5))
-        ttk.Button(toolbar_frame, text="🔄 Aggiorna", command=self._refresh_exception_tab).pack(side="left", padx=5)
-        ttk.Button(toolbar_frame, text="📅 Oggi", command=self._set_exception_today).pack(side="left", padx=5)
-        
-        # Separator
-        ttk.Separator(toolbar_frame, orient="vertical").pack(side="left", fill="y", padx=10)
-        
-        ttk.Button(toolbar_frame, text="🗑️ Annulla Selezionata", command=self._revert_selected_exception).pack(side="left", padx=5)
-        ttk.Button(toolbar_frame, text="🗑️ Annulla Tutte...", command=self._revert_bulk_exceptions).pack(side="left", padx=5)
-        
-        # Table
-        table_frame = ttk.Frame(history_frame)
-        table_frame.pack(fill="both", expand=True)
-        
-        # Scrollbar
-        scrollbar = ttk.Scrollbar(table_frame)
-        scrollbar.pack(side="right", fill="y")
-        
+            ttk.Entry(hist_toolbar, textvariable=self.exception_view_date_var,
+                      width=14).pack(side="left", padx=(4, 6))
+
+        ttk.Button(hist_toolbar, text="🔄 Aggiorna",
+                   command=self._refresh_exception_tab).pack(side="left", padx=(0, 4))
+        ttk.Button(hist_toolbar, text="📅 Oggi",
+                   command=self._set_exception_today).pack(side="left")
+
+        # History count label
+        self.ex_history_count_lbl = ttk.Label(
+            history_tab, text="",
+            font=("Helvetica", 8, "italic"), foreground="gray")
+        self.ex_history_count_lbl.pack(anchor="w", pady=(0, 3))
+
+        # History treeview
+        hist_tv_frame = ttk.Frame(history_tab)
+        hist_tv_frame.pack(fill="both", expand=True)
+
+        hist_sb = ttk.Scrollbar(hist_tv_frame)
+        hist_sb.pack(side="right", fill="y")
+
         self.exception_treeview = ttk.Treeview(
-            table_frame,
+            hist_tv_frame,
             columns=("Type", "SKU", "Qty", "Notes", "Date"),
-            height=9,
-            yscrollcommand=scrollbar.set,
+            height=16,
+            yscrollcommand=hist_sb.set,
+            show="headings",
+            selectmode="browse",
         )
-        scrollbar.config(command=self.exception_treeview.yview)
-        
-        self.exception_treeview.column("#0", width=0, stretch=tk.NO)
-        self.exception_treeview.column("Type", anchor=tk.W, width=100)
-        self.exception_treeview.column("SKU", anchor=tk.W, width=120)
-        self.exception_treeview.column("Qty", anchor=tk.CENTER, width=90)
-        self.exception_treeview.column("Notes", anchor=tk.W, width=200)
-        self.exception_treeview.column("Date", anchor=tk.CENTER, width=110)
-        
-        self.exception_treeview.heading("Type", text="Type", anchor=tk.W)
-        self.exception_treeview.heading("SKU", text="SKU", anchor=tk.W)
-        self.exception_treeview.heading("Qty", text="Qty", anchor=tk.CENTER)
-        self.exception_treeview.heading("Notes", text="Notes", anchor=tk.W)
-        self.exception_treeview.heading("Date", text="Date", anchor=tk.CENTER)
-        
+        hist_sb.config(command=self.exception_treeview.yview)
+
+        self.exception_treeview.column("Type",  width=100, anchor="w")
+        self.exception_treeview.column("SKU",   width=110, anchor="w")
+        self.exception_treeview.column("Qty",   width=70,  anchor="center")
+        self.exception_treeview.column("Notes", width=200, anchor="w")
+        self.exception_treeview.column("Date",  width=100, anchor="center")
+
+        self.exception_treeview.heading("Type",  text="Tipo")
+        self.exception_treeview.heading("SKU",   text="SKU")
+        self.exception_treeview.heading("Qty",   text="Qtà")
+        self.exception_treeview.heading("Notes", text="Note")
+        self.exception_treeview.heading("Date",  text="Data")
+
         self.exception_treeview.pack(fill="both", expand=True)
-    
+        self.exception_treeview.bind(
+            "<<TreeviewSelect>>", self._on_select_history_row)
+
+        # ══════════════════════════════════════════════════════════════════
+        # RIGHT — DETAIL (Context card + Form card + Action card)
+        # ══════════════════════════════════════════════════════════════════
+        detail_outer = ttk.Frame(self.ex_paned, padding=(12, 0, 8, 0))
+        self.ex_paned.add(detail_outer, weight=45)
+
+        detail_outer.rowconfigure(0, weight=0)
+        detail_outer.rowconfigure(1, weight=0)
+        detail_outer.rowconfigure(2, weight=0)
+        detail_outer.columnconfigure(0, weight=1)
+
+        # ── Card 1: Contesto SKU ──────────────────────────────────────────
+        ctx_lf = ttk.LabelFrame(detail_outer, text="📦 Contesto SKU", padding=10)
+        ctx_lf.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        ctx_lf.columnconfigure(1, weight=1)
+        ctx_lf.columnconfigure(3, weight=1)
+
+        ttk.Label(ctx_lf, text="SKU:",        font=("Helvetica", 8, "bold")).grid(row=0, column=0, sticky="w", padx=(0, 4))
+        self.ex_ctx_sku_lbl  = ttk.Label(ctx_lf, text="—", foreground="#555")
+        self.ex_ctx_sku_lbl.grid(row=0, column=1, sticky="w", padx=(0, 16))
+
+        ttk.Label(ctx_lf, text="Descrizione:", font=("Helvetica", 8, "bold")).grid(row=0, column=2, sticky="w", padx=(0, 4))
+        self.ex_ctx_desc_lbl = ttk.Label(ctx_lf, text="—", foreground="#555")
+        self.ex_ctx_desc_lbl.grid(row=0, column=3, sticky="w")
+
+        ttk.Label(ctx_lf, text="Stock:",  font=("Helvetica", 8, "bold")).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self.ex_ctx_stock_lbl = ttk.Label(ctx_lf, text="—", foreground="#555")
+        self.ex_ctx_stock_lbl.grid(row=1, column=1, sticky="w", pady=(4, 0))
+
+        ttk.Label(ctx_lf, text="On Order:", font=("Helvetica", 8, "bold")).grid(row=1, column=2, sticky="w", padx=(0, 4), pady=(4, 0))
+        self.ex_ctx_onorder_lbl = ttk.Label(ctx_lf, text="—", foreground="#555")
+        self.ex_ctx_onorder_lbl.grid(row=1, column=3, sticky="w", pady=(4, 0))
+
+        ttk.Label(ctx_lf, text="Shelf Life:", font=("Helvetica", 8, "bold")).grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.ex_ctx_shelf_lbl = ttk.Label(ctx_lf, text="—", foreground="#555")
+        self.ex_ctx_shelf_lbl.grid(row=2, column=1, sticky="w", pady=(4, 0))
+
+        self.ex_ctx_alert_lbl = ttk.Label(
+            ctx_lf, text="", foreground="#c0392b", font=("Helvetica", 8, "bold"))
+        self.ex_ctx_alert_lbl.grid(row=2, column=2, columnspan=2, sticky="w", pady=(4, 0))
+
+        # ── Card 2: Form Eccezione ────────────────────────────────────────
+        form_lf = ttk.LabelFrame(detail_outer, text="✏️ Eccezione", padding=(12, 10))
+        form_lf.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        form_lf.columnconfigure(1, weight=1)
+
+        # SKU *
+        ttk.Label(form_lf, text="SKU *").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=8)
+        self.exception_sku_var = tk.StringVar()
+        self.exception_sku_entry = ttk.Entry(
+            form_lf, textvariable=self.exception_sku_var, width=28)
+        self.exception_sku_entry.grid(row=0, column=1, sticky="ew", pady=8)
+        self.ex_sku_err_lbl = ttk.Label(
+            form_lf, text="", foreground="#c0392b", font=("Helvetica", 8))
+        self.ex_sku_err_lbl.grid(row=0, column=2, sticky="w", padx=(6, 0))
+
+        self.exception_sku_listbox = None
+        self.exception_sku_popup   = None
+        self.exception_sku_map     = {}
+
+        self.exception_sku_var.trace("w", lambda *a: self._filter_exception_sku())
+        self.exception_sku_var.trace("w", lambda *a: self._validate_exception_form())
+        self.exception_sku_entry.bind("<Down>",     self._on_sku_down)
+        self.exception_sku_entry.bind("<Up>",       self._on_sku_up)
+        self.exception_sku_entry.bind("<Return>",   self._on_sku_select)
+        self.exception_sku_entry.bind("<Escape>",   self._on_sku_escape)
+        self.exception_sku_entry.bind("<FocusOut>", self._on_sku_focus_out)
+        self._populate_exception_sku_dropdown()
+
+        # Quantità *
+        ttk.Label(form_lf, text="Quantità *").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=8)
+        qty_inner = ttk.Frame(form_lf)
+        qty_inner.grid(row=1, column=1, sticky="ew", pady=8)
+        self.exception_qty_var = tk.StringVar()
+        ttk.Entry(qty_inner, textvariable=self.exception_qty_var, width=10).pack(side="left", padx=(0, 8))
+        self.exception_qty_hint = ttk.Label(
+            qty_inner, text="(scartato)", font=("Helvetica", 8, "italic"), foreground="#777")
+        self.exception_qty_hint.pack(side="left")
+        self.exception_qty_var.trace("w", lambda *a: self._validate_exception_form())
+        self.ex_qty_err_lbl = ttk.Label(
+            form_lf, text="", foreground="#c0392b", font=("Helvetica", 8))
+        self.ex_qty_err_lbl.grid(row=1, column=2, sticky="w", padx=(6, 0))
+
+        # Tipo Evento *
+        ttk.Label(form_lf, text="Tipo Evento *").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=8)
+        self.exception_type_var = tk.StringVar(value="WASTE")
+        exc_type_cb = ttk.Combobox(
+            form_lf,
+            textvariable=self.exception_type_var,
+            values=["WASTE", "ADJUST", "UNFULFILLED"],
+            state="readonly",
+            width=18,
+        )
+        exc_type_cb.grid(row=2, column=1, sticky="w", pady=8)
+        exc_type_cb.bind("<<ComboboxSelected>>", self._on_exception_type_change)
+
+        # Data *
+        ttk.Label(form_lf, text="Data *").grid(row=3, column=0, sticky="w", padx=(0, 8), pady=8)
+        self.exception_date_var = tk.StringVar(value=self.exception_date.isoformat())
+        if TKCALENDAR_AVAILABLE:
+            DateEntry(  # type: ignore[misc]
+                form_lf,
+                textvariable=self.exception_date_var,
+                width=14,
+                date_pattern="yyyy-mm-dd",
+            ).grid(row=3, column=1, sticky="w", pady=8)
+        else:
+            ttk.Entry(form_lf, textvariable=self.exception_date_var,
+                      width=16).grid(row=3, column=1, sticky="w", pady=8)
+        self.exception_date_var.trace("w", lambda *a: self._validate_exception_form())
+        self.ex_date_err_lbl = ttk.Label(
+            form_lf, text="", foreground="#c0392b", font=("Helvetica", 8))
+        self.ex_date_err_lbl.grid(row=3, column=2, sticky="w", padx=(6, 0))
+
+        # Note (optional, spans full width)
+        ttk.Label(form_lf, text="Note").grid(row=4, column=0, sticky="nw", padx=(0, 8), pady=8)
+        self.exception_notes_var = tk.StringVar()
+        ttk.Entry(form_lf, textvariable=self.exception_notes_var).grid(
+            row=4, column=1, columnspan=2, sticky="ew", pady=8)
+
+        # CTA row
+        cta_frame = ttk.Frame(form_lf)
+        cta_frame.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+
+        self.exception_submit_btn = ttk.Button(
+            cta_frame, text="✓ Salva Eccezione",
+            command=self._submit_exception, state="disabled")
+        self.exception_submit_btn.pack(side="left", padx=(0, 8))
+
+        ttk.Button(cta_frame, text="✗ Pulisci",
+                   command=self._clear_exception_form).pack(side="left")
+
+        self.exception_validation_label = ttk.Label(
+            cta_frame, text="", font=("Helvetica", 8), foreground="#c0392b")
+        self.exception_validation_label.pack(side="left", padx=(12, 0))
+
+        # Tab-order enforced via grid row order (SKU→Qty→Tipo→Data→Note→Salva)
+
+        # ── Card 3: Azioni sullo Storico ──────────────────────────────────
+        action_lf = ttk.LabelFrame(
+            detail_outer, text="🗑️ Azione su Evento Selezionato", padding=10)
+        action_lf.grid(row=2, column=0, sticky="ew")
+
+        self.ex_action_summary_lbl = ttk.Label(
+            action_lf,
+            text="Seleziona una riga nello Storico per abilitare le azioni.",
+            font=("Helvetica", 8, "italic"),
+            foreground="gray",
+            wraplength=330,
+        )
+        self.ex_action_summary_lbl.pack(anchor="w", pady=(0, 8))
+
+        action_btn_row = ttk.Frame(action_lf)
+        action_btn_row.pack(fill="x")
+
+        self.ex_revert_one_btn = ttk.Button(
+            action_btn_row,
+            text="↩ Annulla evento selezionato",
+            command=self._revert_selected_exception,
+            state="disabled",
+        )
+        self.ex_revert_one_btn.pack(side="left", padx=(0, 8))
+
+        self.ex_revert_all_btn = ttk.Button(
+            action_btn_row,
+            text="⚠ Annulla tutto (giorno)…",
+            command=self._revert_bulk_exceptions,
+            state="disabled",
+        )
+        self.ex_revert_all_btn.pack(side="left")
+
+    # ── New master-detail binding methods ─────────────────────────────────
+
+    def _on_select_triage_row(self, event=None):
+        """Fill SKU form and context card when a triage row is selected."""
+        selected = self.smart_exception_treeview.selection()
+        if not selected:
+            return
+        values = self.smart_exception_treeview.item(selected[0])["values"]
+        sku = str(values[0]) if values else ""
+        if not sku:
+            return
+        # Pre-fill form with display string "SKU - Description"
+        skus = self.csv_layer.read_skus()
+        sku_obj = next((s for s in skus if s.sku == sku), None)
+        display = f"{sku_obj.sku} - {sku_obj.description}" if sku_obj else sku
+        # Pause autocomplete popup while setting
+        self.exception_sku_var.set(display)
+        self._hide_sku_popup()
+        self._update_sku_context_card(sku)
+
+    def _on_select_history_row(self, event=None):
+        """Enable action card and fill context when a history row is selected."""
+        selected = self.exception_treeview.selection()
+        if not selected:
+            self._reset_history_action_card()
+            return
+        values = self.exception_treeview.item(selected[0])["values"]
+        if not values:
+            self._reset_history_action_card()
+            return
+        event_type, sku, qty, notes, event_date = values
+        self.ex_action_summary_lbl.config(
+            text=(f"Evento: {event_type}  •  SKU: {sku}"
+                  f"  •  Qtà: {qty}  •  Data: {event_date}"),
+            foreground="#333",
+        )
+        self.ex_revert_one_btn.config(state="normal")
+        self.ex_revert_all_btn.config(state="normal")
+        # Pre-fill SKU form
+        skus = self.csv_layer.read_skus()
+        sku_obj = next((s for s in skus if s.sku == sku), None)
+        display = f"{sku_obj.sku} - {sku_obj.description}" if sku_obj else str(sku)
+        self.exception_sku_var.set(display)
+        self._hide_sku_popup()
+        self._update_sku_context_card(str(sku))
+
+    def _reset_history_action_card(self):
+        """Reset action card to disabled/placeholder state."""
+        if hasattr(self, "ex_action_summary_lbl"):
+            self.ex_action_summary_lbl.config(
+                text="Seleziona una riga nello Storico per abilitare le azioni.",
+                foreground="gray",
+            )
+        if hasattr(self, "ex_revert_one_btn"):
+            self.ex_revert_one_btn.config(state="disabled")
+        if hasattr(self, "ex_revert_all_btn"):
+            self.ex_revert_all_btn.config(state="disabled")
+
+    def _update_sku_context_card(self, sku: str):
+        """Populate the context card for the given SKU code."""
+        if not hasattr(self, "ex_ctx_sku_lbl"):
+            return
+        skus = self.csv_layer.read_skus()
+        sku_obj = next((s for s in skus if s.sku == sku), None)
+        if not sku_obj:
+            for lbl in (self.ex_ctx_sku_lbl, self.ex_ctx_desc_lbl,
+                        self.ex_ctx_stock_lbl, self.ex_ctx_onorder_lbl, self.ex_ctx_shelf_lbl):
+                lbl.config(text="—")
+            self.ex_ctx_alert_lbl.config(text="")
+            return
+        # Calculate stock
+        try:
+            from src.domain.ledger import StockCalculator
+            txns = self.csv_layer.read_transactions()
+            stock = StockCalculator.calculate_asof(
+                sku=sku,
+                asof_date=date.today() + timedelta(days=1),
+                transactions=txns,
+                sales_records=None,
+            )
+            on_hand  = stock.on_hand
+            on_order = stock.on_order
+        except Exception:
+            on_hand, on_order = "?", "?"
+        self.ex_ctx_sku_lbl.config(    text=sku_obj.sku)
+        self.ex_ctx_desc_lbl.config(   text=(sku_obj.description or "")[:32])
+        self.ex_ctx_stock_lbl.config(  text=str(on_hand))
+        self.ex_ctx_onorder_lbl.config(text=str(on_order))
+        shelf = sku_obj.shelf_life_days
+        self.ex_ctx_shelf_lbl.config(  text=f"{shelf}g" if shelf else "—")
+        # Alerts
+        alerts = []
+        if isinstance(on_hand, int) and on_hand <= 0:
+            alerts.append("⚠ Stock esaurito")
+        if shelf and isinstance(on_hand, int) and on_hand > 0 and shelf < 7:
+            alerts.append("⚠ Shelf life critica")
+        self.ex_ctx_alert_lbl.config(text="  ".join(alerts))
+
     def _populate_exception_sku_dropdown(self):
         """Popola la combo SKU con codice e descrizione, inizializzando il mapping."""
         # Leggi tutti gli SKU con descrizioni
@@ -3789,44 +3976,54 @@ class DesktopOrderApp:
         self._validate_exception_form()
     
     def _validate_exception_form(self):
-        """Valida form eccezioni in real-time e abilita/disabilita bottone Invia."""
+        """Validate exception form in real-time; drive inline field labels and CTA."""
         sku_display = self.exception_sku_var.get().strip()
-        qty_str = self.exception_qty_var.get().strip()
-        date_str = self.exception_date_var.get().strip()
-        
-        # Estrai codice SKU
+        qty_str     = self.exception_qty_var.get().strip()
+        date_str    = self.exception_date_var.get().strip()
+
+        # Extract SKU code from "SKU - Description" display format
         if " - " in sku_display:
             sku = sku_display.split(" - ")[0].strip()
         else:
             sku = sku_display
-        
-        errors = []
-        
-        if not sku:
-            errors.append("SKU")
-        
+
+        # ── Per-field validation ────────────────────────────────────────
+        sku_err = "" if sku else "Campo obbligatorio"
+        qty_err = ""
         if not qty_str:
-            errors.append("Quantità")
+            qty_err = "Campo obbligatorio"
         else:
             try:
                 int(qty_str)
             except ValueError:
-                errors.append("Quantità (deve essere numero)")
-        
+                qty_err = "Deve essere un intero"
+
+        date_err = ""
         if not date_str:
-            errors.append("Data")
+            date_err = "Campo obbligatorio"
         else:
             try:
                 date.fromisoformat(date_str)
             except ValueError:
-                errors.append("Data (formato YYYY-MM-DD)")
-        
-        if errors:
-            self.exception_submit_btn.config(state="disabled")
-            self.exception_validation_label.config(text=f"Campi mancanti: {', '.join(errors)}")
+                date_err = "Formato YYYY-MM-DD"
+
+        # ── Update inline error labels (only if widgets exist) ─────────
+        if hasattr(self, "ex_sku_err_lbl"):
+            self.ex_sku_err_lbl.config(text=sku_err)
+        if hasattr(self, "ex_qty_err_lbl"):
+            self.ex_qty_err_lbl.config(text=qty_err)
+        if hasattr(self, "ex_date_err_lbl"):
+            self.ex_date_err_lbl.config(text=date_err)
+
+        # ── Overall CTA state ──────────────────────────────────────────
+        all_ok = not (sku_err or qty_err or date_err)
+        self.exception_submit_btn.config(state="normal" if all_ok else "disabled")
+        if all_ok:
+            self.exception_validation_label.config(text="✓ Pronto", foreground="#27ae60")
         else:
-            self.exception_submit_btn.config(state="normal")
-            self.exception_validation_label.config(text="✓ Pronto", foreground="#5cb85c")
+            errors = [e for e in (sku_err, qty_err, date_err) if e]
+            self.exception_validation_label.config(
+                text=f"{len(errors)} campo/i da correggere", foreground="#c0392b")
     
     def _clear_exception_form(self):
         """Clear exception form fields."""
@@ -3958,7 +4155,18 @@ class DesktopOrderApp:
                     txn.date.isoformat(),
                 ),
             )
-    
+
+        # Update count label and reset action card
+        if hasattr(self, "ex_history_count_lbl"):
+            n = len(exception_txns)
+            if n == 0:
+                self.ex_history_count_lbl.config(
+                    text="Nessuna eccezione in questa data.", foreground="gray")
+            else:
+                self.ex_history_count_lbl.config(
+                    text=f"Eccezioni trovate: {n}", foreground="#333")
+        self._reset_history_action_card()
+
     def _set_exception_today(self):
         """Set exception view date to today."""
         today = date.today()
@@ -4111,10 +4319,22 @@ class DesktopOrderApp:
                 ),
             )
         
-        # Show count
-        if not problematic_skus:
-            self.smart_exception_treeview.insert("", "end", values=("", "Nessun SKU problematico trovato", "", "", "", "", "", "", "Tutti gli SKU passano i filtri attivi"))
-    
+        # Update triage count label; placeholder row only when truly empty
+        if hasattr(self, "ex_triage_count_lbl"):
+            n = len(problematic_skus)
+            if n == 0:
+                self.ex_triage_count_lbl.config(
+                    text="Nessun SKU problematico trovato.", foreground="gray")
+            else:
+                self.ex_triage_count_lbl.config(
+                    text=f"SKU trovati: {n}", foreground="#333")
+        elif not problematic_skus:
+            # Fallback for old layout (no count label)
+            self.smart_exception_treeview.insert(
+                "", "end",
+                values=("", "Nessun SKU problematico trovato", "", "", "", "", "", "",
+                        "Tutti gli SKU passano i filtri attivi"))
+
     def _open_sku_in_admin_from_smart(self):
         """Open selected SKU in Admin tab for editing (from smart exceptions table)."""
         selected = self.smart_exception_treeview.selection()
@@ -4156,9 +4376,10 @@ class DesktopOrderApp:
         item = self.exception_treeview.item(selected[0])
         values = item["values"]
         event_type_str = values[0]
-        sku = values[1]
-        date_str = values[4]
-        
+        sku           = values[1]
+        qty           = values[2]
+        date_str      = values[4]
+
         # Map string to EventType
         event_type_map = {
             "WASTE": EventType.WASTE,
@@ -4167,11 +4388,16 @@ class DesktopOrderApp:
         }
         event_type = event_type_map.get(event_type_str)
         event_date = date.fromisoformat(date_str)
-        
-        # Confirm revert
+
+        # Confirm revert — explicit message per UX spec
         confirm = messagebox.askyesno(
             "Conferma Annullamento",
-            f"Annullare tutte le eccezioni {event_type_str} per SKU '{sku}' del {date_str}?\n\nQuesta azione non può essere annullata.",
+            (f"Stai annullando 1 evento:\n\n"
+             f"  Tipo: {event_type_str}\n"
+             f"  SKU:  {sku}\n"
+             f"  Qtà:  {qty}\n"
+             f"  Data: {date_str}\n\n"
+             "Questa azione NON può essere annullata.  Confermi?"),
         )
         if not confirm:
             return
@@ -4272,11 +4498,27 @@ class DesktopOrderApp:
                 "UNFULFILLED": EventType.UNFULFILLED,
             }
             event_type = event_type_map.get(event_type_str)
-            
-            # Confirm
+
+            # Count matching events before confirming
+            try:
+                all_txns = self.csv_layer.read_transactions()
+                matching = [
+                    t for t in all_txns
+                    if t.sku == sku and t.date == event_date
+                    and t.event == event_type
+                ]
+                count = len(matching)
+            except Exception:
+                count = 0
+
+            # Explicit risk-aware confirm dialog
             confirm = messagebox.askyesno(
-                "Confirm Bulk Revert",
-                f"Revert ALL {event_type_str} exceptions for SKU '{sku}' on {date_str}?\n\nThis action cannot be undone.",
+                "Conferma Annullamento Multiplo",
+                (f"Stai annullando TUTTI gli eventi {event_type_str}\n"
+                 f"per SKU '{sku}' del {date_str}.\n\n"
+                 f"  Numero eventi trovati: {count}\n"
+                 f"  Questa azione NON può essere annullata.\n\n"
+                 "Sei sicuro di voler procedere?"),
                 parent=popup,
             )
             if not confirm:
