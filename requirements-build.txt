@@ -10,7 +10,7 @@
 # ── GUI / visualisation ────────────────────────────────────────────
 tkcalendar>=1.6.1,<2.0
 matplotlib>=3.7.0,<4.0
-Pillow>=10.0.0,<12.0
+Pillow>=10.0.0,<13.0
 python-barcode>=0.15.0,<1.0
 numpy>=1.24.0,<3.0
 
