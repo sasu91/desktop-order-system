@@ -190,7 +190,9 @@ def run_closed_loop(csv_layer, asof_date: datetime) -> ClosedLoopReport:
                 new_sku_id=sku_id,
                 new_description=sku.description,
                 new_ean=sku.ean,
-                target_csl=decision.suggested_csl
+                target_csl=decision.suggested_csl,
+                category=sku.category,
+                department=sku.department,
             )
             
             # Log audit

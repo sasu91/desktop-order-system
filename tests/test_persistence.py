@@ -465,3 +465,64 @@ class TestSKUCRUD:
         # Verify gone
         assert csv_layer.sku_exists("SKU001") is False
 
+    def test_update_sku_preserves_classification_when_not_passed(self, csv_layer):
+        """update_sku with no category/department args must NOT clear existing classification."""
+        csv_layer.write_sku(SKU(sku="SKU001", description="Radicchio Palla",
+                                department="Verdura", category="Radicchio"))
+        
+        # Partial update: only rename description, omit category/department
+        csv_layer.update_sku(
+            old_sku_id="SKU001", new_sku_id="SKU001",
+            new_description="Radicchio Palla Rosso", new_ean=None,
+        )
+        
+        skus = csv_layer.read_skus()
+        assert len(skus) == 1
+        assert skus[0].description == "Radicchio Palla Rosso"
+        # Classification must be preserved
+        assert skus[0].department == "Verdura"
+        assert skus[0].category == "Radicchio"
+
+    def test_update_sku_can_set_and_change_classification(self, csv_layer):
+        """update_sku with explicit category/department must update them."""
+        csv_layer.write_sku(SKU(sku="SKU001", description="Product"))
+        
+        csv_layer.update_sku(
+            old_sku_id="SKU001", new_sku_id="SKU001",
+            new_description="Product", new_ean=None,
+            department="Verdura", category="Radicchio",
+        )
+        
+        skus = csv_layer.read_skus()
+        assert skus[0].department == "Verdura"
+        assert skus[0].category == "Radicchio"
+        
+        # Now change it
+        csv_layer.update_sku(
+            old_sku_id="SKU001", new_sku_id="SKU001",
+            new_description="Product", new_ean=None,
+            department="Latticini", category="Formaggi",
+        )
+        
+        skus = csv_layer.read_skus()
+        assert skus[0].department == "Latticini"
+        assert skus[0].category == "Formaggi"
+
+    def test_update_sku_other_rows_preserve_classification(self, csv_layer):
+        """Updating one SKU must not clear classification of other rows."""
+        csv_layer.write_sku(SKU(sku="SKU001", description="A",
+                                department="Verdura", category="Radicchio"))
+        csv_layer.write_sku(SKU(sku="SKU002", description="B",
+                                department="Latticini", category="Formaggi"))
+        
+        # Update only SKU001
+        csv_layer.update_sku(
+            old_sku_id="SKU001", new_sku_id="SKU001",
+            new_description="A updated", new_ean=None,
+        )
+        
+        skus = {s.sku: s for s in csv_layer.read_skus()}
+        # SKU002 classification must be untouched
+        assert skus["SKU002"].department == "Latticini"
+        assert skus["SKU002"].category == "Formaggi"
+

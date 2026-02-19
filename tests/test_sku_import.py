@@ -663,3 +663,39 @@ def test_no_valid_rows_import_fails(importer, csv_layer, tmp_path):
     
     assert result["success"] is False
     assert "No valid SKUs to import" in result["errors"]
+
+
+def test_auto_map_columns_famiglia_aliases(importer):
+    """famiglia/sotto_famiglia column names must map to department/category."""
+    mapping = importer.auto_map_columns(["sku", "description", "famiglia", "sotto_famiglia"])
+    assert mapping["famiglia"] == "department"
+    assert mapping["sotto_famiglia"] == "category"
+
+
+def test_auto_map_columns_family_aliases(importer):
+    """family/sub_family (English) aliases must also resolve."""
+    mapping = importer.auto_map_columns(["sku", "description", "family", "sub_family"])
+    assert mapping["family"] == "department"
+    assert mapping["sub_family"] == "category"
+
+
+def test_import_csv_with_famiglia_columns(importer, csv_layer, tmp_path):
+    """CSV files using famiglia/sotto_famiglia headers must populate department/category."""
+    csv_file = tmp_path / "classificazione.csv"
+    with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(["sku", "description", "famiglia", "sotto_famiglia"])
+        writer.writerow(["VERD001", "Radicchio Palla", "Verdura", "Radicchio"])
+        writer.writerow(["LATT001", "Parmigiano", "Latticini", "Formaggi"])
+    
+    preview = importer.parse_csv_with_preview(csv_file)
+    assert preview.valid_rows == 2
+    
+    result = importer.execute_import(preview, mode="UPSERT")
+    assert result["success"] is True
+    
+    skus = {s.sku: s for s in csv_layer.read_skus()}
+    assert skus["VERD001"].department == "Verdura"
+    assert skus["VERD001"].category == "Radicchio"
+    assert skus["LATT001"].department == "Latticini"
+    assert skus["LATT001"].category == "Formaggi"

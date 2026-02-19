@@ -2107,7 +2107,8 @@ class DesktopOrderApp:
                                 sku_obj.review_period, sku_obj.safety_stock, sku_obj.shelf_life_days,
                                 sku_obj.max_stock, sku_obj.reorder_point,
                                 sku_obj.demand_variability, sku_obj.oos_boost_percent, 
-                                sku_obj.oos_detection_mode, "always_yes"
+                                sku_obj.oos_detection_mode, "always_yes",
+                                category=sku_obj.category, department=sku_obj.department,
                             )
                     elif boost_choice == "no_never":
                         oos_boost_percent = 0.0
@@ -2120,7 +2121,8 @@ class DesktopOrderApp:
                                 sku_obj.review_period, sku_obj.safety_stock, sku_obj.shelf_life_days,
                                 sku_obj.max_stock, sku_obj.reorder_point,
                                 sku_obj.demand_variability, sku_obj.oos_boost_percent, 
-                                sku_obj.oos_detection_mode, "always_no"
+                                sku_obj.oos_detection_mode, "always_no",
+                                category=sku_obj.category, department=sku_obj.department,
                             )
                     else:  # "no"
                         oos_boost_percent = 0.0
@@ -4895,21 +4897,25 @@ class DesktopOrderApp:
         
         self.admin_treeview = ttk.Treeview(
             table_frame,
-            columns=("SKU", "Description", "EAN", "Status"),
+            columns=("SKU", "Description", "EAN", "Famiglia", "Sotto-famiglia", "Status"),
             height=20,
             yscrollcommand=scrollbar.set,
         )
         scrollbar.config(command=self.admin_treeview.yview)
         
         self.admin_treeview.column("#0", width=0, stretch=tk.NO)
-        self.admin_treeview.column("SKU", anchor=tk.W, width=120)
-        self.admin_treeview.column("Description", anchor=tk.W, width=350)
-        self.admin_treeview.column("EAN", anchor=tk.W, width=130)
-        self.admin_treeview.column("Status", anchor=tk.CENTER, width=120)
+        self.admin_treeview.column("SKU", anchor=tk.W, width=110)
+        self.admin_treeview.column("Description", anchor=tk.W, width=260)
+        self.admin_treeview.column("EAN", anchor=tk.W, width=110)
+        self.admin_treeview.column("Famiglia", anchor=tk.W, width=120)
+        self.admin_treeview.column("Sotto-famiglia", anchor=tk.W, width=130)
+        self.admin_treeview.column("Status", anchor=tk.CENTER, width=110)
         
         self.admin_treeview.heading("SKU", text="Codice SKU", anchor=tk.W)
         self.admin_treeview.heading("Description", text="Descrizione", anchor=tk.W)
         self.admin_treeview.heading("EAN", text="EAN", anchor=tk.W)
+        self.admin_treeview.heading("Famiglia", text="Famiglia", anchor=tk.W)
+        self.admin_treeview.heading("Sotto-famiglia", text="Sotto-famiglia", anchor=tk.W)
         self.admin_treeview.heading("Status", text="Stato", anchor=tk.CENTER)
         
         self.admin_treeview.pack(fill="both", expand=True)
@@ -4935,7 +4941,7 @@ class DesktopOrderApp:
             item_id = self.admin_treeview.insert(
                 "",
                 "end",
-                values=(sku.sku, sku.description, sku.ean or "", status),
+                values=(sku.sku, sku.description, sku.ean or "", sku.department, sku.category, status),
                 tags=(f"sku_{sku.sku}",)  # Store original SKU in tags with prefix
             )
     
@@ -4958,7 +4964,7 @@ class DesktopOrderApp:
             self.admin_treeview.insert(
                 "",
                 "end",
-                values=(sku.sku, sku.description, sku.ean or "", status),
+                values=(sku.sku, sku.description, sku.ean or "", sku.department, sku.category, status),
                 tags=(f"sku_{sku.sku}",)  # Store original SKU in tags with prefix
             )
     
@@ -5157,6 +5163,10 @@ class DesktopOrderApp:
             elif widget_type == "combobox":
                 widget = ttk.Combobox(row_frame, textvariable=value_var, values=choices, state="readonly", width=37)  # type: ignore[arg-type]
                 widget.grid(row=0, column=1, rowspan=2 if description else 1, sticky="ew", padx=(10, 0))
+            elif widget_type == "combobox_editable":
+                # Editable combobox: free text + dropdown suggestions (ibrido)
+                widget = ttk.Combobox(row_frame, textvariable=value_var, values=choices or [], state="normal", width=37)  # type: ignore[arg-type]
+                widget.grid(row=0, column=1, rowspan=2 if description else 1, sticky="ew", padx=(10, 0))
             elif widget_type == "autocomplete":
                 widget = kwargs.get("autocomplete_widget")
                 widget.entry.grid(row=0, column=1, rowspan=2 if description else 1, sticky="ew", padx=(10, 0))  # type: ignore[union-attr]
@@ -5229,7 +5239,31 @@ class DesktopOrderApp:
             variable=in_assortment_var
         ).pack(side="left", padx=(0, 10))
         
-        # ===== SECTION 2: Ordine & Stock =====
+        # ===== SECTION 2: Classificazione (Famiglia / Sotto-famiglia) =====
+        section_class = CollapsibleFrame(form_frame, title="🏷️ Classificazione", expanded=True)
+        section_class.pack(fill="x", pady=5)
+        content_class = section_class.get_content_frame()
+        
+        # Collect unique existing dept/category values for dropdown suggestions
+        _all_skus_for_cls = self.csv_layer.read_skus()
+        existing_families = sorted({s.department for s in _all_skus_for_cls if s.department})
+        existing_subfamilies = sorted({s.category for s in _all_skus_for_cls if s.category})
+        
+        famiglia_var = tk.StringVar(value=current_sku.department if current_sku else "")
+        add_field_row(
+            content_class, 0, "Famiglia:",
+            "Raggruppamento principale (es. Verdura, Latticini, Bevande)",
+            famiglia_var, "combobox_editable", choices=existing_families,
+        )
+        
+        sottofamiglia_var = tk.StringVar(value=current_sku.category if current_sku else "")
+        add_field_row(
+            content_class, 1, "Sotto-famiglia:",
+            "Sotto-categoria specifica (es. Radicchio, Formaggi, Succhi)",
+            sottofamiglia_var, "combobox_editable", choices=existing_subfamilies,
+        )
+        
+        # ===== SECTION 3: Ordine & Stock =====
         section_order = CollapsibleFrame(form_frame, title="📦 Ordine & Stock", expanded=False)
         section_order.pack(fill="x", pady=5)
         content_order = section_order.get_content_frame()
@@ -5348,6 +5382,8 @@ class DesktopOrderApp:
                 mc_horizon_mode_var.get(), mc_horizon_days_var.get(),
                 in_assortment_var.get(),
                 target_csl_var.get(),
+                famiglia_var.get(),
+                sottofamiglia_var.get(),
                 current_sku
             ),
         ).pack(side="right", padx=5)
@@ -5384,6 +5420,8 @@ class DesktopOrderApp:
                         mc_horizon_mode_str, mc_horizon_days_str,
                         in_assortment,
                         target_csl_str,
+                        famiglia_str,
+                        sottofamiglia_str,
                         current_sku):
         """Save SKU from form."""
         # Validate inputs
@@ -5584,6 +5622,8 @@ class DesktopOrderApp:
                     mc_horizon_days=mc_horizon_days,
                     in_assortment=in_assortment,
                     target_csl=target_csl,
+                    department=famiglia_str.strip(),
+                    category=sottofamiglia_str.strip(),
                 )
                 self.csv_layer.write_sku(new_sku)
                 
@@ -5609,7 +5649,9 @@ class DesktopOrderApp:
                     waste_risk_threshold,
                     forecast_method, mc_distribution, mc_n_simulations, mc_random_seed,
                     mc_output_stat, mc_output_percentile, mc_horizon_mode, mc_horizon_days,
-                    in_assortment, target_csl
+                    in_assortment, target_csl,
+                    category=sottofamiglia_str.strip(),
+                    department=famiglia_str.strip(),
                 )
                 if success:
                     # Build change details
@@ -6041,10 +6083,10 @@ class DesktopOrderApp:
             
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow(["SKU", "Description", "EAN"])
+                writer.writerow(["SKU", "Description", "EAN", "Famiglia", "Sotto-famiglia"])
                 
                 for sku in skus:
-                    writer.writerow([sku.sku, sku.description, sku.ean])
+                    writer.writerow([sku.sku, sku.description, sku.ean, sku.department, sku.category])
             
             messagebox.showinfo("Successo", f"Elenco SKU esportato in:\n{file_path}\n\n{len(skus)} SKU esportati.")
             

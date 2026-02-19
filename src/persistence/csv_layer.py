@@ -467,8 +467,8 @@ class CSVLayer:
         mc_horizon_days: int = 0,
         in_assortment: bool = True,
         target_csl: float = 0.0,
-        category: str = "",
-        department: str = ""
+        category: Optional[str] = None,   # None = preserve existing value
+        department: Optional[str] = None  # None = preserve existing value
     ) -> bool:
         """
         Update SKU (code, description, EAN, and parameters).
@@ -562,6 +562,9 @@ class CSVLayer:
                 "mc_horizon_days": row.get("mc_horizon_days", "0").strip() or "0",
                 "in_assortment": row.get("in_assortment", "true").strip() or "true",
                 "target_csl": row.get("target_csl", "0").strip() or "0",
+                # Classification — always preserved from existing row unless explicitly updated
+                "category": row.get("category", "").strip(),
+                "department": row.get("department", "").strip(),
             }
             
             # Normalize SKU IDs for comparison (handle both string and numeric SKUs)
@@ -602,8 +605,9 @@ class CSVLayer:
                 normalized_row["mc_horizon_days"] = str(mc_horizon_days)
                 normalized_row["in_assortment"] = "true" if in_assortment else "false"
                 normalized_row["target_csl"] = str(target_csl)
-                normalized_row["category"] = category
-                normalized_row["department"] = department
+                # Use sentinel: None means "keep existing", string means "set to this value"
+                normalized_row["category"] = category if category is not None else normalized_row["category"]
+                normalized_row["department"] = department if department is not None else normalized_row["department"]
                 updated = True
             
             normalized_rows.append(normalized_row)
