@@ -168,11 +168,14 @@ class MigrationWizardDialog:
         self.close_button.pack(side="right", padx=5)
     
     def _append_log(self, message: str):
-        """Append message to log text widget"""
-        self.log_text.config(state="normal")
-        self.log_text.insert("end", message + "\n")
-        self.log_text.see("end")  # Auto-scroll
-        self.log_text.config(state="disabled")
+        """Append message to log text widget (thread-safe via after())"""
+        def _do_append():
+            self.log_text.config(state="normal")
+            self.log_text.insert("end", message + "\n")
+            self.log_text.see("end")  # Auto-scroll
+            self.log_text.config(state="disabled")
+        # Schedule on main thread regardless of caller thread
+        self.dialog.after(0, _do_append)
     
     def _start_migration(self):
         """Start migration in background thread"""
