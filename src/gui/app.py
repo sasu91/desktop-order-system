@@ -1444,22 +1444,155 @@ class DesktopOrderApp:
         self.proposal_treeview.bind("<Double-1>", self._on_proposal_double_click)
         self.proposal_treeview.bind("<<TreeviewSelect>>", self._on_proposal_select)
         
-        # Right side: details sidebar
-        details_frame = ttk.LabelFrame(split_frame, text="Dettagli Calcolo", padding=10)
-        details_frame.pack(side="right", fill="both", padx=(5, 0))
-        details_frame.config(width=350)
-        
-        # Details text widget with scrollbar (read-only)
-        details_text_frame = ttk.Frame(details_frame)
-        details_text_frame.pack(fill="both", expand=True)
-        
-        details_scrollbar = ttk.Scrollbar(details_text_frame)
-        details_scrollbar.pack(side="right", fill="y")
-        
-        self.proposal_details_text = tk.Text(details_text_frame, wrap="word", width=40, height=20, state="disabled", font=("Courier", 9), yscrollcommand=details_scrollbar.set)
+        # ── RIGHT SIDE: Structured Details Sidebar ──────────────────────────
+        details_outer = ttk.LabelFrame(split_frame, text="Dettagli Calcolo", padding=5)
+        details_outer.pack(side="right", fill="both", padx=(5, 0))
+        details_outer.config(width=370)
+        # Prevent the frame from shrinking below its requested width
+        details_outer.pack_propagate(False)
+
+        # Scrollable canvas container
+        _details_canvas = tk.Canvas(details_outer, highlightthickness=0)
+        _details_vscroll = ttk.Scrollbar(details_outer, orient="vertical", command=_details_canvas.yview)
+        _details_canvas.configure(yscrollcommand=_details_vscroll.set)
+        _details_vscroll.pack(side="right", fill="y")
+        _details_canvas.pack(side="left", fill="both", expand=True)
+
+        details_scroll_frame = ttk.Frame(_details_canvas)
+        _dcw = _details_canvas.create_window((0, 0), window=details_scroll_frame, anchor="nw")
+
+        def _on_dsf_configure(e):
+            _details_canvas.configure(scrollregion=_details_canvas.bbox("all"))
+        def _on_dc_configure(e):
+            _details_canvas.itemconfig(_dcw, width=e.width)
+        details_scroll_frame.bind("<Configure>", _on_dsf_configure)
+        _details_canvas.bind("<Configure>", _on_dc_configure)
+
+        # Mouse-wheel scroll on the panel
+        def _on_detail_wheel(event):
+            _details_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        _details_canvas.bind("<MouseWheel>", _on_detail_wheel)
+        details_scroll_frame.bind("<MouseWheel>", _on_detail_wheel)
+
+        # ── Section 1 : SKU Header Card ───────────────────────────────────
+        sku_card = ttk.LabelFrame(details_scroll_frame, text="SKU Selezionato", padding=8)
+        sku_card.pack(fill="x", padx=5, pady=(5, 3))
+
+        self.detail_sku_lbl = ttk.Label(sku_card, text="—", font=("Helvetica", 12, "bold"))
+        self.detail_sku_lbl.pack(anchor="w")
+        self.detail_desc_lbl = ttk.Label(sku_card, text="—", font=("Helvetica", 9), foreground="gray")
+        self.detail_desc_lbl.pack(anchor="w")
+
+        stat_row = ttk.Frame(sku_card)
+        stat_row.pack(fill="x", pady=(8, 0))
+
+        rp_box = tk.Frame(stat_row, bg="#dbeafe", relief="flat", bd=1)
+        rp_box.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        tk.Label(rp_box, text="REORDER POINT", bg="#dbeafe", fg="#1e40af",
+                 font=("Helvetica", 7, "bold")).pack(anchor="w", padx=5, pady=(4, 0))
+        self.detail_rp_lbl = tk.Label(rp_box, text="— pz", bg="#dbeafe", fg="#1e3a8a",
+                                      font=("Helvetica", 11, "bold"))
+        self.detail_rp_lbl.pack(anchor="w", padx=5, pady=(0, 4))
+
+        sa_box = tk.Frame(stat_row, bg="#d1fae5", relief="flat", bd=1)
+        sa_box.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        tk.Label(sa_box, text="STOCK ATTUALE", bg="#d1fae5", fg="#065f46",
+                 font=("Helvetica", 7, "bold")).pack(anchor="w", padx=5, pady=(4, 0))
+        self.detail_stock_lbl = tk.Label(sa_box, text="— pz", bg="#d1fae5", fg="#064e3b",
+                                         font=("Helvetica", 11, "bold"))
+        self.detail_stock_lbl.pack(anchor="w", padx=5, pady=(0, 4))
+
+        # ── Section 2 : Stock Projection Chart ───────────────────────────
+        chart_lf = ttk.LabelFrame(details_scroll_frame, text="📈 Stock Projection", padding=5)
+        chart_lf.pack(fill="x", padx=5, pady=3)
+
+        if MATPLOTLIB_AVAILABLE:
+            self.detail_fig = Figure(figsize=(3.5, 2.0), dpi=80)
+            self.detail_fig.patch.set_facecolor("#f8fafc")
+            self.detail_ax = self.detail_fig.add_subplot(111)
+            self.detail_chart_canvas = FigureCanvasTkAgg(self.detail_fig, master=chart_lf)
+            self.detail_chart_canvas.get_tk_widget().pack(fill="x")
+            self._draw_projection_chart(None)
+        else:
+            self.detail_chart_canvas = None
+            self.detail_fig = None
+            self.detail_ax = None
+            ttk.Label(chart_lf, text="(matplotlib non disponibile)",
+                      foreground="gray", font=("Helvetica", 8)).pack(pady=8)
+
+        legend_row = ttk.Frame(chart_lf)
+        legend_row.pack(fill="x", pady=(2, 0))
+        for dot_color, dot_label in [("#94a3b8", "Storico"), ("#3b82f6", "Proj. Stock"), ("#f87171", "Safety")]:
+            _dc = tk.Canvas(legend_row, width=10, height=10, highlightthickness=0)
+            _dc.create_oval(1, 1, 9, 9, fill=dot_color, outline="")
+            _dc.pack(side="left", padx=(4, 1))
+            ttk.Label(legend_row, text=dot_label, font=("Helvetica", 7)).pack(side="left", padx=(0, 6))
+
+        # ── Section 3 : Demand Simulation ────────────────────────────────
+        sim_lf = ttk.LabelFrame(details_scroll_frame, text="🔬 Demand Simulation", padding=8)
+        sim_lf.pack(fill="x", padx=5, pady=3)
+
+        ttk.Label(sim_lf, text="Method Comparison", font=("Helvetica", 8),
+                  foreground="gray").pack(anchor="w", pady=(0, 4))
+
+        sma_row = ttk.Frame(sim_lf)
+        sma_row.pack(fill="x")
+        ttk.Label(sma_row, text="Simple Moving Avg", font=("Helvetica", 8, "bold"),
+                  width=18).pack(side="left")
+        self.detail_sma_val_lbl = ttk.Label(sma_row, text="—", font=("Helvetica", 8),
+                                            foreground="gray")
+        self.detail_sma_val_lbl.pack(side="right")
+        self.detail_sma_bar = ttk.Progressbar(sim_lf, orient="horizontal",
+                                              length=300, maximum=100, value=0)
+        self.detail_sma_bar.pack(fill="x", pady=(2, 6))
+
+        mc_row = ttk.Frame(sim_lf)
+        mc_row.pack(fill="x")
+        ttk.Label(mc_row, text="Monte Carlo Sim", font=("Helvetica", 8, "bold"),
+                  width=18).pack(side="left")
+        self.detail_mc_val_lbl = ttk.Label(mc_row, text="—", font=("Helvetica", 8),
+                                           foreground="#3b82f6")
+        self.detail_mc_val_lbl.pack(side="right")
+        self.detail_mc_bar = ttk.Progressbar(sim_lf, orient="horizontal",
+                                             length=300, maximum=100, value=0)
+        self.detail_mc_bar.pack(fill="x", pady=(2, 4))
+
+        self.detail_sim_note_lbl = ttk.Label(sim_lf, text="", font=("Helvetica", 7, "italic"),
+                                             foreground="gray", wraplength=310)
+        self.detail_sim_note_lbl.pack(anchor="w")
+
+        # ── Section 4 : Vincoli Attivi (shown only when constraints present) ─
+        self.detail_vincoli_outer = ttk.LabelFrame(details_scroll_frame,
+                                                   text="⚠️ Vincoli Attivi", padding=5)
+        self.detail_vincoli_inner = tk.Frame(self.detail_vincoli_outer, bg="#fef3c7",
+                                             relief="flat")
+        self.detail_vincoli_inner.pack(fill="x", padx=2, pady=2)
+        self.detail_vincoli_title_lbl = tk.Label(
+            self.detail_vincoli_inner, text="", bg="#fef3c7", fg="#92400e",
+            font=("Helvetica", 8, "bold"), anchor="w", justify="left", wraplength=300)
+        self.detail_vincoli_title_lbl.pack(fill="x", padx=5, pady=(4, 0))
+        self.detail_vincoli_msg_lbl = tk.Label(
+            self.detail_vincoli_inner, text="", bg="#fef3c7", fg="#78350f",
+            font=("Helvetica", 8), anchor="w", justify="left", wraplength=300)
+        self.detail_vincoli_msg_lbl.pack(fill="x", padx=5, pady=(0, 4))
+        # (pack/forget driven by _update_detail_panel)
+
+        # ── Section 5 : Dettagli Completi (collapsible raw text) ─────────
+        self.detail_collapsible = CollapsibleFrame(details_scroll_frame,
+                                                   title="Dettagli Completi", expanded=False)
+        self.detail_collapsible.pack(fill="x", padx=5, pady=3)
+
+        _raw_content = self.detail_collapsible.get_content_frame()
+        _raw_tf = ttk.Frame(_raw_content)
+        _raw_tf.pack(fill="both", expand=True)
+        _raw_sb = ttk.Scrollbar(_raw_tf)
+        _raw_sb.pack(side="right", fill="y")
+        self.proposal_details_text = tk.Text(
+            _raw_tf, wrap="word", width=36, height=15,
+            state="disabled", font=("Courier", 8),
+            yscrollcommand=_raw_sb.set)
         self.proposal_details_text.pack(side="left", fill="both", expand=True)
-        
-        details_scrollbar.config(command=self.proposal_details_text.yview)
+        _raw_sb.config(command=self.proposal_details_text.yview)
         
         # === CONFIRMATION SECTION ===
         confirm_frame = ttk.LabelFrame(main_frame, text="2️⃣ Conferma Ordini", padding=10)
@@ -1474,11 +1607,195 @@ class DesktopOrderApp:
         
         ttk.Button(buttons_row, text="✓ Conferma Tutti gli Ordini (Colli > 0)", command=self._confirm_orders).pack(side="left", padx=5)
     
+    # ── Detail panel helpers ────────────────────────────────────────────────
+
+    def _draw_projection_chart(self, proposal):
+        """Redraw the stock projection chart in the detail sidebar."""
+        if not MATPLOTLIB_AVAILABLE or self.detail_chart_canvas is None:
+            return
+        ax = self.detail_ax
+        ax.clear()
+        ax.set_facecolor("#f8fafc")
+
+        if proposal is None:
+            ax.text(0.5, 0.5, "Seleziona uno SKU",
+                    transform=ax.transAxes, ha="center", va="center",
+                    fontsize=8, color="#94a3b8")
+            ax.set_xticks([])
+            ax.set_yticks([])
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+            self.detail_fig.tight_layout(pad=0.3)
+            self.detail_chart_canvas.draw()
+            return
+
+        today = date.today()
+        daily_avg = max(proposal.daily_sales_avg, 0.01)
+        receipt_date = proposal.receipt_date
+        proposed_qty = proposal.proposed_qty
+
+        # Past 7-day synthetic history (stock was higher by daily_avg * days_ago)
+        past_days = 7
+        past_x = list(range(-past_days, 1))
+        past_stock = [proposal.current_on_hand + daily_avg * abs(d) for d in past_x]
+
+        # Future: project day-by-day until receipt_date + 5 extra days
+        receipt_offset = (receipt_date - today).days if receipt_date else 14
+        future_end = max(receipt_offset + 5, 10)
+        future_x: list[int] = []
+        future_stock: list[float] = []
+        for d in range(0, future_end + 1):
+            if d == 0:
+                s = float(proposal.current_on_hand)
+            else:
+                s = future_stock[-1] - daily_avg
+                if receipt_date and d == receipt_offset and proposed_qty > 0:
+                    s += proposed_qty
+                s = max(s, 0.0)
+            future_x.append(d)
+            future_stock.append(s)
+
+        # Plot history (dashed grey) and projection (solid blue)
+        ax.plot(past_x, past_stock, color="#94a3b8", linewidth=1.5,
+                linestyle="--", zorder=2)
+        ax.plot(future_x, future_stock, color="#3b82f6", linewidth=2, zorder=3)
+
+        # Today marker
+        ax.axvline(x=0, color="#1e293b", linewidth=0.8, linestyle=":", alpha=0.6, zorder=4)
+
+        # Receipt date marker
+        if receipt_date and 0 < receipt_offset <= future_end:
+            ax.axvline(x=receipt_offset, color="#10b981", linewidth=0.8,
+                       linestyle=":", alpha=0.7, zorder=4)
+
+        # Safety stock
+        safety = proposal.safety_stock
+        all_xmin = past_x[0]
+        ax.axhline(y=safety, color="#f87171", linewidth=1.0, linestyle="--",
+                   alpha=0.85, zorder=2)
+
+        # Max stock cap
+        if proposal.max_stock > 0:
+            ax.axhline(y=proposal.max_stock, color="#f59e0b", linewidth=0.8,
+                       linestyle=":", alpha=0.5, zorder=2)
+
+        # Axis ticks
+        x_ticks = [past_x[0], 0]
+        x_labels = [f"{past_x[0]}d", "Oggi"]
+        if receipt_date and 0 < receipt_offset <= future_end:
+            x_ticks.append(receipt_offset)
+            x_labels.append("Ric.")
+        ax.set_xticks(x_ticks)
+        ax.set_xticklabels(x_labels, fontsize=6)
+        ax.tick_params(axis="y", labelsize=6)
+        ax.tick_params(length=0)
+
+        # Clean spines
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_color("#e2e8f0")
+        ax.spines["bottom"].set_color("#e2e8f0")
+
+        # "Safety" label on the line
+        try:
+            ylim = ax.get_ylim()
+            if ylim[1] > ylim[0]:
+                ax.text(all_xmin, safety, " Safety", fontsize=5,
+                        color="#f87171", va="bottom", alpha=0.85)
+        except Exception:
+            pass
+
+        self.detail_fig.tight_layout(pad=0.3)
+        self.detail_chart_canvas.draw()
+
+    def _update_detail_panel(self, proposal, sku_obj, pack_size: int):
+        """Populate all structured sub-panels of the detail sidebar."""
+        # ── Section 1: SKU Header ─────────────────────────────────────────
+        self.detail_sku_lbl.config(text=proposal.sku)
+        self.detail_desc_lbl.config(text=proposal.description or "")
+        self.detail_rp_lbl.config(text=f"{proposal.reorder_point} pz")
+        self.detail_stock_lbl.config(text=f"{proposal.current_on_hand} pz")
+
+        # ── Section 2: Stock Projection Chart ─────────────────────────────
+        self._draw_projection_chart(proposal)
+
+        # ── Section 3: Demand Simulation ─────────────────────────────────
+        # SMA: daily_sales_avg * forecast_period_days  (= baseline forecast qty)
+        sma_daily = proposal.daily_sales_avg
+        sma_total = sma_daily * proposal.forecast_period_days
+
+        # MC: mc_comparison_qty (or mc_forecast_qty) if available; else same as SMA
+        mc_qty = proposal.mc_comparison_qty if proposal.mc_comparison_qty is not None else None
+        mc_daily: float | None = None
+        if mc_qty is not None and proposal.forecast_period_days > 0:
+            mc_daily = mc_qty / proposal.forecast_period_days
+
+        max_daily = max(sma_daily, mc_daily or 0, 0.01)
+
+        sma_pct = min(int((sma_daily / max_daily) * 100), 100)
+        mc_pct = min(int(((mc_daily or 0) / max_daily) * 100), 100) if mc_daily else 0
+
+        self.detail_sma_val_lbl.config(text=f"{sma_daily:.1f} u/day")
+        self.detail_sma_bar["value"] = sma_pct
+
+        if mc_daily is not None:
+            self.detail_mc_val_lbl.config(text=f"{mc_daily:.1f} u/day")
+            self.detail_mc_bar["value"] = mc_pct
+            diff_pct = ((mc_daily - sma_daily) / max(sma_daily, 0.01)) * 100
+            sign = "+" if diff_pct >= 0 else ""
+            note = f"*Monte Carlo: {sign}{diff_pct:.0f}% rispetto a SMA"
+            self.detail_sim_note_lbl.config(text=note)
+        else:
+            self.detail_mc_val_lbl.config(text="N/D")
+            self.detail_mc_bar["value"] = 0
+            self.detail_sim_note_lbl.config(text="*Monte Carlo non eseguito per questo SKU")
+
+        # ── Section 4: Vincoli Attivi ─────────────────────────────────────
+        has_constraints = bool(
+            proposal.constraints_applied_max
+            or proposal.constraints_applied_pack
+            or proposal.constraints_applied_moq
+            or (proposal.constraint_details
+                and proposal.constraint_details != "Nessun vincolo applicato")
+        )
+        if has_constraints:
+            titles = []
+            if proposal.constraints_applied_max:
+                titles.append("Max Stock Capped")
+            if proposal.constraints_applied_pack:
+                titles.append(f"Pack Size ({pack_size} pz/collo)")
+            if proposal.constraints_applied_moq:
+                titles.append(f"MOQ ({proposal.moq} pz)")
+            title_text = " · ".join(titles) if titles else "Vincolo applicato"
+            msg = proposal.constraint_details or ""
+            self.detail_vincoli_title_lbl.config(text=title_text)
+            self.detail_vincoli_msg_lbl.config(text=msg)
+            self.detail_vincoli_outer.pack(fill="x", padx=5, pady=3)
+        else:
+            self.detail_vincoli_outer.pack_forget()
+
+    def _clear_detail_panel(self):
+        """Reset the detail sidebar to its empty/placeholder state."""
+        self.detail_sku_lbl.config(text="—")
+        self.detail_desc_lbl.config(text="—")
+        self.detail_rp_lbl.config(text="— pz")
+        self.detail_stock_lbl.config(text="— pz")
+        self._draw_projection_chart(None)
+        self.detail_sma_val_lbl.config(text="—")
+        self.detail_sma_bar["value"] = 0
+        self.detail_mc_val_lbl.config(text="—")
+        self.detail_mc_bar["value"] = 0
+        self.detail_sim_note_lbl.config(text="")
+        self.detail_vincoli_outer.pack_forget()
+
+    # ── Proposal selection ──────────────────────────────────────────────────
+
     def _on_proposal_select(self, event):
         """Handle selection of proposal to show calculation details."""
         selected = self.proposal_treeview.selection()
         if not selected:
             # Clear details if no selection
+            self._clear_detail_panel()
             self.proposal_details_text.config(state="normal")
             self.proposal_details_text.delete("1.0", tk.END)
             self.proposal_details_text.config(state="disabled")
@@ -1498,6 +1815,9 @@ class DesktopOrderApp:
         pack_size = sku_obj.pack_size if sku_obj else 1
         
         effective_lead_time = self._get_effective_lead_time(sku_obj)
+
+        # Update the structured detail panel (chart, bars, vincoli, header)
+        self._update_detail_panel(proposal, sku_obj, pack_size)
 
         # Format details in colli where applicable
         def to_colli(pezzi, pack):
