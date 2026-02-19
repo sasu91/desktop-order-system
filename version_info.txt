@@ -1,0 +1,39 @@
+# UTF-8
+#
+# version_info.txt — Windows VERSIONINFO resource for DesktopOrderSystem.exe
+# Used by PyInstaller via the `version=` parameter in the EXE() block of the spec.
+#
+# Docs: https://pyinstaller.org/en/stable/usage.html#capturing-windows-version-data
+
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,          # VOS_NT_WINDOWS32
+    fileType=0x1,        # VFT_APP
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          u'040904B0',   # Language: en-US / code page: Unicode
+          [
+            StringStruct(u'CompanyName',      u''),
+            StringStruct(u'FileDescription',  u'Desktop Order System'),
+            StringStruct(u'FileVersion',      u'1.0.0.0'),
+            StringStruct(u'InternalName',     u'DesktopOrderSystem'),
+            StringStruct(u'LegalCopyright',   u''),
+            StringStruct(u'OriginalFilename', u'DesktopOrderSystem.exe'),
+            StringStruct(u'ProductName',      u'Desktop Order System'),
+            StringStruct(u'ProductVersion',   u'1.0.0.0'),
+          ]
+        )
+      ]
+    ),
+    VarFileInfo([VarStruct(u'Translation', [0x0409, 1200])])
+  ]
+)

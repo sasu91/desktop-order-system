@@ -31,10 +31,15 @@ import functools
 # Configuration Constants
 # ============================================================
 
-DB_PATH = Path("data/app.db")
-MIGRATIONS_DIR = Path("migrations")
-BACKUP_DIR = Path("data/backups")
-SETTINGS_FILE = Path("data/settings.json")
+# ---------------------------------------------------------------------------
+# Frozen-aware path constants (never relative to cwd)
+# ---------------------------------------------------------------------------
+from .utils.paths import get_db_path, get_migrations_dir, get_backup_dir, get_data_dir as _get_data_dir
+
+DB_PATH: Path = get_db_path()
+MIGRATIONS_DIR: Path = get_migrations_dir()
+BACKUP_DIR: Path = get_backup_dir()
+SETTINGS_FILE: Path = _get_data_dir() / "settings.json"
 
 # Connection PRAGMAs
 # FASE 7 TASK 7.1: Enhanced concurrency and lock handling

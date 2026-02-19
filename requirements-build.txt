@@ -1,0 +1,24 @@
+# requirements-build.txt
+# Pinned build-time dependencies for DesktopOrderSystem portable .exe
+#
+# Install in a fresh venv BEFORE running PyInstaller:
+#   python -m venv .venv-build
+#   .venv-build\Scripts\activate
+#   pip install -r requirements-build.txt
+#   pyinstaller DesktopOrderSystem.spec --clean --noconfirm
+
+# ── GUI / visualisation ────────────────────────────────────────────
+tkcalendar>=1.6.1,<2.0
+matplotlib>=3.7.0,<4.0
+Pillow>=10.0.0,<12.0
+python-barcode>=0.15.0,<1.0
+numpy>=1.24.0,<3.0
+
+# ── Needed by tkcalendar ──────────────────────────────────────────
+babel>=2.12.0,<3.0
+
+# ── Packaging tool ────────────────────────────────────────────────
+pyinstaller>=6.5.0,<7.0
+
+# ── Note: stdlib modules (sqlite3, tkinter, csv, json, logging) are
+#    bundled by Python itself and do NOT appear here.

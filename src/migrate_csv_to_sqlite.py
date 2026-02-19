@@ -33,8 +33,10 @@ from .repositories import RepositoryFactory, DuplicateKeyError, ForeignKeyError,
 # Configuration
 # ============================================================
 
-CSV_DIR = Path("data")
-BACKUP_DIR = Path("data/csv_backups")
+from .utils.paths import get_data_dir as _get_data_dir
+
+CSV_DIR = _get_data_dir()
+BACKUP_DIR = _get_data_dir() / "csv_backups"
 
 # CSV file mapping (filename → table name)
 CSV_FILES = {

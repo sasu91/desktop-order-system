@@ -5,12 +5,48 @@ from pathlib import Path
 from datetime import timedelta
 import json
 from typing import Literal
+import sys
 
-# Project root
-PROJECT_ROOT = Path(__file__).parent
+# ---------------------------------------------------------------------------
+# Frozen-aware root resolution
+# (imported here so config.py keeps a single source of truth for paths)
+# ---------------------------------------------------------------------------
 
-# Data directory
-DATA_DIR = PROJECT_ROOT / "data"
+def _resolve_base_dir() -> Path:
+    """
+    Return the application's root directory in both dev and frozen modes.
+
+    - PyInstaller frozen (.exe): directory containing the .exe
+    - Development / IDE         : directory containing this config.py file
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def _try_writable(path: Path) -> bool:
+    """Return True if *path* can be created and written to."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        canary = path / ".write_probe"
+        canary.touch()
+        canary.unlink()
+        return True
+    except (OSError, PermissionError):
+        return False
+
+
+# Project root (exe dir when frozen, repo root in dev)
+PROJECT_ROOT = _resolve_base_dir()
+
+# Data directory — portable (next to exe) with %APPDATA% fallback
+_data_primary = PROJECT_ROOT / "data"
+if _try_writable(_data_primary):
+    DATA_DIR = _data_primary
+else:
+    import os as _os
+    DATA_DIR = Path(_os.environ.get("APPDATA", str(Path.home()))) / "DesktopOrderSystem" / "data"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # Storage backend configuration
 STORAGE_BACKEND: Literal['csv', 'sqlite'] = 'sqlite'  # Default: SQLite mode

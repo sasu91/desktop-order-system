@@ -12,20 +12,28 @@ from pathlib import Path
 from datetime import datetime
 
 
-def setup_logging(log_dir: str = "logs", app_name: str = "desktop_order_system") -> logging.Logger:
+def setup_logging(
+    log_dir: "str | Path | None" = None,
+    app_name: str = "desktop_order_system",
+) -> logging.Logger:
     """
     Setup structured logging with file output.
-    
+
     Args:
-        log_dir: Directory for log files (created if missing)
+        log_dir: Directory for log files (created if missing).  When *None*
+                 the frozen-aware default location is used (next to .exe in
+                 production, or <project_root>/logs in development).
         app_name: Application name for logger
-    
+
     Returns:
         Configured logger instance
     """
-    # Create logs directory
-    log_path = Path(log_dir)
-    log_path.mkdir(exist_ok=True)
+    if log_dir is None:
+        from .paths import get_logs_dir  # noqa: PLC0415
+        log_path = get_logs_dir()
+    else:
+        log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
     
     # Create logger
     logger = logging.getLogger(app_name)

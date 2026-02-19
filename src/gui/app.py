@@ -54,8 +54,8 @@ from .widgets import AutocompleteEntry
 from .collapsible_frame import CollapsibleFrame
 from ..utils.logging_config import setup_logging, get_logger
 
-# Initialize logging
-setup_logging(log_dir="logs", app_name="desktop_order_system")
+# Initialize logging — uses frozen-aware path (next to .exe or project root/logs)
+setup_logging(app_name="desktop_order_system")
 logger = get_logger()
 
 
@@ -3473,7 +3473,7 @@ class DesktopOrderApp:
             ("reason",     "Motivo Alert",210, "w"),
         ]:
             self.smart_exception_treeview.heading(col, text=label)
-            self.smart_exception_treeview.column(col, width=width, anchor=anchor)
+            self.smart_exception_treeview.column(col, width=width, anchor=anchor)  # type: ignore[arg-type]
 
         self.smart_exception_treeview.bind(
             "<<TreeviewSelect>>", self._on_select_triage_row)

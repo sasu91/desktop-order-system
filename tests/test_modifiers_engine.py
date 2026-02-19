@@ -123,7 +123,7 @@ def _base_demand(
 
 def _minimal_ctx(sku_id: str = "SKU_A") -> ModifierContext:
     """Build a minimal empty ModifierContext (no modifiers will match)."""
-    return ModifierContext(
+    return ModifierContext(  # type: ignore[call-arg]
         sku_id=sku_id,
         category="",
         department="",
@@ -564,7 +564,7 @@ class TestHolidayModifierEvaluation:
         enabled: bool = True,
     ) -> ModifierContext:
         h_date = h_date or DELIVERY
-        return ModifierContext(
+        return ModifierContext(  # type: ignore[call-arg]
             sku_id="SKU_H",
             category="",
             department="",
@@ -625,7 +625,7 @@ class TestHolidayModifierEvaluation:
 
     def test_holiday_max_absolute_overlap(self):
         """Two holidays on same delivery date → MAX |mult-1| wins."""
-        ctx = ModifierContext(
+        ctx = ModifierContext(  # type: ignore[call-arg]
             sku_id="SKU_H",
             category="", department="",
             order_date=TODAY,

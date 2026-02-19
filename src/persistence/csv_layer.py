@@ -16,9 +16,16 @@ from ..domain.models import Transaction, EventType, SKU, SalesRecord, AuditLog, 
 
 class CSVLayer:
     """Manages all CSV file operations with auto-create."""
-    
-    # Default data directory
-    DEFAULT_DATA_DIR = Path(__file__).parent.parent.parent / "data"
+
+    # Default data directory: frozen-aware (next to .exe or project root)
+    # Import lazily to avoid circular-import issues at module load time.
+    @staticmethod
+    def _default_data_dir() -> Path:
+        from ..utils.paths import get_data_dir  # noqa: PLC0415
+        return get_data_dir()
+
+    # Class-level attribute resolved once at import time
+    DEFAULT_DATA_DIR: Path = None  # type: ignore[assignment]  # set below class body
     
     # CSV file schemas (filename -> list of columns)
     SCHEMAS = {
@@ -49,11 +56,14 @@ class CSVLayer:
     def __init__(self, data_dir: Optional[Path] = None):
         """
         Initialize CSV layer.
-        
+
         Args:
-            data_dir: Directory to store CSV files. Defaults to DEFAULT_DATA_DIR.
+            data_dir: Directory to store CSV files. Defaults to a frozen-aware
+                      portable location (next to .exe or project root/data in dev).
         """
-        self.data_dir = data_dir or self.DEFAULT_DATA_DIR
+        self.data_dir = data_dir if data_dir is not None else self._default_data_dir()
+        # Keep DEFAULT_DATA_DIR in sync for code that reads the class attribute
+        CSVLayer.DEFAULT_DATA_DIR = self.data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._ensure_all_files_exist()
     
