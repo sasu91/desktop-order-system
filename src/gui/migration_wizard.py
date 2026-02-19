@@ -222,15 +222,18 @@ class MigrationWizardDialog:
             
             # Import migration tool
             from ..migrate_csv_to_sqlite import MigrationOrchestrator
-            from ..db import open_connection
+            from ..db import open_connection, apply_migrations
             from config import DATA_DIR, DATABASE_PATH
             
             self._append_log(f"📂 Data directory: {DATA_DIR}")
             self._append_log(f"🗄️ Database path: {DATABASE_PATH}")
             self._append_log("")
             
-            # Open database connection
+            # Open database connection and ensure schema exists
             conn = open_connection(DATABASE_PATH)
+            self._append_log("🔧 Verifica/creazione schema database...")
+            apply_migrations(conn)
+            self._append_log("✓ Schema pronto")
             
             # Create orchestrator
             orchestrator = MigrationOrchestrator(conn=conn, csv_dir=DATA_DIR)
