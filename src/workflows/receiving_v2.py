@@ -249,37 +249,55 @@ class ReceivingWorkflow:
                 order_ids=",".join(allocated_order_ids),
             )
             
-            # NEW: Create lot if lot_id or expiry_date provided
-            lot_id = item.get("lot_id", "").strip()
-            expiry_date_str = item.get("expiry_date", "").strip()
+            # Create lot based on has_expiry_label flag and shelf_life_days
+            from ..domain.models import Lot
+            from datetime import timedelta
             
-            if lot_id or expiry_date_str:
-                # Generate lot_id if not provided
-                if not lot_id:
-                    lot_id = f"{receipt_id}_{sku}"
-                
-                # Parse expiry_date
-                expiry_date_obj = None
-                if expiry_date_str:
+            expiry_date_str_item = item.get("expiry_date", "").strip()
+            
+            # Look up SKU object for has_expiry_label and shelf_life_days
+            sku_objects = self.csv_layer.read_skus()
+            sku_obj = next((s for s in sku_objects if s.sku == sku), None)
+            has_expiry_label = sku_obj.has_expiry_label if sku_obj else False
+            shelf_life_days_sku = sku_obj.shelf_life_days if sku_obj else 0
+            
+            if has_expiry_label:
+                # Expiry date from label: use user-provided value
+                if expiry_date_str_item:
+                    expiry_date_obj = None
                     try:
-                        expiry_date_obj = date.fromisoformat(expiry_date_str)
+                        expiry_date_obj = date.fromisoformat(expiry_date_str_item)
                     except ValueError:
-                        logger.warning(f"Invalid expiry_date format for {sku}: {expiry_date_str}, skipping lot creation")
-                
-                # Create Lot object
-                from ..domain.models import Lot
+                        logger.warning(f"Invalid expiry_date format for {sku}: {expiry_date_str_item}, skipping lot creation")
+                    
+                    if expiry_date_obj is not None:
+                        lot_id = f"{receipt_id}_{sku}"
+                        lot = Lot(
+                            lot_id=lot_id,
+                            sku=sku,
+                            expiry_date=expiry_date_obj,
+                            qty_on_hand=qty_received,
+                            receipt_id=receipt_id,
+                            receipt_date=receipt_date,
+                        )
+                        self.csv_layer.write_lot(lot)
+                        logger.info(f"Created labelled lot {lot_id} for {sku}, qty={qty_received}, expiry={expiry_date_obj}")
+                else:
+                    logger.info(f"SKU {sku} has_expiry_label=True but no expiry_date provided — lot not created")
+            elif shelf_life_days_sku > 0:
+                # Auto shelf-life tracking: calculate expiry from receipt_date + shelf_life_days
+                auto_expiry = receipt_date + timedelta(days=shelf_life_days_sku)
+                lot_id = f"{receipt_id}_{sku}"
                 lot = Lot(
                     lot_id=lot_id,
                     sku=sku,
-                    expiry_date=expiry_date_obj,
+                    expiry_date=auto_expiry,
                     qty_on_hand=qty_received,
                     receipt_id=receipt_id,
                     receipt_date=receipt_date,
                 )
-                
-                # Write to lots.csv
                 self.csv_layer.write_lot(lot)
-                logger.info(f"Created lot {lot_id} for {sku}, qty={qty_received}, expiry={expiry_date_obj}")
+                logger.info(f"Created auto-shelf-life lot {lot_id} for {sku}, qty={qty_received}, expiry={auto_expiry} (shelf_life={shelf_life_days_sku}d)")
         
         # 4. Write transactions to ledger (batch)
         if transactions:

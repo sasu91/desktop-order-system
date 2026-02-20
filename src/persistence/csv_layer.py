@@ -35,7 +35,7 @@ class CSVLayer:
                      "max_stock", "reorder_point", "demand_variability", "category", "department",
                      "oos_boost_percent", "oos_detection_mode", "oos_popup_preference", "forecast_method",
                      "mc_distribution", "mc_n_simulations", "mc_random_seed", "mc_output_stat",
-                     "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days", "in_assortment", "target_csl"],
+                     "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days", "in_assortment", "target_csl", "has_expiry_label"],
         "transactions.csv": ["date", "sku", "event", "qty", "receipt_date", "note"],
         "sales.csv": ["date", "sku", "qty_sold", "promo_flag"],
         "order_logs.csv": ["order_id", "date", "sku", "qty_ordered", "qty_received", "status", "receipt_date",
@@ -205,6 +205,8 @@ class CSVLayer:
                     in_assortment=row.get("in_assortment", "true").strip().lower() in ("true", "1", "yes", "t"),
                     # Service level override (backward-compatible: missing → 0.0 = use resolver)
                     target_csl=float(row.get("target_csl", "0").strip() or "0"),
+                    # Expiry label flag (backward-compatible: missing → False)
+                    has_expiry_label=row.get("has_expiry_label", "false").strip().lower() in ("true", "1", "yes", "t"),
                 )
                 skus.append(sku)
             except (ValueError, KeyError) as e:
@@ -280,6 +282,7 @@ class CSVLayer:
                     mc_horizon_days=sku.mc_horizon_days,
                     in_assortment=sku.in_assortment,
                     target_csl=sku.target_csl,
+                    has_expiry_label=sku.has_expiry_label,
                 )
             except Exception as e:
                 # Fallback to original if auto-classification fails
@@ -323,6 +326,7 @@ class CSVLayer:
             mc_horizon_days=sku.mc_horizon_days,
             in_assortment=sku.in_assortment,
             target_csl=sku.target_csl,
+            has_expiry_label=sku.has_expiry_label,
         )
         
         rows = self._read_csv("skus.csv")
@@ -358,6 +362,7 @@ class CSVLayer:
             "mc_horizon_days": str(final_sku.mc_horizon_days),
             "in_assortment": "true" if final_sku.in_assortment else "false",
             "target_csl": str(final_sku.target_csl),
+            "has_expiry_label": "true" if final_sku.has_expiry_label else "false",
         })
         self._write_csv("skus.csv", rows)
     
@@ -433,6 +438,7 @@ class CSVLayer:
             mc_horizon_days=sku_object.mc_horizon_days,
             in_assortment=sku_object.in_assortment,
             target_csl=sku_object.target_csl,
+            has_expiry_label=sku_object.has_expiry_label,
         )
     
     def update_sku(
@@ -467,6 +473,7 @@ class CSVLayer:
         mc_horizon_days: int = 0,
         in_assortment: bool = True,
         target_csl: float = 0.0,
+        has_expiry_label: bool = False,
         category: Optional[str] = None,   # None = preserve existing value
         department: Optional[str] = None  # None = preserve existing value
     ) -> bool:
@@ -562,6 +569,7 @@ class CSVLayer:
                 "mc_horizon_days": row.get("mc_horizon_days", "0").strip() or "0",
                 "in_assortment": row.get("in_assortment", "true").strip() or "true",
                 "target_csl": row.get("target_csl", "0").strip() or "0",
+                "has_expiry_label": row.get("has_expiry_label", "false").strip() or "false",
                 # Classification — always preserved from existing row unless explicitly updated
                 "category": row.get("category", "").strip(),
                 "department": row.get("department", "").strip(),
@@ -605,6 +613,7 @@ class CSVLayer:
                 normalized_row["mc_horizon_days"] = str(mc_horizon_days)
                 normalized_row["in_assortment"] = "true" if in_assortment else "false"
                 normalized_row["target_csl"] = str(target_csl)
+                normalized_row["has_expiry_label"] = "true" if has_expiry_label else "false"
                 # Use sentinel: None means "keep existing", string means "set to this value"
                 normalized_row["category"] = category if category is not None else normalized_row["category"]
                 normalized_row["department"] = department if department is not None else normalized_row["department"]

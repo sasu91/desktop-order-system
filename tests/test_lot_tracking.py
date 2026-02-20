@@ -306,8 +306,8 @@ class TestReceivingWithLots:
         """Create temporary receiving workflow."""
         with tempfile.TemporaryDirectory() as tmpdir:
             csv_layer = CSVLayer(data_dir=Path(tmpdir))
-            # Add test SKU
-            sku = SKU(sku="SKU001", description="Test Product")
+            # Add test SKU with has_expiry_label=True so manual expiry date is honoured
+            sku = SKU(sku="SKU001", description="Test Product", has_expiry_label=True)
             csv_layer.write_sku(sku)
             workflow = ReceivingWorkflow(csv_layer)
             yield workflow, csv_layer
@@ -330,7 +330,6 @@ class TestReceivingWithLots:
             "sku": "SKU001",
             "qty_received": 100,
             "order_ids": [],
-            "lot_id": "LOT-TEST-001",
             "expiry_date": "2026-12-31",
         }]
         
@@ -343,7 +342,7 @@ class TestReceivingWithLots:
         # Verify lot created
         lots = csv_layer.read_lots()
         assert len(lots) == 1
-        assert lots[0].lot_id == "LOT-TEST-001"
+        assert lots[0].lot_id  # auto-generated, non-empty
         assert lots[0].qty_on_hand == 100
         assert lots[0].expiry_date == date(2026, 12, 31)
     
@@ -365,7 +364,6 @@ class TestReceivingWithLots:
             "sku": "SKU001",
             "qty_received": 50,
             "order_ids": [],
-            "lot_id": "",
             "expiry_date": "2026-06-30",
         }]
         
@@ -389,7 +387,6 @@ class TestReceivingWithLots:
             "sku": "SKU001",
             "qty_received": 30,
             "order_ids": [],
-            "lot_id": "",
             "expiry_date": "",
         }]
         

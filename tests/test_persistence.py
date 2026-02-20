@@ -61,7 +61,7 @@ class TestCSVLayerAutoCreate:
             "oos_boost_percent", "oos_detection_mode", "oos_popup_preference",
             "forecast_method", "mc_distribution", "mc_n_simulations", "mc_random_seed",
             "mc_output_stat", "mc_output_percentile", "mc_horizon_mode", "mc_horizon_days",
-            "in_assortment", "target_csl",
+            "in_assortment", "target_csl", "has_expiry_label",
         ]
         assert headers == expected_headers
 

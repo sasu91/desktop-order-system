@@ -84,6 +84,10 @@ class SKU:
     # Service level override (0.0 = use global/cluster resolver)
     target_csl: float = 0.0  # Target Cycle Service Level (0.0 = resolver, 0.01-0.9999 = override)
     
+    # Expiry label: True = product has expiry date printed on label (manual entry at receiving)
+    # False = shelf life tracking is automatic (calculated from shelf_life_days) — no label to scan
+    has_expiry_label: bool = False
+    
     def __post_init__(self):
         if not self.sku or not self.sku.strip():
             raise ValueError("SKU cannot be empty")

@@ -3405,6 +3405,7 @@ class DesktopOrderApp:
 
         # Pending qty edits dict
         self.pending_qty_edits = {}
+        self.pending_expiry_edits = {}  # Per-row expiry dates for has_expiry_label SKUs
 
         # Treeview + scrollbar
         p_tv_frame = ttk.Frame(pending_card)
@@ -3414,7 +3415,7 @@ class DesktopOrderApp:
         p_scroll.pack(side="right", fill="y")
 
         cols = ("Order ID", "SKU", "Description", "Pack Size",
-                "Colli Ordinati", "Colli Ricevuti", "Colli Sospesi", "Receipt Date")
+                "Colli Ordinati", "Colli Ricevuti", "Colli Sospesi", "Receipt Date", "Scadenza")
         self.pending_treeview = ttk.Treeview(
             p_tv_frame,
             columns=cols,
@@ -3433,6 +3434,7 @@ class DesktopOrderApp:
             ("Colli Ricevuti", "Ricevuti",        tk.CENTER,  80),
             ("Colli Sospesi",  "In Sospeso",      tk.CENTER,  80),
             ("Receipt Date",   "Data Prevista",   tk.CENTER, 110),
+            ("Scadenza",       "Data Scadenza",   tk.CENTER, 110),
         ]
         for col_id, heading, _anchor, width in col_cfg:
             anchor = cast(Literal["w", "center", "e"], _anchor)
@@ -3449,62 +3451,29 @@ class DesktopOrderApp:
 
         pending_hint = ttk.Label(
             pending_card,
-            text="💡 Doppio clic sulla colonna Ricevuti per modificare la quantità.",
+            text="💡 Doppio clic su Ricevuti per modificare la quantità. Per SKU con etichetta scadenza: doppio clic su Data Scadenza per inserire la data.",
             font=("Helvetica", 8),
             foreground="gray",
         )
         pending_hint.pack(anchor="w", pady=(4, 0))
 
-        # ── SECTION 2 — LOT TRACEABILITY + CONFIRM ───────────────────────────
-        lot_card = ttk.LabelFrame(main_frame, text="  🔍  Dettagli Tracciabilità Lotto  —  Opzionale", padding=(10, 8))
-        lot_card.pack(fill="x", padx=16, pady=(0, 10))
+        # ── SECTION 2 — CONFIRM RICEVIMENTO ───────────────────────────────────
+        confirm_card = ttk.Frame(main_frame)
+        confirm_card.pack(fill="x", padx=16, pady=(0, 10))
 
-        # Accent left border simulation via a thin Frame
-        accent = tk.Frame(lot_card, width=4, background="#2563EB")
-        accent.pack(side="left", fill="y", padx=(0, 10))
-
-        lot_fields = ttk.Frame(lot_card)
-        lot_fields.pack(side="left", fill="both", expand=True)
-
-        # Three-column grid for fields
-        lot_fields.columnconfigure(0, weight=1)
-        lot_fields.columnconfigure(1, weight=1)
-        lot_fields.columnconfigure(2, weight=1)
-
-        # Field: Lot ID
-        f0 = ttk.Frame(lot_fields)
-        f0.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-        ttk.Label(f0, text="Lotto ID", font=("Helvetica", 9, "bold")).pack(anchor="w")
-        self.lot_id_var = tk.StringVar()
-        ttk.Entry(f0, textvariable=self.lot_id_var, width=24).pack(fill="x", pady=(2, 0))
-        ttk.Label(f0, text="Lasciare vuoto per auto-generare.", foreground="gray", font=("Helvetica", 8)).pack(anchor="w")
-
-        # Field: Expiry Date
-        f1 = ttk.Frame(lot_fields)
-        f1.grid(row=0, column=1, sticky="nsew", padx=(0, 12))
-        ttk.Label(f1, text="Data Scadenza", font=("Helvetica", 9, "bold")).pack(anchor="w")
-        self.expiry_date_var = tk.StringVar()
-        ttk.Entry(f1, textvariable=self.expiry_date_var, width=24).pack(fill="x", pady=(2, 0))
-        ttk.Label(f1, text="Obbligatoria per prodotti deperibili  (YYYY-MM-DD).", foreground="gray", font=("Helvetica", 8)).pack(anchor="w")
-
-        # Field: Notes
-        f2 = ttk.Frame(lot_fields)
-        f2.grid(row=0, column=2, sticky="nsew")
-        ttk.Label(f2, text="Note", font=("Helvetica", 9, "bold")).pack(anchor="w")
+        # Notes field
+        ttk.Label(confirm_card, text="Note:", font=("Helvetica", 9, "bold")).pack(side="left", padx=(0, 6))
         self.receiving_notes_var = tk.StringVar()
-        ttk.Entry(f2, textvariable=self.receiving_notes_var, width=28).pack(fill="x", pady=(2, 0))
-        ttk.Label(f2, text="Eventuali danni o discrepanze…", foreground="gray", font=("Helvetica", 8)).pack(anchor="w")
+        ttk.Entry(confirm_card, textvariable=self.receiving_notes_var, width=40).pack(side="left", padx=(0, 10))
 
-        # Confirm button — right-aligned, vertically centered
-        confirm_btn_frame = ttk.Frame(lot_card)
-        confirm_btn_frame.pack(side="right", padx=(16, 4), fill="y")
+        # Confirm button
         ttk.Button(
-            confirm_btn_frame,
+            confirm_card,
             text="✔  Conferma Ricevimento",
             command=self._close_receipt_bulk,
             style="Accent.TButton",
             width=22,
-        ).pack(expand=True)
+        ).pack(side="right", padx=(4, 0))
 
         # ── SECTION 3 — RECEIPT HISTORY ──────────────────────────────────────
         history_card = ttk.LabelFrame(main_frame, text="  🕐  Storico Ricevimenti  —  Articoli recentemente processati", padding=(10, 6))
@@ -3579,24 +3548,24 @@ class DesktopOrderApp:
                 self.pending_treeview.detach(item_id)
     
     def _refresh_pending_orders(self):
-        """Calculate and display pending orders with qty_received from order_logs."""
+        """Calculate and display pending orders at per-order granularity."""
         # Reset edits
         self.pending_qty_edits = {}
+        self.pending_expiry_edits = {}  # Per-row expiry dates (keyed by treeview item_id)
         
         # Read order logs
         order_logs = self.csv_layer.read_order_logs()
         
-        # Get SKU descriptions
+        # Get SKU data
         skus_by_id = {sku.sku: sku for sku in self.csv_layer.read_skus()}
         
-        # Display pending orders - now using qty_received from order_logs
+        # Clear treeview
         self.pending_treeview.delete(*self.pending_treeview.get_children())
         
-        # Group order logs by (SKU, receipt_date) for display purposes
-        order_groups = {}  # {(sku, receipt_date): {order_ids: [], qty_ordered_total: int, qty_received_total: int}}
-        
         for log in order_logs:
-            sku = log.get("sku")
+            sku = log.get("sku", "")
+            if not sku:
+                continue
             status = log.get("status", "PENDING")
             
             # Only show PENDING orders
@@ -3605,52 +3574,39 @@ class DesktopOrderApp:
             
             order_id = log.get("order_id")
             qty_ordered = int(log.get("qty_ordered", 0))
-            qty_received = int(log.get("qty_received", 0))  # NEW: read from order_logs
+            qty_received = int(log.get("qty_received", 0))
             receipt_date_str = log.get("receipt_date", "")
             
-            key = (sku, receipt_date_str)
-            if key not in order_groups:
-                order_groups[key] = {"order_ids": [], "qty_ordered_total": 0, "qty_received_total": 0}
+            qty_pending = max(0, qty_ordered - qty_received)
+            if qty_pending <= 0:
+                continue
             
-            order_groups[key]["order_ids"].append(order_id)
-            order_groups[key]["qty_ordered_total"] += qty_ordered
-            order_groups[key]["qty_received_total"] += qty_received  # NEW: aggregate qty_received
-        
-        # Display rows: one per (SKU, receipt_date) with actual qty_received from logs
-        for (sku, receipt_date_str), group_data in order_groups.items():
             sku_obj = skus_by_id.get(sku)
             description = sku_obj.description if sku_obj else "N/A"
             pack_size = getattr(sku_obj, "pack_size", 1) if sku_obj else 1
             
-            qty_ordered_total = group_data["qty_ordered_total"]
-            qty_received_total = group_data["qty_received_total"]  # NEW: actual received
-            qty_pending = max(0, qty_ordered_total - qty_received_total)
-            order_ids_str = ", ".join(group_data["order_ids"])
+            colli_ordinati = qty_ordered // pack_size
+            colli_ricevuti = qty_received // pack_size
+            colli_sospesi = qty_pending // pack_size
             
-            # Only show if there's pending quantity
-            if qty_pending > 0:
-                # Convert to colli (packs)
-                colli_ordinati = qty_ordered_total // pack_size
-                colli_ricevuti = qty_received_total // pack_size
-                colli_sospesi = qty_pending // pack_size
-                
-                self.pending_treeview.insert(
-                    "",
-                    "end",
-                    values=(
-                        order_ids_str,
-                        sku,
-                        description,
-                        pack_size,
-                        colli_ordinati,
-                        colli_ricevuti,
-                        colli_sospesi,
-                        receipt_date_str,
-                    ),
-                )
+            self.pending_treeview.insert(
+                "",
+                "end",
+                values=(
+                    order_id,
+                    sku,
+                    description,
+                    pack_size,
+                    colli_ordinati,
+                    colli_ricevuti,
+                    colli_sospesi,
+                    receipt_date_str,
+                    "",  # Scadenza — empty until user edits
+                ),
+            )
     
     def _on_pending_qty_double_click(self, event):
-        """Edita quantità ricevuta con doppio click (gestisce colli)."""
+        """Edita quantità ricevuta o data scadenza con doppio click."""
         region = self.pending_treeview.identify("region", event.x, event.y)
         if region != "cell":
             return
@@ -3664,39 +3620,111 @@ class DesktopOrderApp:
         item_id = selected[0]
         values = self.pending_treeview.item(item_id)["values"]
         
-        # Solo colonna "Colli Ricevuti" (indice #5 = colonna 6)
-        if column != "#6":
+        # ── Colonna "Colli Ricevuti" (#6) ───────────────────────────────────
+        if column == "#6":
+            sku = values[1]
+            pack_size = int(values[3])
+            colli_ricevuti_current = int(values[5])
+            
+            new_colli = simpledialog.askinteger(
+                "Modifica Colli Ricevuti",
+                f"SKU: {sku}\nPz/Collo: {pack_size}\nInserisci colli ricevuti:",
+                initialvalue=colli_ricevuti_current,
+                minvalue=0,
+                parent=self.root,
+            )
+            
+            if new_colli is None:
+                return
+            
+            qty_received_pz = new_colli * pack_size
+            
+            new_values = list(values)
+            colli_ordinati = int(values[4])
+            new_values[5] = str(new_colli)
+            new_values[6] = str(max(0, colli_ordinati - new_colli))
+            self.pending_treeview.item(item_id, values=new_values, tags=("edited",))
+            
+            self.pending_qty_edits[item_id] = qty_received_pz
             return
         
-        sku = values[1]
-        pack_size = int(values[3])
-        colli_ricevuti_current = int(values[5])
-        colli_sospesi = int(values[6])
-        
-        # Dialog per inserire nuovi colli ricevuti
-        new_colli = simpledialog.askinteger(
-            "Modifica Colli Ricevuti",
-            f"SKU: {sku}\nPz/Collo: {pack_size}\nInserisci colli ricevuti:",
-            initialvalue=colli_ricevuti_current,
-            minvalue=0,
-            parent=self.root,
-        )
-        
-        if new_colli is None:
-            return
-        
-        # Converti in pezzi
-        qty_received_pz = new_colli * pack_size
-        
-        # Aggiorna valore nel treeview
-        new_values = list(values)
-        colli_ordinati = int(values[4])
-        new_values[5] = str(new_colli)  # Colli ricevuti
-        new_values[6] = str(max(0, colli_ordinati - new_colli))  # Colli sospesi
-        self.pending_treeview.item(item_id, values=new_values, tags=("edited",))
-        
-        # Salva in memoria (in pezzi per compatibilità con backend)
-        self.pending_qty_edits[item_id] = qty_received_pz
+        # ── Colonna "Scadenza" (#9) ──────────────────────────────────────────
+        if column == "#9":
+            sku = values[1]
+            skus_by_id = {s.sku: s for s in self.csv_layer.read_skus()}
+            sku_obj = skus_by_id.get(sku)
+            
+            # Only allow editing for SKUs with has_expiry_label=True
+            if not sku_obj or not sku_obj.has_expiry_label:
+                return  # Field is disabled for non-labelled SKUs
+            
+            # Use DateEntry if available, otherwise plain text dialog
+            if TKCALENDAR_AVAILABLE:
+                dlg = tk.Toplevel(self.root)
+                dlg.title("Data Scadenza")
+                dlg.resizable(False, False)
+                dlg.transient(self.root)
+                dlg.grab_set()
+                
+                ttk.Label(dlg, text=f"SKU: {sku} — Seleziona data scadenza:").pack(padx=12, pady=(10, 4))
+                
+                current_expiry = self.pending_expiry_edits.get(item_id, "")
+                initial_date = None
+                if current_expiry:
+                    try:
+                        initial_date = date.fromisoformat(current_expiry)
+                    except ValueError:
+                        pass
+                
+                if initial_date:
+                    cal = DateEntry(dlg, date_pattern="yyyy-mm-dd", year=initial_date.year,  # type: ignore[misc]
+                                    month=initial_date.month, day=initial_date.day)
+                else:
+                    cal = DateEntry(dlg, date_pattern="yyyy-mm-dd")  # type: ignore[misc]
+                cal.pack(padx=12, pady=4)
+                
+                chosen_date = tk.StringVar()
+                
+                def _confirm():
+                    chosen_date.set(cal.get_date().isoformat())
+                    dlg.destroy()
+                
+                def _cancel():
+                    dlg.destroy()
+                
+                btn_frame = ttk.Frame(dlg)
+                btn_frame.pack(fill="x", padx=12, pady=(4, 10))
+                ttk.Button(btn_frame, text="OK", command=_confirm).pack(side="right", padx=4)
+                ttk.Button(btn_frame, text="Annulla", command=_cancel).pack(side="right")
+                dlg.wait_window()
+                
+                new_expiry = chosen_date.get()
+            else:
+                new_expiry = simpledialog.askstring(
+                    "Data Scadenza",
+                    f"SKU: {sku}\nInserisci data scadenza (YYYY-MM-DD):",
+                    initialvalue=self.pending_expiry_edits.get(item_id, ""),
+                    parent=self.root,
+                )
+                if new_expiry is None:
+                    return
+                new_expiry = new_expiry.strip()
+                if new_expiry:
+                    try:
+                        date.fromisoformat(new_expiry)
+                    except ValueError:
+                        messagebox.showerror("Formato Data", "Formato non valido. Usa YYYY-MM-DD.")
+                        return
+            
+            if not new_expiry:
+                return
+            
+            # Store and update treeview
+            self.pending_expiry_edits[item_id] = new_expiry
+            new_values = list(values)
+            new_values[8] = new_expiry
+            tags = self.pending_treeview.item(item_id, "tags")
+            self.pending_treeview.item(item_id, values=new_values, tags=tags or ("edited",))
     
     def _close_receipt_bulk(self):
         """Chiudi ricevimento per tutte le quantità modificate con tracciabilità documento."""
@@ -3731,21 +3759,6 @@ class DesktopOrderApp:
         
         receipt_date_obj = date.today()
         
-        # Get lot tracking info
-        lot_id_input = self.lot_id_var.get().strip()
-        expiry_date_input = self.expiry_date_var.get().strip()
-        
-        # Validate expiry_date format
-        if expiry_date_input:
-            try:
-                date.fromisoformat(expiry_date_input)
-            except ValueError:
-                messagebox.showerror(
-                    "Formato Data Errato",
-                    f"Data scadenza non valida: {expiry_date_input}\n\nFormato atteso: YYYY-MM-DD (es. 2026-12-31)"
-                )
-                return
-        
         # Prepara items per il nuovo metodo
         items = []
         for item_id, new_qty_received in self.pending_qty_edits.items():
@@ -3754,13 +3767,13 @@ class DesktopOrderApp:
             
             values = self.pending_treeview.item(item_id)["values"]
             sku = values[1]
+            expiry_date_for_item = self.pending_expiry_edits.get(item_id, "")
             
             items.append({
                 "sku": sku,
                 "qty_received": new_qty_received,
                 "order_ids": [],  # FIFO allocation automatica
-                "lot_id": lot_id_input,  # NEW: lot tracking
-                "expiry_date": expiry_date_input,  # NEW: expiry tracking
+                "expiry_date": expiry_date_for_item,  # Per-row expiry (only used for has_expiry_label SKUs)
             })
         
         if not items:
@@ -5778,17 +5791,33 @@ class DesktopOrderApp:
         section_shelf_life.pack(fill="x", pady=5)
         content_shelf_life = section_shelf_life.get_content_frame()
         
+        # has_expiry_label checkbox
+        has_expiry_label_var = tk.BooleanVar(value=current_sku.has_expiry_label if current_sku else False)
+        expiry_label_frame = ttk.Frame(content_shelf_life)
+        expiry_label_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
+        ttk.Checkbutton(
+            expiry_label_frame,
+            text="Ha etichetta scadenza (data scadenza manuale al ricevimento)",
+            variable=has_expiry_label_var,
+        ).pack(side="left", padx=(0, 10))
+        ttk.Label(
+            expiry_label_frame,
+            text="Se disattivo: la shelf life viene calcolata automaticamente dal motore",
+            font=("Helvetica", 8),
+            foreground="gray",
+        ).pack(side="left")
+
         min_shelf_life_var = tk.StringVar(value=str(current_sku.min_shelf_life_days) if (current_sku and current_sku.min_shelf_life_days > 0) else "0")
-        add_field_row(content_shelf_life, 0, "Shelf Life Minima (giorni):", "Giorni minimi shelf life accettabile (0=globale)", min_shelf_life_var, "entry")
+        add_field_row(content_shelf_life, 1, "Shelf Life Minima (giorni):", "Giorni minimi shelf life accettabile (0=globale)", min_shelf_life_var, "entry")
         
         waste_penalty_mode_var = tk.StringVar(value=current_sku.waste_penalty_mode if current_sku else "")
-        add_field_row(content_shelf_life, 1, "Modalità Penalità Spreco:", "soft/hard/vuoto=globale", waste_penalty_mode_var, "combobox", choices=["", "soft", "hard"])
+        add_field_row(content_shelf_life, 2, "Modalità Penalità Spreco:", "soft/hard/vuoto=globale", waste_penalty_mode_var, "combobox", choices=["", "soft", "hard"])
         
         waste_penalty_factor_var = tk.StringVar(value=str(current_sku.waste_penalty_factor) if (current_sku and current_sku.waste_penalty_factor > 0) else "0")
-        add_field_row(content_shelf_life, 2, "Fattore Penalità:", "0-1 per % o qty fissa (0=globale)", waste_penalty_factor_var, "entry")
+        add_field_row(content_shelf_life, 3, "Fattore Penalità:", "0-1 per % o qty fissa (0=globale)", waste_penalty_factor_var, "entry")
         
         waste_risk_threshold_var = tk.StringVar(value=str(current_sku.waste_risk_threshold) if (current_sku and current_sku.waste_risk_threshold > 0) else "0")
-        add_field_row(content_shelf_life, 3, "Soglia Rischio Spreco (%):", "0-100, 0=globale", waste_risk_threshold_var, "entry")
+        add_field_row(content_shelf_life, 4, "Soglia Rischio Spreco (%):", "0-100, 0=globale", waste_risk_threshold_var, "entry")
         
         # ===== SECTION 5: Monte Carlo =====
         section_mc = CollapsibleFrame(form_frame, title="🎲 Forecast Monte Carlo", expanded=False)
@@ -5845,6 +5874,7 @@ class DesktopOrderApp:
                 target_csl_var.get(),
                 famiglia_var.get(),
                 sottofamiglia_var.get(),
+                has_expiry_label_var.get(),
                 current_sku
             ),
         ).pack(side="right", padx=5)
@@ -5883,6 +5913,7 @@ class DesktopOrderApp:
                         target_csl_str,
                         famiglia_str,
                         sottofamiglia_str,
+                        has_expiry_label,
                         current_sku):
         """Save SKU from form."""
         # Validate inputs
@@ -6083,6 +6114,7 @@ class DesktopOrderApp:
                     mc_horizon_days=mc_horizon_days,
                     in_assortment=in_assortment,
                     target_csl=target_csl,
+                    has_expiry_label=has_expiry_label,
                     department=famiglia_str.strip(),
                     category=sottofamiglia_str.strip(),
                 )
@@ -6111,6 +6143,7 @@ class DesktopOrderApp:
                     forecast_method, mc_distribution, mc_n_simulations, mc_random_seed,
                     mc_output_stat, mc_output_percentile, mc_horizon_mode, mc_horizon_days,
                     in_assortment, target_csl,
+                    has_expiry_label=has_expiry_label,
                     category=sottofamiglia_str.strip(),
                     department=famiglia_str.strip(),
                 )
