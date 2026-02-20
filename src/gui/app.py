@@ -1460,10 +1460,6 @@ class DesktopOrderApp:
         self.order_outer_paned.add(details_outer, weight=1)
         details_outer.config(width=370)
 
-        # Set minimum pane widths so neither side can be fully hidden
-        self.order_outer_paned.pane(self.order_left_paned, minsize=320)
-        self.order_outer_paned.pane(details_outer, minsize=220)
-
         # Set initial sash position after layout is realized
         def _set_order_sash():
             total_w = self.order_outer_paned.winfo_width()
@@ -1544,7 +1540,7 @@ class DesktopOrderApp:
 
         if MATPLOTLIB_AVAILABLE:
             self.detail_fig = Figure(figsize=(3.5, 2.0), dpi=80)
-            self.detail_fig.patch.set_facecolor("#f8fafc")
+            self.detail_fig.patch.set_facecolor("#f8fafc")  # type: ignore[union-attr]
             self.detail_ax = self.detail_fig.add_subplot(111)
             self.detail_chart_canvas = FigureCanvasTkAgg(self.detail_fig, master=chart_lf)
             self.detail_chart_canvas.get_tk_widget().pack(fill="x")
@@ -1637,6 +1633,9 @@ class DesktopOrderApp:
         if not MATPLOTLIB_AVAILABLE or self.detail_chart_canvas is None:
             return
         ax = self.detail_ax
+        fig = self.detail_fig
+        if ax is None or fig is None:
+            return
         ax.clear()
         ax.set_facecolor("#f8fafc")
 
@@ -1648,7 +1647,7 @@ class DesktopOrderApp:
             ax.set_yticks([])
             for spine in ax.spines.values():
                 spine.set_visible(False)
-            self.detail_fig.tight_layout(pad=0.3)
+            fig.tight_layout(pad=0.3)
             self.detail_chart_canvas.draw()
             return
 
@@ -1728,7 +1727,7 @@ class DesktopOrderApp:
         except Exception:
             pass
 
-        self.detail_fig.tight_layout(pad=0.3)
+        fig.tight_layout(pad=0.3)
         self.detail_chart_canvas.draw()
 
     def _update_detail_panel(self, proposal, sku_obj, pack_size: int):
