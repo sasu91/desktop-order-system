@@ -36,7 +36,7 @@ from config import (
 
 # Import SQLite components (conditional)
 try:
-    from ..db import open_connection, transaction
+    from ..db import open_connection, transaction, apply_migrations
     from ..repositories import RepositoryFactory
     SQLITE_AVAILABLE = True
 except ImportError as e:
@@ -101,6 +101,7 @@ class StorageAdapter(CSVLayer):
             else:
                 try:
                     self.conn = open_connection(DATABASE_PATH)
+                    apply_migrations(self.conn)  # apply any pending schema migrations
                     self.repos = RepositoryFactory(self.conn)
                 except Exception as e:
                     print(f"⚠ SQLite init failed, falling back to CSV: {e}")
