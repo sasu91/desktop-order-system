@@ -55,12 +55,12 @@ def temp_db(tmp_path):
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     
-    # Apply schema (from migration 001)
-    migration_file = Path(__file__).parent.parent / "migrations" / "001_initial_schema.sql"
-    with open(migration_file) as f:
-        schema_sql = f.read()
-    
-    conn.executescript(schema_sql)
+    # Apply schema (from migration 001, then subsequent migrations)
+    migrations_dir = Path(__file__).parent.parent / "migrations"
+    for migration_file in sorted(migrations_dir.glob("*.sql")):
+        with open(migration_file) as f:
+            schema_sql = f.read()
+        conn.executescript(schema_sql)
     conn.commit()
     
     yield conn

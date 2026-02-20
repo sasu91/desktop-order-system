@@ -548,6 +548,7 @@ class StorageAdapter(CSVLayer):
             mc_horizon_days=d.get('mc_horizon_days', 30),
             in_assortment=d.get('in_assortment', 1),
             target_csl=d.get('target_csl', 0.0),
+            has_expiry_label=bool(d.get('has_expiry_label', False)),
         )
     
     @staticmethod
@@ -585,6 +586,7 @@ class StorageAdapter(CSVLayer):
             'mc_horizon_days': sku.mc_horizon_days,
             'in_assortment': sku.in_assortment,
             'target_csl': sku.target_csl,
+            'has_expiry_label': sku.has_expiry_label,
         }
     
     @staticmethod

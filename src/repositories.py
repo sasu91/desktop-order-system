@@ -169,6 +169,7 @@ class SKURepository:
                         'mc_horizon_days': 0,
                         'in_assortment': 1,
                         'target_csl': 0.0,
+                        'has_expiry_label': 0,
                     }
                     
                     # Merge with provided data
