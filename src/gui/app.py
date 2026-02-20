@@ -73,7 +73,8 @@ class DesktopOrderApp:
         """
         self.root = root
         self.root.title("Desktop Order System")
-        self.root.geometry("1000x600")
+        self.root.geometry("1100x680")
+        self.root.minsize(700, 520)  # Prevents hiding of paned sections
         
         try:
             # Initialize storage layer (StorageAdapter - transparent CSV/SQLite routing)
@@ -1302,12 +1303,19 @@ class DesktopOrderApp:
         
         # Title
         title_frame = ttk.Frame(main_frame)
-        title_frame.pack(side="top", fill="x", pady=(0, 10))
+        title_frame.pack(side="top", fill="x", pady=(0, 5))
         ttk.Label(title_frame, text="Gestione Ordini", font=("Helvetica", 14, "bold")).pack(side="left")
-        
+
+        # === OUTER PANED WINDOW (horizontal): left (params+table) | right (Dettagli Calcolo) ===
+        self.order_outer_paned = ttk.PanedWindow(main_frame, orient="horizontal")
+        self.order_outer_paned.pack(fill="both", expand=True)
+
+        # Left pane: vertical PanedWindow — top (params/controls) | bottom (proposals table)
+        self.order_left_paned = ttk.PanedWindow(self.order_outer_paned, orient="vertical")
+        self.order_outer_paned.add(self.order_left_paned, weight=3)
+
         # === PARAMETERS & PROPOSAL GENERATION ===
-        param_frame = ttk.LabelFrame(main_frame, text="Genera Proposte Ordine", padding=10)
-        param_frame.pack(side="top", fill="x", pady=(0, 10))
+        param_frame = ttk.LabelFrame(self.order_left_paned, text="Genera Proposte Ordine", padding=10)
         
         # Read default values from settings
         settings = self.csv_layer.read_settings()
@@ -1386,27 +1394,30 @@ class DesktopOrderApp:
         ttk.Button(buttons_row, text="1️⃣ Genera Tutte le Proposte", command=self._generate_all_proposals).pack(side="left", padx=5)
         ttk.Button(buttons_row, text="🔄 Aggiorna Dati Stock", command=self._refresh_order_stock_data).pack(side="left", padx=5)
         ttk.Button(buttons_row, text="✗ Cancella Proposte", command=self._clear_proposals).pack(side="left", padx=5)
-        
+        ttk.Button(buttons_row, text="✓ Conferma Tutti gli Ordini (Colli > 0)", command=self._confirm_orders).pack(side="left", padx=(15, 5))
+
+        # Register param_frame as top pane of left vertical split
+        self.order_left_paned.add(param_frame, weight=0)
+
         # === PROPOSALS TABLE (EDITABLE) ===
-        # Create horizontal split: table on left, details sidebar on right
-        split_frame = ttk.Frame(main_frame)
-        split_frame.pack(fill="both", expand=True, pady=(0, 10))
+        proposal_frame = ttk.LabelFrame(self.order_left_paned, text="Proposte Ordine (Doppio click su Colli Proposti per modificare)", padding=5)
+        self.order_left_paned.add(proposal_frame, weight=1)
         
-        # Left side: proposals table
-        proposal_frame = ttk.LabelFrame(split_frame, text="Proposte Ordine (Doppio click su Colli Proposti per modificare)", padding=5)
-        proposal_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
-        
-        # Scrollbar
-        scrollbar = ttk.Scrollbar(proposal_frame)
-        scrollbar.pack(side="right", fill="y")
-        
+        # Scrollbars (vertical + horizontal)
+        scrollbar_y = ttk.Scrollbar(proposal_frame, orient="vertical")
+        scrollbar_y.pack(side="right", fill="y")
+        scrollbar_x = ttk.Scrollbar(proposal_frame, orient="horizontal")
+        scrollbar_x.pack(side="bottom", fill="x")
+
         self.proposal_treeview = ttk.Treeview(
             proposal_frame,
             columns=("SKU", "Description", "Pack Size", "Usable Stock", "Waste Risk %", "Colli Proposti", "Pezzi Proposti", "Shelf Penalty", "MC Comparison", "Promo Δ", "Event Uplift", "Receipt Date"),
             height=10,
-            yscrollcommand=scrollbar.set,
+            yscrollcommand=scrollbar_y.set,
+            xscrollcommand=scrollbar_x.set,
         )
-        scrollbar.config(command=self.proposal_treeview.yview)
+        scrollbar_y.config(command=self.proposal_treeview.yview)
+        scrollbar_x.config(command=self.proposal_treeview.xview)
         
         self.proposal_treeview.column("#0", width=0, stretch=tk.NO)
         self.proposal_treeview.column("SKU", anchor=tk.W, width=100)
@@ -1444,12 +1455,37 @@ class DesktopOrderApp:
         self.proposal_treeview.bind("<Double-1>", self._on_proposal_double_click)
         self.proposal_treeview.bind("<<TreeviewSelect>>", self._on_proposal_select)
         
-        # ── RIGHT SIDE: Structured Details Sidebar ──────────────────────────
-        details_outer = ttk.LabelFrame(split_frame, text="Dettagli Calcolo", padding=5)
-        details_outer.pack(side="right", fill="both", padx=(5, 0))
+        # ── RIGHT SIDE: Dettagli Calcolo — full-height right pane of outer PanedWindow ──
+        details_outer = ttk.LabelFrame(self.order_outer_paned, text="Dettagli Calcolo", padding=5)
+        self.order_outer_paned.add(details_outer, weight=1)
         details_outer.config(width=370)
-        # Prevent the frame from shrinking below its requested width
-        details_outer.pack_propagate(False)
+
+        # Set minimum pane widths so neither side can be fully hidden
+        self.order_outer_paned.pane(self.order_left_paned, minsize=320)
+        self.order_outer_paned.pane(details_outer, minsize=220)
+
+        # Set initial sash position after layout is realized
+        def _set_order_sash():
+            total_w = self.order_outer_paned.winfo_width()
+            if total_w > 10:
+                self.order_outer_paned.sashpos(0, max(total_w - 390, 350))
+        self.order_outer_paned.after(150, _set_order_sash)
+
+        # Responsive: keep right panel visible when window is resized
+        def _on_order_paned_configure(event=None):
+            total_w = self.order_outer_paned.winfo_width()
+            if total_w < 10:
+                return
+            try:
+                sash = self.order_outer_paned.sashpos(0)
+                # Ensure both panes always have at least their minsize visible
+                if total_w - sash < 220:
+                    self.order_outer_paned.sashpos(0, total_w - 220)
+                if sash < 320:
+                    self.order_outer_paned.sashpos(0, 320)
+            except Exception:
+                pass
+        self.order_outer_paned.bind("<Configure>", _on_order_paned_configure)
 
         # Scrollable canvas container
         _details_canvas = tk.Canvas(details_outer, highlightthickness=0)
@@ -1594,19 +1630,6 @@ class DesktopOrderApp:
         self.proposal_details_text.pack(side="left", fill="both", expand=True)
         _raw_sb.config(command=self.proposal_details_text.yview)
         
-        # === CONFIRMATION SECTION ===
-        confirm_frame = ttk.LabelFrame(main_frame, text="2️⃣ Conferma Ordini", padding=10)
-        confirm_frame.pack(side="bottom", fill="x", pady=(10, 0))
-        
-        info_row = ttk.Frame(confirm_frame)
-        info_row.pack(side="top", fill="x", pady=(0, 10))
-        ttk.Label(info_row, text="Verifica le proposte sopra (doppio click per modificare), poi conferma gli ordini con Colli > 0.", font=("Helvetica", 9)).pack(side="left")
-        
-        buttons_row = ttk.Frame(confirm_frame)
-        buttons_row.pack(side="top", fill="x")
-        
-        ttk.Button(buttons_row, text="✓ Conferma Tutti gli Ordini (Colli > 0)", command=self._confirm_orders).pack(side="left", padx=5)
-    
     # ── Detail panel helpers ────────────────────────────────────────────────
 
     def _draw_projection_chart(self, proposal):
