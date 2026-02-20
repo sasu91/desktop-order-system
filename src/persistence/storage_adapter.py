@@ -206,6 +206,99 @@ class StorageAdapter(CSVLayer):
         else:
             return self.csv_layer.update_sku_object(old_sku_id, sku_object)
     
+    def update_sku(
+        self,
+        old_sku_id: str,
+        new_sku_id: str,
+        new_description: str,
+        new_ean: Optional[str],
+        moq: int = 1,
+        pack_size: int = 1,
+        lead_time_days: int = 7,
+        review_period: int = 7,
+        safety_stock: int = 0,
+        shelf_life_days: int = 0,
+        max_stock: int = 999,
+        reorder_point: int = 10,
+        demand_variability: DemandVariability = DemandVariability.STABLE,
+        oos_boost_percent: float = 0.0,
+        oos_detection_mode: str = "",
+        oos_popup_preference: str = "ask",
+        min_shelf_life_days: int = 0,
+        waste_penalty_mode: str = "",
+        waste_penalty_factor: float = 0.0,
+        waste_risk_threshold: float = 0.0,
+        forecast_method: str = "",
+        mc_distribution: str = "",
+        mc_n_simulations: int = 0,
+        mc_random_seed: int = 0,
+        mc_output_stat: str = "",
+        mc_output_percentile: int = 0,
+        mc_horizon_mode: str = "",
+        mc_horizon_days: int = 0,
+        in_assortment: bool = True,
+        target_csl: float = 0.0,
+        has_expiry_label: bool = False,
+        category: Optional[str] = None,
+        department: Optional[str] = None,
+    ) -> bool:
+        """Update SKU - routes to appropriate backend."""
+        if self.is_sqlite_mode():
+            # Preserve existing category/department if caller passes None sentinel
+            existing_sku: Optional[SKU] = next(
+                (s for s in self.read_skus() if s.sku == old_sku_id), None
+            )
+            sku_object = SKU(
+                sku=new_sku_id,
+                description=new_description,
+                ean=new_ean,
+                moq=moq,
+                pack_size=pack_size,
+                lead_time_days=lead_time_days,
+                review_period=review_period,
+                safety_stock=safety_stock,
+                shelf_life_days=shelf_life_days,
+                max_stock=max_stock,
+                reorder_point=reorder_point,
+                demand_variability=demand_variability,
+                oos_boost_percent=oos_boost_percent,
+                oos_detection_mode=oos_detection_mode,
+                oos_popup_preference=oos_popup_preference,
+                min_shelf_life_days=min_shelf_life_days,
+                waste_penalty_mode=waste_penalty_mode,
+                waste_penalty_factor=waste_penalty_factor,
+                waste_risk_threshold=waste_risk_threshold,
+                forecast_method=forecast_method,
+                mc_distribution=mc_distribution,
+                mc_n_simulations=mc_n_simulations,
+                mc_random_seed=mc_random_seed,
+                mc_output_stat=mc_output_stat,
+                mc_output_percentile=mc_output_percentile,
+                mc_horizon_mode=mc_horizon_mode,
+                mc_horizon_days=mc_horizon_days,
+                in_assortment=in_assortment,
+                target_csl=target_csl,
+                has_expiry_label=has_expiry_label,
+                category=category if category is not None else (existing_sku.category if existing_sku else ""),
+                department=department if department is not None else (existing_sku.department if existing_sku else ""),
+            )
+            return self.update_sku_object(old_sku_id, sku_object)
+        else:
+            return self.csv_layer.update_sku(
+                old_sku_id, new_sku_id, new_description, new_ean,
+                moq, pack_size, lead_time_days, review_period,
+                safety_stock, shelf_life_days, max_stock, reorder_point,
+                demand_variability, oos_boost_percent, oos_detection_mode,
+                oos_popup_preference, min_shelf_life_days, waste_penalty_mode,
+                waste_penalty_factor, waste_risk_threshold, forecast_method,
+                mc_distribution, mc_n_simulations, mc_random_seed,
+                mc_output_stat, mc_output_percentile, mc_horizon_mode,
+                mc_horizon_days, in_assortment, target_csl,
+                has_expiry_label=has_expiry_label,
+                category=category,
+                department=department,
+            )
+
     def delete_sku(self, sku_id: str) -> bool:
         """Delete SKU"""
         if self.is_sqlite_mode():

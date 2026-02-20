@@ -1,0 +1,6 @@
+# Backup Manifest
+# Created: 2026-02-20T12:18:04.918685
+# Reason: v0_pre_migration
+# Source: /workspaces/desktop-order-system/data/app.db
+#
+app_20260220_121804_v0_pre_migration.db
