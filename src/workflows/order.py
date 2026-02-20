@@ -386,17 +386,54 @@ class OrderWorkflow:
             discrepancy_threshold = max(5, ledger_stock * 0.1)  # 10% or 5 units
             
             if not lots or lots_total < ledger_stock - discrepancy_threshold:
-                # Lots missing or significantly lower than ledger → fallback to ledger
-                logging.warning(
-                    f"Shelf life fallback for {sku}: "
-                    f"lots total={lots_total}, ledger on_hand={ledger_stock}. "
-                    f"Using ledger stock, waste risk set to 0%. "
-                    f"Reconcile lots.csv with ledger to restore shelf life tracking."
-                )
-                usable_qty = ledger_stock
-                unusable_qty = 0
-                waste_risk_percent = 0.0
-                # Note: expected_waste_rate stays 0.0 (already initialized)
+                if not lots and ledger_stock > 0:
+                    # No lots at all: stock was received outside the lot-tracking workflow
+                    # (e.g. SNAPSHOT, legacy import). Auto-create a synthetic lot so shelf-life
+                    # tracking starts working immediately. lot_id is stable → idempotent.
+                    from ..domain.models import Lot as _Lot
+                    from datetime import timedelta as _td
+                    synthetic_id = f"SYNTHETIC_{sku}"
+                    today_d = date.today()
+                    # Assume stock is freshly received today — pessimistic but safe.
+                    synthetic_expiry = today_d + _td(days=shelf_life_days)
+                    synthetic_lot = _Lot(
+                        lot_id=synthetic_id,
+                        sku=sku,
+                        expiry_date=synthetic_expiry,
+                        qty_on_hand=ledger_stock,
+                        receipt_id="SYNTHETIC",
+                        receipt_date=today_d,
+                    )
+                    self.csv_layer.write_lot(synthetic_lot)
+                    logging.info(
+                        f"Auto-created synthetic lot '{synthetic_id}' for {sku}: "
+                        f"qty={ledger_stock}, expiry={synthetic_expiry} "
+                        f"(shelf_life={shelf_life_days}d). "
+                        f"Re-run receiving workflow for accurate expiry dates."
+                    )
+                    # Re-fetch lots and recalculate with the new synthetic lot
+                    lots = self.csv_layer.get_lots_by_sku(sku, sort_by_expiry=True)
+                    usable_result = ShelfLifeCalculator.calculate_usable_stock(
+                        lots=lots,
+                        check_date=check_date_for_usable,
+                        min_shelf_life_days=min_shelf_life,
+                        waste_horizon_days=waste_horizon_days,
+                    )
+                    usable_qty = usable_result.usable_qty
+                    unusable_qty = usable_result.unusable_qty
+                    waste_risk_percent = usable_result.waste_risk_percent
+                else:
+                    # Lots exist but are lower than ledger (partial discrepancy) → fallback
+                    logging.warning(
+                        f"Shelf life fallback for {sku}: "
+                        f"lots total={lots_total}, ledger on_hand={ledger_stock}. "
+                        f"Using ledger stock, waste risk set to 0%. "
+                        f"Reconcile lots.csv with ledger to restore shelf life tracking."
+                    )
+                    usable_qty = ledger_stock
+                    unusable_qty = 0
+                    waste_risk_percent = 0.0
+                    # Note: expected_waste_rate stays 0.0 (already initialized)
             else:
                 # Lots data reliable: use shelf life calculations normally
                 # Calculate expected waste rate for Monte Carlo adjustment (Fase 3)
