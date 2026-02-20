@@ -3442,7 +3442,7 @@ class DesktopOrderApp:
             self.pending_treeview.heading(col_id, text=heading, anchor=anchor)
 
         self.pending_treeview.pack(fill="both", expand=True)
-        self.pending_treeview.bind("<Double-1>", self._on_pending_qty_double_click)
+        self.pending_treeview.bind("<ButtonRelease-1>", self._on_pending_cell_click)
 
         # Row tags
         self.pending_treeview.tag_configure("edited",   background="#fffde7")   # yellow tint
@@ -3451,7 +3451,7 @@ class DesktopOrderApp:
 
         pending_hint = ttk.Label(
             pending_card,
-            text="💡 Doppio clic su Ricevuti per modificare la quantità. Per SKU con etichetta scadenza: doppio clic su Data Scadenza per inserire la data.",
+            text="💡 Clic su Ricevuti per modificare la quantità direttamente in tabella. Per SKU con etichetta scadenza: clic su Data Scadenza per aprire il calendario inline.",
             font=("Helvetica", 8),
             foreground="gray",
         )
@@ -3586,10 +3586,12 @@ class DesktopOrderApp:
             pack_size = getattr(sku_obj, "pack_size", 1) if sku_obj else 1
             
             colli_ordinati = qty_ordered // pack_size
-            colli_ricevuti = qty_received // pack_size
-            colli_sospesi = qty_pending // pack_size
-            
-            self.pending_treeview.insert(
+            # Pre-fill "Colli Ricevuti" with the full ordered quantity so the user
+            # only needs to reduce it if partial; this also pre-populates the edits
+            # dict so Confirm works without requiring an explicit click per row.
+            colli_ricevuti_prefill = colli_ordinati
+
+            item_id = self.pending_treeview.insert(
                 "",
                 "end",
                 values=(
@@ -3598,54 +3600,33 @@ class DesktopOrderApp:
                     description,
                     pack_size,
                     colli_ordinati,
-                    colli_ricevuti,
-                    colli_sospesi,
+                    colli_ricevuti_prefill,
+                    0,  # Colli Sospesi = 0 because we pre-assume full receipt
                     receipt_date_str,
                     "",  # Scadenza — empty until user edits
                 ),
+                tags=("complete",),
             )
+            # Pre-populate edits dict with full ordered quantity (pezzi)
+            self.pending_qty_edits[item_id] = colli_ordinati * pack_size
     
-    def _on_pending_qty_double_click(self, event):
-        """Edita quantità ricevuta o data scadenza con doppio click."""
+    def _on_pending_cell_click(self, event):
+        """Edita quantità ricevuta (inline) o data scadenza (popup) con click singolo."""
         region = self.pending_treeview.identify("region", event.x, event.y)
         if region != "cell":
             return
         
         column = self.pending_treeview.identify_column(event.x)
-        selected = self.pending_treeview.selection()
+        item_id = self.pending_treeview.identify_row(event.y)
         
-        if not selected:
+        if not item_id:
             return
         
-        item_id = selected[0]
         values = self.pending_treeview.item(item_id)["values"]
         
         # ── Colonna "Colli Ricevuti" (#6) ───────────────────────────────────
         if column == "#6":
-            sku = values[1]
-            pack_size = int(values[3])
-            colli_ricevuti_current = int(values[5])
-            
-            new_colli = simpledialog.askinteger(
-                "Modifica Colli Ricevuti",
-                f"SKU: {sku}\nPz/Collo: {pack_size}\nInserisci colli ricevuti:",
-                initialvalue=colli_ricevuti_current,
-                minvalue=0,
-                parent=self.root,
-            )
-            
-            if new_colli is None:
-                return
-            
-            qty_received_pz = new_colli * pack_size
-            
-            new_values = list(values)
-            colli_ordinati = int(values[4])
-            new_values[5] = str(new_colli)
-            new_values[6] = str(max(0, colli_ordinati - new_colli))
-            self.pending_treeview.item(item_id, values=new_values, tags=("edited",))
-            
-            self.pending_qty_edits[item_id] = qty_received_pz
+            self._start_inline_qty_edit(item_id, event)
             return
         
         # ── Colonna "Scadenza" (#9) ──────────────────────────────────────────
@@ -3653,85 +3634,133 @@ class DesktopOrderApp:
             sku = values[1]
             skus_by_id = {s.sku: s for s in self.csv_layer.read_skus()}
             sku_obj = skus_by_id.get(sku)
-            
-            # Only allow editing for SKUs with has_expiry_label=True
             if not sku_obj or not sku_obj.has_expiry_label:
-                return  # Field is disabled for non-labelled SKUs
-            
-            # Use DateEntry if available, otherwise plain text dialog
-            if TKCALENDAR_AVAILABLE:
-                dlg = tk.Toplevel(self.root)
-                dlg.title("Data Scadenza")
-                dlg.resizable(False, False)
-                dlg.transient(self.root)
-                dlg.grab_set()
-                
-                ttk.Label(dlg, text=f"SKU: {sku} — Seleziona data scadenza:").pack(padx=12, pady=(10, 4))
-                
-                current_expiry = self.pending_expiry_edits.get(item_id, "")
-                initial_date = None
-                if current_expiry:
-                    try:
-                        initial_date = date.fromisoformat(current_expiry)
-                    except ValueError:
-                        pass
-                
-                if initial_date:
-                    cal = DateEntry(dlg, date_pattern="yyyy-mm-dd", year=initial_date.year,  # type: ignore[misc]
-                                    month=initial_date.month, day=initial_date.day)
-                else:
-                    cal = DateEntry(dlg, date_pattern="yyyy-mm-dd")  # type: ignore[misc]
-                cal.pack(padx=12, pady=4)
-                
-                chosen_date = tk.StringVar()
-                
-                def _confirm():
-                    chosen_date.set(cal.get_date().isoformat())
-                    dlg.destroy()
-                
-                def _cancel():
-                    dlg.destroy()
-                
-                btn_frame = ttk.Frame(dlg)
-                btn_frame.pack(fill="x", padx=12, pady=(4, 10))
-                ttk.Button(btn_frame, text="OK", command=_confirm).pack(side="right", padx=4)
-                ttk.Button(btn_frame, text="Annulla", command=_cancel).pack(side="right")
-                dlg.wait_window()
-                
-                new_expiry = chosen_date.get()
-            else:
-                new_expiry = simpledialog.askstring(
-                    "Data Scadenza",
-                    f"SKU: {sku}\nInserisci data scadenza (YYYY-MM-DD):",
-                    initialvalue=self.pending_expiry_edits.get(item_id, ""),
-                    parent=self.root,
-                )
-                if new_expiry is None:
-                    return
-                new_expiry = new_expiry.strip()
+                return  # Field disabled for non-labelled SKUs
+            self._start_inline_expiry_edit(item_id)
+
+    def _start_inline_qty_edit(self, item_id: str, event) -> None:
+        """Place a floating Entry widget over the 'Colli Ricevuti' cell for inline editing."""
+        bbox = self.pending_treeview.bbox(item_id, column="#6")
+        if not bbox:
+            return
+        x, y, w, h = bbox
+
+        values = self.pending_treeview.item(item_id)["values"]
+        pack_size = int(values[3])
+        colli_ordinati = int(values[4])
+        current_colli = int(values[5])
+
+        var = tk.StringVar(value=str(current_colli))
+        entry = ttk.Entry(self.pending_treeview, textvariable=var, justify="center", width=8)
+        entry.place(x=x, y=y, width=w, height=h)
+        entry.select_range(0, tk.END)
+        entry.focus_set()
+
+        def _commit(event=None):
+            try:
+                new_colli = max(0, int(var.get()))
+            except ValueError:
+                entry.destroy()
+                return
+            qty_pz = new_colli * pack_size
+            new_vals = list(values)
+            new_vals[5] = str(new_colli)
+            new_vals[6] = str(max(0, colli_ordinati - new_colli))
+            tag = "complete" if new_colli >= colli_ordinati else "edited"
+            self.pending_treeview.item(item_id, values=new_vals, tags=(tag,))
+            self.pending_qty_edits[item_id] = qty_pz
+            entry.destroy()
+
+        def _cancel(event=None):
+            entry.destroy()
+
+        entry.bind("<Return>", _commit)
+        entry.bind("<Tab>", _commit)
+        entry.bind("<FocusOut>", _commit)
+        entry.bind("<Escape>", _cancel)
+
+    def _start_inline_expiry_edit(self, item_id: str) -> None:
+        """Place a floating DateEntry (or plain Entry) over the 'Scadenza' cell for inline editing."""
+        bbox = self.pending_treeview.bbox(item_id, column="#9")
+        if not bbox:
+            return
+        x, y, w, h = bbox
+
+        values = self.pending_treeview.item(item_id)["values"]
+        current_expiry = self.pending_expiry_edits.get(item_id, "")
+        initial_date = None
+        if current_expiry:
+            try:
+                initial_date = date.fromisoformat(current_expiry)
+            except ValueError:
+                pass
+
+        def _store_and_close(new_expiry: str, widget) -> None:
+            if not widget.winfo_exists():
+                return
+            if new_expiry:
+                self.pending_expiry_edits[item_id] = new_expiry
+                new_vals = list(values)
+                new_vals[8] = new_expiry
+                tags = self.pending_treeview.item(item_id, "tags")
+                self.pending_treeview.item(item_id, values=new_vals, tags=tags or ("edited",))
+            widget.destroy()
+
+        if TKCALENDAR_AVAILABLE:
+            kw: dict = {"date_pattern": "yyyy-mm-dd"}
+            if initial_date:
+                kw.update({"year": initial_date.year, "month": initial_date.month, "day": initial_date.day})
+            cal = DateEntry(self.pending_treeview, **kw)  # type: ignore[misc]
+            cal.place(x=x, y=y, width=max(w, 110), height=h)
+            cal.focus_set()
+            # Auto-open the dropdown calendar
+            try:
+                cal.drop_down()
+            except AttributeError:
+                pass
+
+            def _commit_cal(event=None):
+                if cal.winfo_exists():
+                    _store_and_close(cal.get_date().isoformat(), cal)
+
+            def _focusout_cal(event=None):
+                # Delay so <<DateEntrySelected>> fires before we commit on focus loss
+                cal.after(200, lambda: _commit_cal() if cal.winfo_exists() else None)
+
+            cal.bind("<<DateEntrySelected>>", _commit_cal)
+            cal.bind("<Return>", _commit_cal)
+            cal.bind("<Escape>", lambda e: cal.destroy() if cal.winfo_exists() else None)
+            cal.bind("<FocusOut>", _focusout_cal)
+        else:
+            # Fallback when tkcalendar is not installed: plain Entry for YYYY-MM-DD
+            var = tk.StringVar(value=current_expiry)
+            entry = ttk.Entry(self.pending_treeview, textvariable=var, justify="center")
+            entry.place(x=x, y=y, width=max(w, 110), height=h)
+            entry.select_range(0, tk.END)
+            entry.focus_set()
+
+            def _commit_text(event=None):
+                new_expiry = var.get().strip()
                 if new_expiry:
                     try:
                         date.fromisoformat(new_expiry)
                     except ValueError:
+                        entry.destroy()
                         messagebox.showerror("Formato Data", "Formato non valido. Usa YYYY-MM-DD.")
                         return
-            
-            if not new_expiry:
-                return
-            
-            # Store and update treeview
-            self.pending_expiry_edits[item_id] = new_expiry
-            new_values = list(values)
-            new_values[8] = new_expiry
-            tags = self.pending_treeview.item(item_id, "tags")
-            self.pending_treeview.item(item_id, values=new_values, tags=tags or ("edited",))
-    
+                _store_and_close(new_expiry, entry)
+
+            entry.bind("<Return>", _commit_text)
+            entry.bind("<Tab>", _commit_text)
+            entry.bind("<FocusOut>", _commit_text)
+            entry.bind("<Escape>", lambda e: entry.destroy())
+
     def _close_receipt_bulk(self):
         """Chiudi ricevimento per tutte le quantità modificate con tracciabilità documento."""
         if not self.pending_qty_edits:
             messagebox.showwarning(
                 "Nessuna Modifica",
-                "Nessuna quantità ricevuta modificata.\n\nModifica le quantità nella tabella (doppio click) prima di confermare.",
+                "Nessuna quantità ricevuta modificata.\n\nModifica le quantità nella tabella prima di confermare.",
             )
             return
         
@@ -7198,7 +7227,7 @@ class DesktopOrderApp:
         preview_table.heading("errors", text="Errori/Avvisi")
         
         # Populate table
-        for row in preview.rows:
+        for row in preview.rows[:50]:
             status = "✅ OK" if row.is_valid else "❌ ERRORE"
             sku = row.mapped_data.get("sku", "")
             desc = row.mapped_data.get("description", "")

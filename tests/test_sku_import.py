@@ -361,7 +361,7 @@ def test_preview_primary_discard_reason(importer, dirty_csv):
 
 
 def test_preview_limit(importer, tmp_path):
-    """Test preview limit restricts parsed rows."""
+    """Test parser validates all rows even when preview_limit is provided."""
     # Create CSV with 100 rows
     csv_file = tmp_path / "large.csv"
     with open(csv_file, 'w', newline='', encoding='utf-8') as f:
@@ -372,10 +372,11 @@ def test_preview_limit(importer, tmp_path):
     
     preview = importer.parse_csv_with_preview(csv_file, preview_limit=10)
     
-    # Preview should only show first 10
-    assert len(preview.rows) == 10
-    # But total count should reflect actual file
+    # Parser must validate all rows; GUI is responsible for showing first N
+    assert len(preview.rows) == 100
     assert preview.total_rows == 100
+    assert preview.valid_rows == 100
+    assert preview.discarded_rows == 0
 
 
 # === UPSERT Mode Tests ===

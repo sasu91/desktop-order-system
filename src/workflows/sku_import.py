@@ -190,10 +190,6 @@ class SKUImporter:
         duplicate_skus = set()
         
         for idx, raw_row in enumerate(rows_data, start=2):  # Row 2 = first data row (after header)
-            # Limit preview if needed
-            if preview_limit > 0 and idx > preview_limit + 1:
-                break
-            
             import_row = ImportRow(row_number=idx, raw_data=raw_row)
             
             # Map columns
