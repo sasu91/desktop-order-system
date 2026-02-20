@@ -384,7 +384,46 @@ class OrderWorkflow:
             lots_total = usable_result.total_on_hand
             ledger_stock = current_stock.on_hand
             discrepancy_threshold = max(5, ledger_stock * 0.1)  # 10% or 5 units
-            
+
+            # SYNTHETIC LOT RESYNC: A synthetic lot is a ledger-derived placeholder.
+            # After any ADJUST / WASTE / SALE, its qty may differ from the current ledger
+            # stock in *either* direction.  Always keep it in sync so IP is never stale.
+            only_synthetic = lots and all(l.lot_id.startswith("SYNTHETIC_") for l in lots)
+            if only_synthetic and lots_total != ledger_stock:
+                from ..domain.models import Lot as _Lot
+                from datetime import timedelta as _td
+                synthetic_id = f"SYNTHETIC_{sku}"
+                today_d = date.today()
+                synthetic_expiry = today_d + _td(days=shelf_life_days)
+                for _lot in lots:
+                    if _lot.lot_id == synthetic_id:
+                        synced_lot = _Lot(
+                            lot_id=synthetic_id,
+                            sku=sku,
+                            expiry_date=synthetic_expiry,
+                            qty_on_hand=ledger_stock,
+                            receipt_id="SYNTHETIC",
+                            receipt_date=_lot.receipt_date,
+                        )
+                        self.csv_layer.write_lot(synced_lot)
+                        logging.info(
+                            f"Resynced synthetic lot '{synthetic_id}' for {sku}: "
+                            f"qty {lots_total} → {ledger_stock} pz (ledger-driven resync)"
+                        )
+                        break
+                # Re-fetch and recalculate with updated qty
+                lots = self.csv_layer.get_lots_by_sku(sku, sort_by_expiry=True)
+                usable_result = ShelfLifeCalculator.calculate_usable_stock(
+                    lots=lots,
+                    check_date=check_date_for_usable,
+                    min_shelf_life_days=min_shelf_life,
+                    waste_horizon_days=waste_horizon_days,
+                )
+                usable_qty = usable_result.usable_qty
+                unusable_qty = usable_result.unusable_qty
+                waste_risk_percent = usable_result.waste_risk_percent
+                lots_total = usable_result.total_on_hand
+
             if not lots or lots_total < ledger_stock - discrepancy_threshold:
                 if not lots and ledger_stock > 0:
                     # No lots at all: stock was received outside the lot-tracking workflow
