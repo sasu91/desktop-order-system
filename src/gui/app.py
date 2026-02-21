@@ -2382,56 +2382,244 @@ class DesktopOrderApp:
             sales_records,
         )
         
-        # Generate proposals
+        # ── OOS boost parameters ──────────────────────────────────────────
         self.current_proposals = []
-
-        # Read OOS boost default from settings
         oos_boost_default = settings.get("reorder_engine", {}).get("oos_boost_percent", {}).get("value", 20) / 100.0
         oos_lookback_days = settings.get("reorder_engine", {}).get("oos_lookback_days", {}).get("value", 30)
         oos_detection_mode_global = settings.get("reorder_engine", {}).get("oos_detection_mode", {}).get("value", "strict")
-
-        # Track SKU-specific OOS boost preferences (in memory for this session)
         if not hasattr(self, 'oos_boost_preferences'):
             self.oos_boost_preferences = {}  # {sku: boost_percent or None}
 
-        # ── PASS A: compute OOS metrics per SKU; collect undecided candidates ────
-        # sku_oos_data: keyed by sku_id, stores all info needed for proposals
-        sku_oos_data: dict = {}
-        oos_candidates: list = []  # [{sku, description, oos_days_count, pack_size, oos_detection_mode}]
+        # Package per-SKU data for OOS computation workers
+        _sku_items_for_oos: list = []
+        for _sku_id in sku_ids:
+            _sku_obj_tmp = skus_by_id.get(_sku_id)
+            _mode = (
+                _sku_obj_tmp.oos_detection_mode
+                if (_sku_obj_tmp and _sku_obj_tmp.oos_detection_mode)
+                else oos_detection_mode_global
+            )
+            _sku_items_for_oos.append({
+                "sku_id": _sku_id,
+                "oos_detection_mode": _mode,
+                "sku_transactions": list(_txns_by_sku.get(_sku_id, [])),
+                "sku_sales": list(_sales_by_sku.get(_sku_id, [])),
+            })
+
+        # Context passed through to _finish_proposals (all data needed post-popup)
+        _ctx = {
+            "sku_ids": sku_ids,
+            "skus_by_id": skus_by_id,
+            "transactions": transactions,
+            "sales_records": sales_records,
+            "stocks": stocks,
+            "_txns_by_sku": _txns_by_sku,
+            "settings": settings,
+            "oos_boost_default": oos_boost_default,
+            "oos_lookback_days": oos_lookback_days,
+            "oos_detection_mode_global": oos_detection_mode_global,
+            "target_receipt_date": target_receipt_date,
+            "protection_period": protection_period,
+        }
+
+        # Dispatch OOS computation: parallel (background thread + processes) or sequential.
+        # ProcessPoolExecutor incurs ~0.5 s spawn overhead per worker (Windows "spawn"
+        # start method).  Parallel only wins when seq_time / n_workers > spawn_overhead,
+        # which requires a large enough dataset AND multiple real cores.  Heuristic:
+        #   ≥ 300 SKUs  (below this, sequential is typically < 0.5 s already)
+        #   ≥ 4 CPUs    (n_workers = cpu-1 = 3; below 4 cores the gain is nil)
+        # The setting flag still controls opt-in/opt-out explicitly via Settings tab.
+        _n_cpu = __import__("os").cpu_count() or 1
+        _parallel_enabled = (
+            settings.get("parallel_oos", {}).get("enabled", {}).get("value", True)
+            and len(sku_ids) >= 300  # spawn overhead dominant for smaller datasets
+            and _n_cpu >= 4          # need ≥ 3 free workers to amortize spawn cost
+        )
+        if _parallel_enabled:
+            self._launch_oos_parallel(_sku_items_for_oos, _ctx)
+        else:
+            _oos_raw = self._run_oos_sequential(
+                _sku_items_for_oos, oos_lookback_days, date.today()
+            )
+            self._finish_proposals(_ctx, _oos_raw)
+
+    def _run_oos_sequential(self, sku_items: list, days_lookback: int, asof_date) -> dict:
+        """Sequential (single-thread) fallback for OOS metrics computation."""
+        results: dict = {}
+        for item in sku_items:
+            sku_id = item["sku_id"]
+            daily_sales, oos_count, oos_list, ooa_days = calculate_daily_sales_average(
+                sales_records=[],
+                sku=sku_id,
+                days_lookback=days_lookback,
+                transactions=[],
+                asof_date=asof_date,
+                oos_detection_mode=item["oos_detection_mode"],
+                return_details=True,
+                sku_transactions=item["sku_transactions"],
+                sku_sales=item["sku_sales"],
+            )
+            results[sku_id] = {
+                "daily_sales": daily_sales,
+                "oos_days_count": oos_count,
+                "oos_days_list": oos_list,
+                "out_of_assortment_days": ooa_days,
+            }
+        return results
+
+    def _launch_oos_parallel(self, sku_items: list, ctx: dict) -> None:
+        """
+        Show a progress dialog and run OOS metrics in parallel via ProcessPoolExecutor
+        from a background daemon thread.  On completion, schedules _finish_proposals
+        back on the main (Tk) thread via root.after().
+        """
+        import threading
+        import os as _os
+        from pathlib import Path as _Path
+        from ..workflows.oos_parallel import run_oos_parallel
+
+        n_workers = max(1, (_os.cpu_count() or 2) - 1)
+        project_root = str(_Path(__file__).resolve().parent.parent.parent)
+        total = len(sku_items)
+        oos_lookback_days: int = ctx["oos_lookback_days"]
+
+        # ── Progress dialog ────────────────────────────────────────────────
+        _progress = tk.Toplevel(self.root)
+        _progress.title("Analisi OOS")
+        _progress.resizable(False, False)
+        _progress.transient(self.root)
+        _progress.grab_set()
+        _progress.protocol("WM_DELETE_WINDOW", lambda: None)  # prevent manual close
+
+        _pf = ttk.Frame(_progress, padding=(20, 16, 20, 16))
+        _pf.pack(fill="both", expand=True)
+        ttk.Label(
+            _pf, text="⏳  Analisi OOS in corso…",
+            font=("Helvetica", 11, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(
+            _pf,
+            text=f"Calcolo metriche per {total} SKU  ({n_workers} worker{'s' if n_workers > 1 else ''})",
+            foreground="gray",
+        ).pack(anchor="w", pady=(4, 10))
+        _pct_var = tk.StringVar(value="0 %")
+        ttk.Label(_pf, textvariable=_pct_var, font=("Helvetica", 10)).pack(anchor="w")
+        _bar_var = tk.DoubleVar(value=0)
+        ttk.Progressbar(_pf, variable=_bar_var, maximum=100, length=380).pack(
+            fill="x", pady=(6, 0)
+        )
+        self.root.update_idletasks()
+        _pw, _ph = 440, 160
+        _px = self.root.winfo_x() + (self.root.winfo_width() - _pw) // 2
+        _py = self.root.winfo_y() + (self.root.winfo_height() - _ph) // 2
+        _progress.geometry(f"{_pw}x{_ph}+{_px}+{_py}")
+
+        # ── Shared state between bg thread and on_done callback ───────────
+        _result_holder: list = [None]
+        _error_holder:  list = [None]
+
+        def _on_progress(n_done: int) -> None:
+            """Called from bg thread — dispatches UI update to main thread."""
+            pct = n_done * 100 // total if total > 0 else 100
+            self.root.after(0, lambda p=pct: (_bar_var.set(p), _pct_var.set(f"{p} %")))
+
+        def _bg() -> None:
+            try:
+                _result_holder[0] = run_oos_parallel(
+                    sku_items=sku_items,
+                    days_lookback=oos_lookback_days,
+                    asof_date=date.today(),
+                    n_workers=n_workers,
+                    project_root=project_root,
+                    on_progress=_on_progress,
+                )
+            except Exception as exc:
+                _error_holder[0] = exc
+            finally:
+                self.root.after(0, _on_done)
+
+        def _on_done() -> None:
+            """Runs on the Tk/UI thread after background work finishes."""
+            if _progress.winfo_exists():
+                _progress.grab_release()
+                _progress.destroy()
+            if _error_holder[0]:
+                logger.warning(
+                    "Parallel OOS failed (%s); falling back to sequential.",
+                    _error_holder[0],
+                )
+                try:
+                    oos_raw = self._run_oos_sequential(
+                        sku_items, oos_lookback_days, date.today()
+                    )
+                except Exception as e2:
+                    messagebox.showerror(
+                        "Errore calcolo OOS",
+                        f"Calcolo OOS fallito:\n{e2}",
+                    )
+                    return
+            else:
+                oos_raw = _result_holder[0]
+            self._finish_proposals(ctx, oos_raw)
+
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def _finish_proposals(self, ctx: dict, oos_raw: dict) -> None:
+        """
+        Continuation of _generate_all_proposals, called after OOS metrics are ready
+        (either from parallel workers or sequential fallback).
+
+        Applies per-SKU preferences, opens the bulk OOS popup if needed, then runs
+        Pass B (proposal generation + table refresh).
+        """
+        sku_ids: list            = ctx["sku_ids"]
+        skus_by_id: dict         = ctx["skus_by_id"]
+        transactions: list       = ctx["transactions"]
+        sales_records: list      = ctx["sales_records"]
+        stocks: dict             = ctx["stocks"]
+        settings: dict           = ctx["settings"]
+        oos_boost_default: float = ctx["oos_boost_default"]
+        oos_lookback_days: int   = ctx["oos_lookback_days"]
+        oos_detection_mode_global: str = ctx["oos_detection_mode_global"]
+        target_receipt_date      = ctx["target_receipt_date"]
+        protection_period        = ctx["protection_period"]
+
+        # ── Apply preference logic; collect undecided candidates ──────────
+        sku_oos_data: dict   = {}
+        oos_candidates: list = []
 
         for sku_id in sku_ids:
-            sku_obj = skus_by_id.get(sku_id)
+            sku_obj     = skus_by_id.get(sku_id)
             description = sku_obj.description if sku_obj else "N/A"
             oos_detection_mode = (
                 sku_obj.oos_detection_mode
                 if (sku_obj and sku_obj.oos_detection_mode)
                 else oos_detection_mode_global
             )
-
-            daily_sales, oos_days_count, oos_days_list, out_of_assortment_days = calculate_daily_sales_average(
-                sales_records, sku_id,
-                days_lookback=oos_lookback_days,
-                transactions=transactions,
-                asof_date=date.today(),
-                oos_detection_mode=oos_detection_mode,
-                return_details=True,
-                sku_transactions=_txns_by_sku.get(sku_id, []),
-                sku_sales=_sales_by_sku.get(sku_id, []),
+            raw = oos_raw.get(sku_id, {
+                "daily_sales": 0.0,
+                "oos_days_count": 0,
+                "oos_days_list": [],
+                "out_of_assortment_days": [],
+            })
+            daily_sales            = raw["daily_sales"]
+            oos_days_count         = raw["oos_days_count"]
+            oos_days_list          = raw["oos_days_list"]
+            out_of_assortment_days = raw["out_of_assortment_days"]
+            history_valid_days = (
+                oos_lookback_days - len(oos_days_list) - len(out_of_assortment_days)
             )
-            history_valid_days = oos_lookback_days - len(oos_days_list) - len(out_of_assortment_days)
-
             sku_oos_data[sku_id] = {
-                "sku_obj": sku_obj,
-                "description": description,
-                "daily_sales": daily_sales,
-                "oos_days_count": oos_days_count,
-                "oos_days_list": oos_days_list,
+                "sku_obj":               sku_obj,
+                "description":           description,
+                "daily_sales":           daily_sales,
+                "oos_days_count":        oos_days_count,
+                "oos_days_list":         oos_days_list,
                 "out_of_assortment_days": out_of_assortment_days,
-                "history_valid_days": history_valid_days,
-                "oos_detection_mode": oos_detection_mode,
-                "oos_boost_percent": 0.0,  # filled in Pass B
+                "history_valid_days":    history_valid_days,
+                "oos_detection_mode":    oos_detection_mode,
+                "oos_boost_percent":     0.0,
             }
-
             if oos_days_count > 0:
                 if sku_obj and sku_obj.oos_popup_preference == "always_yes":
                     sku_oos_data[sku_id]["oos_boost_percent"] = oos_boost_default
@@ -2440,9 +2628,10 @@ class DesktopOrderApp:
                     sku_oos_data[sku_id]["oos_boost_percent"] = 0.0
                     self.oos_boost_preferences[sku_id] = None
                 elif sku_id in self.oos_boost_preferences:
-                    sku_oos_data[sku_id]["oos_boost_percent"] = self.oos_boost_preferences[sku_id] or 0.0
+                    sku_oos_data[sku_id]["oos_boost_percent"] = (
+                        self.oos_boost_preferences[sku_id] or 0.0
+                    )
                 else:
-                    # Undecided: queue for the single bulk popup
                     oos_candidates.append({
                         "sku": sku_id,
                         "description": description,
@@ -2451,61 +2640,61 @@ class DesktopOrderApp:
                         "oos_detection_mode": oos_detection_mode,
                     })
 
-        # ── SINGLE BULK POPUP for all undecided SKUs ─────────────────────────
-        # Returns {sku_id: {"choice": str, "estimate_date": date|None, "estimate_colli": int|None}}
-        # On cancel, returns empty dict → all candidates default to no-boost.
+        # ── Bulk OOS popup ────────────────────────────────────────────────
         bulk_decisions: dict = {}
         if oos_candidates:
-            bulk_decisions = self._ask_oos_boost_bulk(oos_candidates, oos_boost_default, oos_lookback_days)
+            bulk_decisions = self._ask_oos_boost_bulk(
+                oos_candidates, oos_boost_default, oos_lookback_days
+            )
 
-        # ── PASS B: apply bulk decisions, register estimates, generate proposals ─
+        # ── PASS B: apply decisions, register estimates, generate proposals ─
         for sku_id in sku_ids:
-            data = sku_oos_data[sku_id]
-            sku_obj = data["sku_obj"]
-            description = data["description"]
-            daily_sales = data["daily_sales"]
-            oos_days_count = data["oos_days_count"]
+            data               = sku_oos_data[sku_id]
+            sku_obj            = data["sku_obj"]
+            description        = data["description"]
+            daily_sales        = data["daily_sales"]
+            oos_days_count     = data["oos_days_count"]
             history_valid_days = data["history_valid_days"]
             oos_detection_mode = data["oos_detection_mode"]
-            oos_boost_percent = data["oos_boost_percent"]  # already set for always_yes/no/session
+            oos_boost_percent  = data["oos_boost_percent"]
 
-            # Apply bulk decision if this SKU was in the popup
             if sku_id in bulk_decisions:
-                dec = bulk_decisions[sku_id]
-                boost_choice = dec["choice"]
-                estimate_date = dec.get("estimate_date")
+                dec            = bulk_decisions[sku_id]
+                boost_choice   = dec["choice"]
+                estimate_date  = dec.get("estimate_date")
                 estimate_colli = dec.get("estimate_colli")
 
-                # Register estimate if provided
                 if estimate_date and estimate_colli and estimate_colli > 0:
                     try:
-                        pack_size = sku_obj.pack_size if sku_obj else 1
-                        estimate_pz = estimate_colli * pack_size
+                        pack_size    = sku_obj.pack_size if sku_obj else 1
+                        estimate_pz  = estimate_colli * pack_size
                         estimate_note = f"OOS_ESTIMATE_OVERRIDE:{estimate_date.isoformat()}"
                         existing_override = any(
-                            t.sku == sku_id and t.date == estimate_date and estimate_note in (t.note or "")
+                            t.sku == sku_id
+                            and t.date == estimate_date
+                            and estimate_note in (t.note or "")
                             for t in transactions
                         )
                         if not existing_override:
                             from ..domain.models import SalesRecord
-                            new_sale = SalesRecord(date=estimate_date, sku=sku_id, qty_sold=estimate_pz)
+                            new_sale = SalesRecord(
+                                date=estimate_date, sku=sku_id, qty_sold=estimate_pz
+                            )
                             self.csv_layer.write_sales([new_sale])
                             sales_records.append(new_sale)
-
                             marker_txn = Transaction(
                                 date=estimate_date,
                                 sku=sku_id,
                                 event=EventType.WASTE,
                                 qty=0,
-                                note=f"{estimate_note}|{estimate_colli} colli ({estimate_pz} pz) - prevents OOS counting",
+                                note=(
+                                    f"{estimate_note}|{estimate_colli} colli "
+                                    f"({estimate_pz} pz) - prevents OOS counting"
+                                ),
                             )
                             self.csv_layer.write_transaction(marker_txn)
                             transactions.append(marker_txn)
-
-                            # Recalculate daily average with override marker.
-                            # Re-derive per-SKU slices from updated lists (marker_txn + new sale
-                            # were just appended, so the earlier _txns_by_sku index is stale).
-                            daily_sales, oos_days_count, _oos_days_list, _ooa_days = calculate_daily_sales_average(
+                            daily_sales, oos_days_count, _oos_list, _ooa = calculate_daily_sales_average(
                                 sales_records, sku_id,
                                 days_lookback=oos_lookback_days,
                                 transactions=transactions,
@@ -2515,15 +2704,17 @@ class DesktopOrderApp:
                                 sku_transactions=[t for t in transactions if t.sku == sku_id],
                                 sku_sales=[s for s in sales_records if s.sku == sku_id],
                             )
-                            history_valid_days = oos_lookback_days - len(_oos_days_list) - len(_ooa_days)
+                            history_valid_days = oos_lookback_days - len(_oos_list) - len(_ooa)
                             logger.info(
-                                f"OOS estimate registered for {sku_id} on {estimate_date}: "
-                                f"{estimate_colli} colli ({estimate_pz} pz)"
+                                "OOS estimate registered for %s on %s: %d colli (%d pz)",
+                                sku_id, estimate_date, estimate_colli, estimate_pz,
                             )
-                    except Exception as e:
-                        logger.error(f"Failed to register OOS estimate for {sku_id}: {e}", exc_info=True)
+                    except Exception as exc:
+                        logger.error(
+                            "Failed to register OOS estimate for %s: %s",
+                            sku_id, exc, exc_info=True,
+                        )
 
-                # Apply boost choice
                 if boost_choice in ("yes", "yes_always"):
                     oos_boost_percent = oos_boost_default
                     self.oos_boost_preferences[sku_id] = oos_boost_default
@@ -2537,7 +2728,7 @@ class DesktopOrderApp:
                             sku_obj.oos_detection_mode, "always_yes",
                             category=sku_obj.category, department=sku_obj.department,
                         )
-                else:  # "no" or "no_never"
+                else:
                     oos_boost_percent = 0.0
                     self.oos_boost_preferences[sku_id] = None
                     if boost_choice == "no_never" and sku_obj:
@@ -2551,7 +2742,6 @@ class DesktopOrderApp:
                             category=sku_obj.category, department=sku_obj.department,
                         )
 
-            # Generate proposal
             proposal = self.order_workflow.generate_proposal(
                 sku=sku_id,
                 description=description,
@@ -2568,13 +2758,16 @@ class DesktopOrderApp:
             proposal.history_valid_days = history_valid_days
             self.current_proposals.append(proposal)
 
-        # Populate table
         self._refresh_proposal_table()
-
         messagebox.showinfo(
             "Proposte Generate",
-            f"Generate {len(self.current_proposals)} proposte ordine.\nProposte con Q.tà > 0: {sum(1 for p in self.current_proposals if p.proposed_qty > 0)}",
+            (
+                f"Generate {len(self.current_proposals)} proposte ordine.\n"
+                f"Proposte con Q.tà > 0: "
+                f"{sum(1 for p in self.current_proposals if p.proposed_qty > 0)}"
+            ),
         )
+
 
     # ------------------------------------------------------------------
     def _ask_oos_boost_bulk(

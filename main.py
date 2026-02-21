@@ -5,6 +5,7 @@ Desktop Order System - Entry point.
 Run this to start the application.
 """
 import sys
+import multiprocessing
 from pathlib import Path
 
 # Add src to path
@@ -14,4 +15,7 @@ sys.path.insert(0, str(project_root))
 from src.gui.app import main
 
 if __name__ == "__main__":
+    # Required for ProcessPoolExecutor with PyInstaller / Windows 'spawn' start method.
+    # Must be called as early as possible (before any other multiprocessing code).
+    multiprocessing.freeze_support()
     main()
