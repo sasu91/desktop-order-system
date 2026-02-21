@@ -375,7 +375,60 @@ class StorageAdapter(CSVLayer):
                 self.csv_layer.write_transactions_batch(txns)
         else:
             self.csv_layer.write_transactions_batch(txns)
-    
+
+    def overwrite_transactions(self, txns: List[Transaction]):
+        """
+        Replace the entire transaction ledger with *txns* (used by revert logic).
+
+        SQLite implementation: compare the keep-list against all existing rows and
+        delete only the rows absent from the keep-list.  Duplicates are handled
+        via a Counter so identical rows are matched one-for-one.
+        """
+        if self.is_sqlite_mode():
+            assert self.repos is not None
+            try:
+                from collections import Counter
+
+                def _row_key(row: dict) -> tuple:
+                    """Canonical key from a SQLite row dict."""
+                    return (
+                        row['date'],
+                        row['sku'],
+                        row['event'],
+                        int(row['qty']),
+                        row.get('receipt_date') or '',
+                        row.get('note') or '',
+                    )
+
+                def _txn_key(t: Transaction) -> tuple:
+                    """Canonical key from a Transaction domain object."""
+                    return (
+                        t.date.isoformat(),
+                        t.sku,
+                        t.event.value,
+                        int(t.qty),
+                        t.receipt_date.isoformat() if t.receipt_date else '',
+                        t.note or '',
+                    )
+
+                # Build a multiset of keys we want to KEEP
+                keep_counts: Counter = Counter(_txn_key(t) for t in txns)
+
+                # Walk all existing SQLite rows; consume keep slots or delete
+                all_existing = self.repos.ledger().list_transactions(limit=500000)
+                for row in all_existing:
+                    key = _row_key(row)
+                    if keep_counts[key] > 0:
+                        keep_counts[key] -= 1  # matched → keep this row
+                    else:
+                        self.repos.ledger().delete_by_id(row['transaction_id'])
+
+            except Exception as e:
+                print(f"⚠ SQLite overwrite_transactions failed, falling back to CSV: {e}")
+                self.csv_layer.overwrite_transactions(txns)
+        else:
+            self.csv_layer.overwrite_transactions(txns)
+
     # ============================================================
     # Sales Operations
     # ============================================================

@@ -5008,8 +5008,8 @@ class DesktopOrderApp:
         """Revert bulk exceptions with filters (popup dialog)."""
         # Create popup
         popup = tk.Toplevel(self.root)
-        popup.title("Bulk Revert Exceptions")
-        popup.geometry("400x250")
+        popup.title("Annullamento Multiplo Eccezioni")
+        popup.geometry("420x340")
         popup.resizable(False, False)
         popup.transient(self.root)
         popup.grab_set()
@@ -5018,10 +5018,10 @@ class DesktopOrderApp:
         form_frame = ttk.Frame(popup, padding=20)
         form_frame.pack(fill="both", expand=True)
         
-        ttk.Label(form_frame, text="Bulk Revert Exceptions", font=("Helvetica", 12, "bold")).pack(pady=(0, 15))
+        ttk.Label(form_frame, text="Annullamento Multiplo Eccezioni", font=("Helvetica", 12, "bold")).pack(pady=(0, 15))
         
         # Event Type
-        ttk.Label(form_frame, text="Event Type:", font=("Helvetica", 10)).pack(anchor="w", pady=(0, 5))
+        ttk.Label(form_frame, text="Tipo Evento:", font=("Helvetica", 10)).pack(anchor="w", pady=(0, 5))
         bulk_type_var = tk.StringVar(value="WASTE")
         ttk.Combobox(
             form_frame,
@@ -5044,7 +5044,7 @@ class DesktopOrderApp:
         bulk_sku_ac.entry.pack(fill="x", pady=(0, 10))
         
         # Date
-        ttk.Label(form_frame, text="Date:", font=("Helvetica", 10)).pack(anchor="w", pady=(0, 5))
+        ttk.Label(form_frame, text="Data:", font=("Helvetica", 10)).pack(anchor="w", pady=(0, 5))
         bulk_date_var = tk.StringVar(value=self.exception_view_date_var.get())
         if TKCALENDAR_AVAILABLE:
             DateEntry(  # type: ignore[misc]
@@ -5125,8 +5125,8 @@ class DesktopOrderApp:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to revert: {str(e)}", parent=popup)
         
-        ttk.Button(button_frame, text="Revert", command=do_bulk_revert).pack(side="right", padx=5)
-        ttk.Button(button_frame, text="Cancel", command=popup.destroy).pack(side="right", padx=5)
+        ttk.Button(button_frame, text="✔ Conferma Annullamento", command=do_bulk_revert).pack(side="right", padx=5)
+        ttk.Button(button_frame, text="Annulla", command=popup.destroy).pack(side="right", padx=5)
 
     
     def _build_expiry_tab(self):
