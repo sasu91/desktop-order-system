@@ -2364,15 +2364,6 @@ class DesktopOrderApp:
         # Read transactions and sales
         transactions = self.csv_layer.read_transactions()
         sales_records = self.csv_layer.read_sales()
-
-        # Pre-index by SKU once — avoids O(T) list scans inside the per-SKU OOS loop
-        from collections import defaultdict as _defaultdict
-        _txns_by_sku: dict = _defaultdict(list)
-        for _t in transactions:
-            _txns_by_sku[_t.sku].append(_t)
-        _sales_by_sku: dict = _defaultdict(list)
-        for _s in sales_records:
-            _sales_by_sku[_s.sku].append(_s)
         
         # Calculate stock for each SKU
         stocks = StockCalculator.calculate_all_skus(
@@ -2381,393 +2372,265 @@ class DesktopOrderApp:
             transactions,
             sales_records,
         )
-        
-        # ── OOS boost parameters ──────────────────────────────────────────
+
+        # Generate proposals
         self.current_proposals = []
+
+        # Read OOS boost default from settings
         oos_boost_default = settings.get("reorder_engine", {}).get("oos_boost_percent", {}).get("value", 20) / 100.0
         oos_lookback_days = settings.get("reorder_engine", {}).get("oos_lookback_days", {}).get("value", 30)
         oos_detection_mode_global = settings.get("reorder_engine", {}).get("oos_detection_mode", {}).get("value", "strict")
+
+        # Track SKU-specific OOS boost preferences (in memory for this session)
         if not hasattr(self, 'oos_boost_preferences'):
             self.oos_boost_preferences = {}  # {sku: boost_percent or None}
 
-        # Package per-SKU data for OOS computation workers
-        _sku_items_for_oos: list = []
-        for _sku_id in sku_ids:
-            _sku_obj_tmp = skus_by_id.get(_sku_id)
-            _mode = (
-                _sku_obj_tmp.oos_detection_mode
-                if (_sku_obj_tmp and _sku_obj_tmp.oos_detection_mode)
-                else oos_detection_mode_global
-            )
-            _sku_items_for_oos.append({
-                "sku_id": _sku_id,
-                "oos_detection_mode": _mode,
-                "sku_transactions": list(_txns_by_sku.get(_sku_id, [])),
-                "sku_sales": list(_sales_by_sku.get(_sku_id, [])),
-            })
+        # ── PASS A (background): compute OOS metrics per SKU ────────────────
+        # Everything after PASS A runs inside _on_pass_a_done (main thread).
+        import threading as _threading
 
-        # Context passed through to _finish_proposals (all data needed post-popup)
-        _ctx = {
-            "sku_ids": sku_ids,
-            "skus_by_id": skus_by_id,
-            "transactions": transactions,
-            "sales_records": sales_records,
-            "stocks": stocks,
-            "_txns_by_sku": _txns_by_sku,
-            "settings": settings,
-            "oos_boost_default": oos_boost_default,
-            "oos_lookback_days": oos_lookback_days,
-            "oos_detection_mode_global": oos_detection_mode_global,
-            "target_receipt_date": target_receipt_date,
-            "protection_period": protection_period,
-        }
+        # Container for results produced by the worker thread
+        _pass_a_result: dict = {"sku_oos_data": {}, "oos_candidates": [], "error": None}
 
-        # Dispatch OOS computation: parallel (background thread + processes) or sequential.
-        # ProcessPoolExecutor incurs ~0.5 s spawn overhead per worker (Windows "spawn"
-        # start method).  Parallel only wins when seq_time / n_workers > spawn_overhead,
-        # which requires a large enough dataset AND multiple real cores.  Heuristic:
-        #   ≥ 300 SKUs  (below this, sequential is typically < 0.5 s already)
-        #   ≥ 4 CPUs    (n_workers = cpu-1 = 3; below 4 cores the gain is nil)
-        # The setting flag still controls opt-in/opt-out explicitly via Settings tab.
-        _n_cpu = __import__("os").cpu_count() or 1
-        _parallel_enabled = (
-            settings.get("parallel_oos", {}).get("enabled", {}).get("value", True)
-            and len(sku_ids) >= 300  # spawn overhead dominant for smaller datasets
-            and _n_cpu >= 4          # need ≥ 3 free workers to amortize spawn cost
-        )
-        if _parallel_enabled:
-            self._launch_oos_parallel(_sku_items_for_oos, _ctx)
-        else:
-            _oos_raw = self._run_oos_sequential(
-                _sku_items_for_oos, oos_lookback_days, date.today()
-            )
-            self._finish_proposals(_ctx, _oos_raw)
-
-    def _run_oos_sequential(self, sku_items: list, days_lookback: int, asof_date) -> dict:
-        """Sequential (single-thread) fallback for OOS metrics computation."""
-        results: dict = {}
-        for item in sku_items:
-            sku_id = item["sku_id"]
-            daily_sales, oos_count, oos_list, ooa_days = calculate_daily_sales_average(
-                sales_records=[],
-                sku=sku_id,
-                days_lookback=days_lookback,
-                transactions=[],
-                asof_date=asof_date,
-                oos_detection_mode=item["oos_detection_mode"],
-                return_details=True,
-                sku_transactions=item["sku_transactions"],
-                sku_sales=item["sku_sales"],
-            )
-            results[sku_id] = {
-                "daily_sales": daily_sales,
-                "oos_days_count": oos_count,
-                "oos_days_list": oos_list,
-                "out_of_assortment_days": ooa_days,
-            }
-        return results
-
-    def _launch_oos_parallel(self, sku_items: list, ctx: dict) -> None:
-        """
-        Show a progress dialog and run OOS metrics in parallel via ProcessPoolExecutor
-        from a background daemon thread.  On completion, schedules _finish_proposals
-        back on the main (Tk) thread via root.after().
-        """
-        import threading
-        import os as _os
-        from pathlib import Path as _Path
-        from ..workflows.oos_parallel import run_oos_parallel
-
-        n_workers = max(1, (_os.cpu_count() or 2) - 1)
-        project_root = str(_Path(__file__).resolve().parent.parent.parent)
-        total = len(sku_items)
-        oos_lookback_days: int = ctx["oos_lookback_days"]
-
-        # ── Progress dialog ────────────────────────────────────────────────
-        _progress = tk.Toplevel(self.root)
-        _progress.title("Analisi OOS")
-        _progress.resizable(False, False)
-        _progress.transient(self.root)
-        _progress.grab_set()
-        _progress.protocol("WM_DELETE_WINDOW", lambda: None)  # prevent manual close
-
-        _pf = ttk.Frame(_progress, padding=(20, 16, 20, 16))
-        _pf.pack(fill="both", expand=True)
+        # ── Progress dialog ──────────────────────────────────────────────────
+        _prog = tk.Toplevel(self.root)
+        _prog.title("Calcolo OOS…")
+        _prog.resizable(False, False)
+        _prog.transient(self.root)
+        _prog.grab_set()
+        _prog_frame = ttk.Frame(_prog, padding=(20, 16))
+        _prog_frame.pack(fill="both", expand=True)
         ttk.Label(
-            _pf, text="⏳  Analisi OOS in corso…",
-            font=("Helvetica", 11, "bold"),
+            _prog_frame,
+            text="⏳ Analisi giorni OOS in corso…",
+            font=("Helvetica", 10, "bold"),
         ).pack(anchor="w")
-        ttk.Label(
-            _pf,
-            text=f"Calcolo metriche per {total} SKU  ({n_workers} worker{'s' if n_workers > 1 else ''})",
-            foreground="gray",
-        ).pack(anchor="w", pady=(4, 10))
-        _pct_var = tk.StringVar(value="0 %")
-        ttk.Label(_pf, textvariable=_pct_var, font=("Helvetica", 10)).pack(anchor="w")
-        _bar_var = tk.DoubleVar(value=0)
-        ttk.Progressbar(_pf, variable=_bar_var, maximum=100, length=380).pack(
-            fill="x", pady=(6, 0)
+        _prog_lbl = ttk.Label(_prog_frame, text="", font=("Helvetica", 9), foreground="gray")
+        _prog_lbl.pack(anchor="w", pady=(4, 8))
+        _prog_bar = ttk.Progressbar(_prog_frame, mode="determinate", length=340)
+        _prog_bar.pack(fill="x")
+        _prog_bar["maximum"] = max(len(sku_ids), 1)
+        _prog.update_idletasks()
+        # Centre on parent
+        _pw, _ph = 380, 120
+        _prog.geometry(
+            f"{_pw}x{_ph}"
+            f"+{self.root.winfo_x() + (self.root.winfo_width() - _pw) // 2}"
+            f"+{self.root.winfo_y() + (self.root.winfo_height() - _ph) // 2}"
         )
-        self.root.update_idletasks()
-        _pw, _ph = 440, 160
-        _px = self.root.winfo_x() + (self.root.winfo_width() - _pw) // 2
-        _py = self.root.winfo_y() + (self.root.winfo_height() - _ph) // 2
-        _progress.geometry(f"{_pw}x{_ph}+{_px}+{_py}")
 
-        # ── Shared state between bg thread and on_done callback ───────────
-        _result_holder: list = [None]
-        _error_holder:  list = [None]
-
-        def _on_progress(n_done: int) -> None:
-            """Called from bg thread — dispatches UI update to main thread."""
-            pct = n_done * 100 // total if total > 0 else 100
-            self.root.after(0, lambda p=pct: (_bar_var.set(p), _pct_var.set(f"{p} %")))
-
-        def _bg() -> None:
+        def _pass_a_worker():
+            """Heavy OOS computation – runs in background thread."""
             try:
-                _result_holder[0] = run_oos_parallel(
-                    sku_items=sku_items,
-                    days_lookback=oos_lookback_days,
-                    asof_date=date.today(),
-                    n_workers=n_workers,
-                    project_root=project_root,
-                    on_progress=_on_progress,
-                )
-            except Exception as exc:
-                _error_holder[0] = exc
-            finally:
-                self.root.after(0, _on_done)
+                sku_oos_data_local: dict = {}
+                oos_candidates_local: list = []
 
-        def _on_done() -> None:
-            """Runs on the Tk/UI thread after background work finishes."""
-            if _progress.winfo_exists():
-                _progress.grab_release()
-                _progress.destroy()
-            if _error_holder[0]:
-                logger.warning(
-                    "Parallel OOS failed (%s); falling back to sequential.",
-                    _error_holder[0],
-                )
-                try:
-                    oos_raw = self._run_oos_sequential(
-                        sku_items, oos_lookback_days, date.today()
+                for i, sku_id in enumerate(sku_ids):
+                    sku_obj = skus_by_id.get(sku_id)
+                    description = sku_obj.description if sku_obj else "N/A"
+                    oos_detection_mode = (
+                        sku_obj.oos_detection_mode
+                        if (sku_obj and sku_obj.oos_detection_mode)
+                        else oos_detection_mode_global
                     )
-                except Exception as e2:
-                    messagebox.showerror(
-                        "Errore calcolo OOS",
-                        f"Calcolo OOS fallito:\n{e2}",
+
+                    daily_sales, oos_days_count, oos_days_list, out_of_assortment_days = (
+                        calculate_daily_sales_average(
+                            sales_records, sku_id,
+                            days_lookback=oos_lookback_days,
+                            transactions=transactions,
+                            asof_date=date.today(),
+                            oos_detection_mode=oos_detection_mode,
+                            return_details=True,
+                        )
                     )
-                    return
-            else:
-                oos_raw = _result_holder[0]
-            self._finish_proposals(ctx, oos_raw)
+                    history_valid_days = oos_lookback_days - len(oos_days_list) - len(out_of_assortment_days)
 
-        threading.Thread(target=_bg, daemon=True).start()
-
-    def _finish_proposals(self, ctx: dict, oos_raw: dict) -> None:
-        """
-        Continuation of _generate_all_proposals, called after OOS metrics are ready
-        (either from parallel workers or sequential fallback).
-
-        Applies per-SKU preferences, opens the bulk OOS popup if needed, then runs
-        Pass B (proposal generation + table refresh).
-        """
-        sku_ids: list            = ctx["sku_ids"]
-        skus_by_id: dict         = ctx["skus_by_id"]
-        transactions: list       = ctx["transactions"]
-        sales_records: list      = ctx["sales_records"]
-        stocks: dict             = ctx["stocks"]
-        settings: dict           = ctx["settings"]
-        oos_boost_default: float = ctx["oos_boost_default"]
-        oos_lookback_days: int   = ctx["oos_lookback_days"]
-        oos_detection_mode_global: str = ctx["oos_detection_mode_global"]
-        target_receipt_date      = ctx["target_receipt_date"]
-        protection_period        = ctx["protection_period"]
-
-        # ── Apply preference logic; collect undecided candidates ──────────
-        sku_oos_data: dict   = {}
-        oos_candidates: list = []
-
-        for sku_id in sku_ids:
-            sku_obj     = skus_by_id.get(sku_id)
-            description = sku_obj.description if sku_obj else "N/A"
-            oos_detection_mode = (
-                sku_obj.oos_detection_mode
-                if (sku_obj and sku_obj.oos_detection_mode)
-                else oos_detection_mode_global
-            )
-            raw = oos_raw.get(sku_id, {
-                "daily_sales": 0.0,
-                "oos_days_count": 0,
-                "oos_days_list": [],
-                "out_of_assortment_days": [],
-            })
-            daily_sales            = raw["daily_sales"]
-            oos_days_count         = raw["oos_days_count"]
-            oos_days_list          = raw["oos_days_list"]
-            out_of_assortment_days = raw["out_of_assortment_days"]
-            history_valid_days = (
-                oos_lookback_days - len(oos_days_list) - len(out_of_assortment_days)
-            )
-            sku_oos_data[sku_id] = {
-                "sku_obj":               sku_obj,
-                "description":           description,
-                "daily_sales":           daily_sales,
-                "oos_days_count":        oos_days_count,
-                "oos_days_list":         oos_days_list,
-                "out_of_assortment_days": out_of_assortment_days,
-                "history_valid_days":    history_valid_days,
-                "oos_detection_mode":    oos_detection_mode,
-                "oos_boost_percent":     0.0,
-            }
-            if oos_days_count > 0:
-                if sku_obj and sku_obj.oos_popup_preference == "always_yes":
-                    sku_oos_data[sku_id]["oos_boost_percent"] = oos_boost_default
-                    self.oos_boost_preferences[sku_id] = oos_boost_default
-                elif sku_obj and sku_obj.oos_popup_preference == "always_no":
-                    sku_oos_data[sku_id]["oos_boost_percent"] = 0.0
-                    self.oos_boost_preferences[sku_id] = None
-                elif sku_id in self.oos_boost_preferences:
-                    sku_oos_data[sku_id]["oos_boost_percent"] = (
-                        self.oos_boost_preferences[sku_id] or 0.0
-                    )
-                else:
-                    oos_candidates.append({
-                        "sku": sku_id,
+                    sku_oos_data_local[sku_id] = {
+                        "sku_obj": sku_obj,
                         "description": description,
+                        "daily_sales": daily_sales,
                         "oos_days_count": oos_days_count,
-                        "pack_size": sku_obj.pack_size if sku_obj else 1,
+                        "oos_days_list": oos_days_list,
+                        "out_of_assortment_days": out_of_assortment_days,
+                        "history_valid_days": history_valid_days,
                         "oos_detection_mode": oos_detection_mode,
-                    })
+                        "oos_boost_percent": 0.0,
+                    }
 
-        # ── Bulk OOS popup ────────────────────────────────────────────────
-        bulk_decisions: dict = {}
-        if oos_candidates:
-            bulk_decisions = self._ask_oos_boost_bulk(
-                oos_candidates, oos_boost_default, oos_lookback_days
-            )
+                    if oos_days_count > 0:
+                        if sku_obj and sku_obj.oos_popup_preference == "always_yes":
+                            sku_oos_data_local[sku_id]["oos_boost_percent"] = oos_boost_default
+                        elif sku_obj and sku_obj.oos_popup_preference != "always_no":
+                            if sku_id not in self.oos_boost_preferences:
+                                oos_candidates_local.append({
+                                    "sku": sku_id,
+                                    "description": description,
+                                    "oos_days_count": oos_days_count,
+                                    "pack_size": sku_obj.pack_size if sku_obj else 1,
+                                    "oos_detection_mode": oos_detection_mode,
+                                })
 
-        # ── PASS B: apply decisions, register estimates, generate proposals ─
-        for sku_id in sku_ids:
-            data               = sku_oos_data[sku_id]
-            sku_obj            = data["sku_obj"]
-            description        = data["description"]
-            daily_sales        = data["daily_sales"]
-            oos_days_count     = data["oos_days_count"]
-            history_valid_days = data["history_valid_days"]
-            oos_detection_mode = data["oos_detection_mode"]
-            oos_boost_percent  = data["oos_boost_percent"]
+                    # Update progress bar on main thread
+                    _count = i + 1
+                    self.root.after(0, lambda c=_count, d=description:
+                        (_prog_lbl.config(text=f"SKU {c}/{len(sku_ids)}: {d[:40]}"),
+                         _prog_bar.config(value=c),
+                         _prog.update_idletasks()))
 
-            if sku_id in bulk_decisions:
-                dec            = bulk_decisions[sku_id]
-                boost_choice   = dec["choice"]
-                estimate_date  = dec.get("estimate_date")
-                estimate_colli = dec.get("estimate_colli")
+                _pass_a_result["sku_oos_data"] = sku_oos_data_local
+                _pass_a_result["oos_candidates"] = oos_candidates_local
 
-                if estimate_date and estimate_colli and estimate_colli > 0:
-                    try:
-                        pack_size    = sku_obj.pack_size if sku_obj else 1
-                        estimate_pz  = estimate_colli * pack_size
-                        estimate_note = f"OOS_ESTIMATE_OVERRIDE:{estimate_date.isoformat()}"
-                        existing_override = any(
-                            t.sku == sku_id
-                            and t.date == estimate_date
-                            and estimate_note in (t.note or "")
-                            for t in transactions
-                        )
-                        if not existing_override:
-                            from ..domain.models import SalesRecord
-                            new_sale = SalesRecord(
-                                date=estimate_date, sku=sku_id, qty_sold=estimate_pz
+            except Exception as e:
+                _pass_a_result["error"] = e
+
+            self.root.after(0, _on_pass_a_done)
+
+        def _on_pass_a_done():
+            """Called on main thread after PASS A worker finishes."""
+            try:
+                _prog.grab_release()
+                _prog.destroy()
+            except Exception:
+                pass
+
+            if _pass_a_result["error"]:
+                messagebox.showerror(
+                    "Errore Calcolo OOS",
+                    f"Errore durante l'analisi OOS:\n{_pass_a_result['error']}",
+                )
+                return
+
+            sku_oos_data = _pass_a_result["sku_oos_data"]
+            oos_candidates = _pass_a_result["oos_candidates"]
+
+            # Apply session preferences for OOS-flagged SKUs
+            for sku_id, data in sku_oos_data.items():
+                if data["oos_days_count"] > 0:
+                    sku_obj = data["sku_obj"]
+                    if sku_obj and sku_obj.oos_popup_preference == "always_yes":
+                        data["oos_boost_percent"] = oos_boost_default
+                        self.oos_boost_preferences[sku_id] = oos_boost_default
+                    elif sku_obj and sku_obj.oos_popup_preference == "always_no":
+                        data["oos_boost_percent"] = 0.0
+                        self.oos_boost_preferences[sku_id] = None
+                    elif sku_id in self.oos_boost_preferences:
+                        data["oos_boost_percent"] = self.oos_boost_preferences[sku_id] or 0.0
+
+            # ── SINGLE BULK POPUP for all undecided SKUs ─────────────────────
+            bulk_decisions: dict = {}
+            if oos_candidates:
+                bulk_decisions = self._ask_oos_boost_bulk(oos_candidates, oos_boost_default, oos_lookback_days)
+
+            # ── PASS B: apply bulk decisions, register estimates, generate proposals ─
+            for sku_id in sku_ids:
+                data = sku_oos_data.get(sku_id, {})
+                sku_obj = data.get("sku_obj")
+                description = data.get("description", "N/A")
+                daily_sales = data.get("daily_sales", 0.0)
+                oos_days_count = data.get("oos_days_count", 0)
+                history_valid_days = data.get("history_valid_days", 0)
+                oos_detection_mode = data.get("oos_detection_mode", oos_detection_mode_global)
+                oos_boost_percent = data.get("oos_boost_percent", 0.0)
+
+                if sku_id in bulk_decisions:
+                    dec = bulk_decisions[sku_id]
+                    boost_choice = dec["choice"]
+                    estimate_date = dec.get("estimate_date")
+                    estimate_colli = dec.get("estimate_colli")
+
+                    if estimate_date and estimate_colli and estimate_colli > 0:
+                        try:
+                            pack_size = sku_obj.pack_size if sku_obj else 1
+                            estimate_pz = estimate_colli * pack_size
+                            estimate_note = f"OOS_ESTIMATE_OVERRIDE:{estimate_date.isoformat()}"
+                            existing_override = any(
+                                t.sku == sku_id and t.date == estimate_date and estimate_note in (t.note or "")
+                                for t in transactions
                             )
-                            self.csv_layer.write_sales([new_sale])
-                            sales_records.append(new_sale)
-                            marker_txn = Transaction(
-                                date=estimate_date,
-                                sku=sku_id,
-                                event=EventType.WASTE,
-                                qty=0,
-                                note=(
-                                    f"{estimate_note}|{estimate_colli} colli "
-                                    f"({estimate_pz} pz) - prevents OOS counting"
-                                ),
-                            )
-                            self.csv_layer.write_transaction(marker_txn)
-                            transactions.append(marker_txn)
-                            daily_sales, oos_days_count, _oos_list, _ooa = calculate_daily_sales_average(
-                                sales_records, sku_id,
-                                days_lookback=oos_lookback_days,
-                                transactions=transactions,
-                                asof_date=date.today(),
-                                oos_detection_mode=oos_detection_mode,
-                                return_details=True,
-                                sku_transactions=[t for t in transactions if t.sku == sku_id],
-                                sku_sales=[s for s in sales_records if s.sku == sku_id],
-                            )
-                            history_valid_days = oos_lookback_days - len(_oos_list) - len(_ooa)
-                            logger.info(
-                                "OOS estimate registered for %s on %s: %d colli (%d pz)",
-                                sku_id, estimate_date, estimate_colli, estimate_pz,
-                            )
-                    except Exception as exc:
-                        logger.error(
-                            "Failed to register OOS estimate for %s: %s",
-                            sku_id, exc, exc_info=True,
-                        )
+                            if not existing_override:
+                                from ..domain.models import SalesRecord
+                                new_sale = SalesRecord(date=estimate_date, sku=sku_id, qty_sold=estimate_pz)
+                                self.csv_layer.write_sales([new_sale])
+                                sales_records.append(new_sale)
 
-                if boost_choice in ("yes", "yes_always"):
-                    oos_boost_percent = oos_boost_default
-                    self.oos_boost_preferences[sku_id] = oos_boost_default
-                    if boost_choice == "yes_always" and sku_obj:
-                        self.csv_layer.update_sku(
-                            sku_obj.sku, sku_obj.sku, sku_obj.description, sku_obj.ean,
-                            sku_obj.moq, sku_obj.pack_size, sku_obj.lead_time_days,
-                            sku_obj.review_period, sku_obj.safety_stock, sku_obj.shelf_life_days,
-                            sku_obj.max_stock, sku_obj.reorder_point,
-                            sku_obj.demand_variability, sku_obj.oos_boost_percent,
-                            sku_obj.oos_detection_mode, "always_yes",
-                            category=sku_obj.category, department=sku_obj.department,
-                        )
-                else:
-                    oos_boost_percent = 0.0
-                    self.oos_boost_preferences[sku_id] = None
-                    if boost_choice == "no_never" and sku_obj:
-                        self.csv_layer.update_sku(
-                            sku_obj.sku, sku_obj.sku, sku_obj.description, sku_obj.ean,
-                            sku_obj.moq, sku_obj.pack_size, sku_obj.lead_time_days,
-                            sku_obj.review_period, sku_obj.safety_stock, sku_obj.shelf_life_days,
-                            sku_obj.max_stock, sku_obj.reorder_point,
-                            sku_obj.demand_variability, sku_obj.oos_boost_percent,
-                            sku_obj.oos_detection_mode, "always_no",
-                            category=sku_obj.category, department=sku_obj.department,
-                        )
+                                marker_txn = Transaction(
+                                    date=estimate_date,
+                                    sku=sku_id,
+                                    event=EventType.WASTE,
+                                    qty=0,
+                                    note=f"{estimate_note}|{estimate_colli} colli ({estimate_pz} pz) - prevents OOS counting",
+                                )
+                                self.csv_layer.write_transaction(marker_txn)
+                                transactions.append(marker_txn)
 
-            proposal = self.order_workflow.generate_proposal(
-                sku=sku_id,
-                description=description,
-                current_stock=stocks[sku_id],
-                daily_sales_avg=daily_sales,
-                sku_obj=sku_obj,
-                oos_days_count=oos_days_count,
-                oos_boost_percent=oos_boost_percent,
-                target_receipt_date=target_receipt_date,
-                protection_period_days=protection_period,
-                transactions=transactions,
-                sales_records=sales_records,
-            )
-            proposal.history_valid_days = history_valid_days
-            self.current_proposals.append(proposal)
+                                daily_sales, oos_days_count, _oos_days_list, _ooa_days = calculate_daily_sales_average(
+                                    sales_records, sku_id,
+                                    days_lookback=oos_lookback_days,
+                                    transactions=transactions,
+                                    asof_date=date.today(),
+                                    oos_detection_mode=oos_detection_mode,
+                                    return_details=True,
+                                )
+                                history_valid_days = oos_lookback_days - len(_oos_days_list) - len(_ooa_days)
+                                logger.info(
+                                    f"OOS estimate registered for {sku_id} on {estimate_date}: "
+                                    f"{estimate_colli} colli ({estimate_pz} pz)"
+                                )
+                        except Exception as e:
+                            logger.error(f"Failed to register OOS estimate for {sku_id}: {e}", exc_info=True)
 
-        self._refresh_proposal_table()
-        messagebox.showinfo(
-            "Proposte Generate",
-            (
+                    if boost_choice in ("yes", "yes_always"):
+                        oos_boost_percent = oos_boost_default
+                        self.oos_boost_preferences[sku_id] = oos_boost_default
+                        if boost_choice == "yes_always" and sku_obj:
+                            self.csv_layer.update_sku(
+                                sku_obj.sku, sku_obj.sku, sku_obj.description, sku_obj.ean,
+                                sku_obj.moq, sku_obj.pack_size, sku_obj.lead_time_days,
+                                sku_obj.review_period, sku_obj.safety_stock, sku_obj.shelf_life_days,
+                                sku_obj.max_stock, sku_obj.reorder_point,
+                                sku_obj.demand_variability, sku_obj.oos_boost_percent,
+                                sku_obj.oos_detection_mode, "always_yes",
+                                category=sku_obj.category, department=sku_obj.department,
+                            )
+                    else:
+                        oos_boost_percent = 0.0
+                        self.oos_boost_preferences[sku_id] = None
+                        if boost_choice == "no_never" and sku_obj:
+                            self.csv_layer.update_sku(
+                                sku_obj.sku, sku_obj.sku, sku_obj.description, sku_obj.ean,
+                                sku_obj.moq, sku_obj.pack_size, sku_obj.lead_time_days,
+                                sku_obj.review_period, sku_obj.safety_stock, sku_obj.shelf_life_days,
+                                sku_obj.max_stock, sku_obj.reorder_point,
+                                sku_obj.demand_variability, sku_obj.oos_boost_percent,
+                                sku_obj.oos_detection_mode, "always_no",
+                                category=sku_obj.category, department=sku_obj.department,
+                            )
+
+                proposal = self.order_workflow.generate_proposal(
+                    sku=sku_id,
+                    description=description,
+                    current_stock=stocks[sku_id],
+                    daily_sales_avg=daily_sales,
+                    sku_obj=sku_obj,
+                    oos_days_count=oos_days_count,
+                    oos_boost_percent=oos_boost_percent,
+                    target_receipt_date=target_receipt_date,
+                    protection_period_days=protection_period,
+                    transactions=transactions,
+                    sales_records=sales_records,
+                )
+                proposal.history_valid_days = history_valid_days
+                self.current_proposals.append(proposal)
+
+            self._refresh_proposal_table()
+            messagebox.showinfo(
+                "Proposte Generate",
                 f"Generate {len(self.current_proposals)} proposte ordine.\n"
-                f"Proposte con Q.tà > 0: "
-                f"{sum(1 for p in self.current_proposals if p.proposed_qty > 0)}"
-            ),
-        )
+                f"Proposte con Q.tà > 0: {sum(1 for p in self.current_proposals if p.proposed_qty > 0)}",
+            )
 
+        _threading.Thread(target=_pass_a_worker, daemon=True).start()
 
     # ------------------------------------------------------------------
     def _ask_oos_boost_bulk(
@@ -2777,7 +2640,11 @@ class DesktopOrderApp:
         oos_lookback_days: int = 30,
     ) -> dict:
         """
-        Single popup listing all SKUs that need an OOS-boost decision.
+        Paginated popup listing all SKUs that need an OOS-boost decision.
+
+        Decisions for each SKU are stored in a backing dict immediately on every
+        button click, so they are preserved when the user navigates across pages.
+        Only the widgets for the current page are rendered at any time (PAGE_SIZE rows).
 
         Args:
             candidates: list of dicts with keys sku, description, oos_days_count, pack_size
@@ -2792,8 +2659,24 @@ class DesktopOrderApp:
         if not candidates:
             return {}
 
+        PAGE_SIZE = 50
+        n_total = len(candidates)
+        n_pages = max(1, (n_total + PAGE_SIZE - 1) // PAGE_SIZE)
+
+        # ── Backing store: always up-to-date decisions for ALL candidates ───
+        # Pre-populated with default; overwritten by button clicks or _set_all.
+        CHOICE_DEFAULT = "no"
+        _store: dict = {
+            cand["sku"]: {
+                "choice": CHOICE_DEFAULT,
+                "estimate_date_str": (date.today() - timedelta(days=1)).isoformat(),
+                "estimate_colli_str": "",
+            }
+            for cand in candidates
+        }
+
         popup = tk.Toplevel(self.root)
-        popup.title(f"Gestione OOS — {len(candidates)} SKU in attesa")
+        popup.title(f"Gestione OOS — {n_total} SKU in attesa")
         popup.resizable(True, True)
         popup.transient(self.root)
         popup.grab_set()
@@ -2805,7 +2688,7 @@ class DesktopOrderApp:
         header_frame.pack(fill="x")
         ttk.Label(
             header_frame,
-            text=f"⚠️ Rilevati giorni OOS (ultimi {oos_lookback_days}gg) per {len(candidates)} SKU",
+            text=f"⚠️ Rilevati giorni OOS (ultimi {oos_lookback_days}gg) per {n_total} SKU",
             font=("Helvetica", 11, "bold"),
             foreground="#d97706",
         ).pack(anchor="w")
@@ -2825,13 +2708,12 @@ class DesktopOrderApp:
 
         ttk.Separator(popup, orient="horizontal").pack(fill="x", padx=10, pady=(6, 0))
 
-        # ── Action buttons (anchored to bottom BEFORE scrollable area so they
-        #    are always visible regardless of how tall the canvas grows) ──────
+        # ── Action buttons anchored to bottom FIRST (never pushed off-screen) ──
         ttk.Separator(popup, orient="horizontal").pack(side="bottom", fill="x", padx=10, pady=(4, 0))
         btn_frame = ttk.Frame(popup, padding=(10, 8))
         btn_frame.pack(side="bottom", fill="x")
 
-        # ── Scrollable grid of rows ──────────────────────────────────────────
+        # ── Scrollable grid ──────────────────────────────────────────────────
         container = ttk.Frame(popup, padding=(10, 4))
         container.pack(fill="both", expand=True)
 
@@ -2853,169 +2735,172 @@ class DesktopOrderApp:
         inner.bind("<Configure>", _on_frame_configure)
         canvas.bind("<Configure>", _on_canvas_configure)
 
-        # Mousewheel scroll
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
         popup.bind("<Destroy>", lambda e: canvas.unbind_all("<MouseWheel>"))
 
-        # Column headers
-        hdr_style = {"font": ("Helvetica", 9, "bold"), "foreground": "#555"}
-        headers = ["SKU", "Descrizione", "Giorni OOS", "Sì", "Sì sempre", "No", "No mai", "Data Stima", "Colli Stimati"]
-        col_widths_px = [130, 190, 60, 60, 75, 50, 65, 105, 85]
-        for c, hdr in enumerate(headers):
-            lbl = ttk.Label(inner, text=hdr, **hdr_style)
-            lbl.grid(row=0, column=c, sticky="w", padx=(4, 2), pady=(0, 4))
-
-        ttk.Separator(inner, orient="horizontal").grid(
-            row=1, column=0, columnspan=len(headers), sticky="ew", pady=(0, 4)
-        )
-
-        # Choice keys mapped to column index (cols 3-6)
+        # ── Style constants ──────────────────────────────────────────────────
         CHOICE_COLS = {3: "yes", 4: "yes_always", 5: "no", 6: "no_never"}
-        CHOICE_DEFAULT = "no"
-
-        # Colors for selected/unselected buttons
         SEL_BG   = {"yes": "#c8e6c9", "yes_always": "#a5d6a7", "no": "#ffccbc", "no_never": "#ef9a9a"}
         UNSEL_FG = "#444444"
         SEL_FG   = "#222222"
+        hdr_style = {"font": ("Helvetica", 9, "bold"), "foreground": "#555"}
+        headers = ["SKU", "Descrizione", "Giorni OOS",
+                   "Sì", "Sì sempre", "No", "No mai",
+                   "Data Stima", "Colli Stimati"]
+        btn_labels = {3: "Sì", 4: "Sì\nsempre", 5: "No", 6: "No\nmai"}
 
-        # Per-row widget refs
-        row_data: list = []  # [{choice_var, date_var, colli_var, sku, btns}]
+        # current_page mutable state
+        _page = [0]
+        _page_lbl = tk.StringVar(value="")
 
-        for idx, cand in enumerate(candidates):
-            base_row = idx * 2 + 2  # 2 header rows
+        # ── Page renderer ────────────────────────────────────────────────────
+        def _render_page(page_num: int):
+            """Destroy all current inner widgets and render only this page's rows."""
+            for child in inner.winfo_children():
+                child.destroy()
 
-            sku_lbl = ttk.Label(inner, text=cand["sku"], wraplength=130)
-            sku_lbl.grid(row=base_row, column=0, sticky="w", padx=(4, 2), pady=2)
-
-            desc_lbl = ttk.Label(inner, text=cand["description"][:32], wraplength=190)
-            desc_lbl.grid(row=base_row, column=1, sticky="w", padx=(4, 2), pady=2)
-
-            oos_lbl = ttk.Label(inner, text=str(cand["oos_days_count"]), anchor="center")
-            oos_lbl.grid(row=base_row, column=2, sticky="ew", padx=(4, 2), pady=2)
-
-            choice_var = tk.StringVar(value=CHOICE_DEFAULT)
-
-            # 4 mutually-exclusive toggle buttons (cols 3-6)
-            btn_refs: dict = {}
-
-            def _make_select(cv, key, btns_dict):
-                def _select():
-                    cv.set(key)
-                    for k, b in btns_dict.items():
-                        if k == key:
-                            b.config(relief="sunken", bg=SEL_BG[k], fg=SEL_FG)
-                        else:
-                            b.config(relief="flat", bg="SystemButtonFace", fg=UNSEL_FG)
-                return _select
-
-            btn_labels = {3: "Sì", 4: "Sì\nsempre", 5: "No", 6: "No\nmai"}
-            for col, choice_key in CHOICE_COLS.items():
-                btn = tk.Button(
-                    inner,
-                    text=btn_labels[col],
-                    width=6,
-                    font=("Helvetica", 8),
-                    relief="flat" if choice_key != CHOICE_DEFAULT else "sunken",
-                    bg=SEL_BG[choice_key] if choice_key == CHOICE_DEFAULT else "SystemButtonFace",
-                    fg=SEL_FG if choice_key == CHOICE_DEFAULT else UNSEL_FG,
-                    cursor="hand2",
-                    pady=1,
+            # Column headers
+            for c, hdr in enumerate(headers):
+                ttk.Label(inner, text=hdr, **hdr_style).grid(
+                    row=0, column=c, sticky="w", padx=(4, 2), pady=(0, 4)
                 )
-                btn.grid(row=base_row, column=col, padx=(3, 2), pady=2)
-                btn_refs[choice_key] = btn
-
-            # Wire up commands after all buttons created (so btns_dict is complete)
-            for col, choice_key in CHOICE_COLS.items():
-                btn_refs[choice_key].config(
-                    command=_make_select(choice_var, choice_key, btn_refs)
-                )
-
-            yesterday_iso = (date.today() - timedelta(days=1)).isoformat()
-            date_var = tk.StringVar(value=yesterday_iso)
-            if TKCALENDAR_AVAILABLE:
-                date_widget = DateEntry(  # type: ignore[misc]
-                    inner,
-                    textvariable=date_var,
-                    width=12,
-                    date_pattern="yyyy-mm-dd",
-                )
-            else:
-                date_widget = ttk.Entry(inner, textvariable=date_var, width=13)
-            date_widget.grid(row=base_row, column=7, sticky="ew", padx=(4, 2), pady=2)
-
-            colli_var = tk.StringVar(value="")
-            colli_entry = ttk.Entry(inner, textvariable=colli_var, width=9)
-            colli_entry.grid(row=base_row, column=8, sticky="ew", padx=(4, 2), pady=2)
-
-            # Light separator between rows
             ttk.Separator(inner, orient="horizontal").grid(
-                row=base_row + 1, column=0, columnspan=len(headers), sticky="ew", padx=4
+                row=1, column=0, columnspan=len(headers), sticky="ew", pady=(0, 4)
             )
 
-            row_data.append({
-                "sku": cand["sku"],
-                "choice_var": choice_var,
-                "date_var": date_var,
-                "colli_var": colli_var,
-                "btn_refs": btn_refs,
-            })
+            page_candidates = candidates[page_num * PAGE_SIZE:(page_num + 1) * PAGE_SIZE]
 
-        # Reasonable initial height (cap at 10 rows)
-        row_height = 42
-        n_visible = min(len(candidates), 10)
-        header_h = 52
-        popup_h = header_h + n_visible * row_height + 120  # 120 = header + buttons
-        popup_w = 870
-        popup.geometry(f"{popup_w}x{min(popup_h, 700)}")
-        # Centre on parent
-        self.root.update_idletasks()
-        px = self.root.winfo_x() + (self.root.winfo_width() - popup_w) // 2
-        py = self.root.winfo_y() + (self.root.winfo_height() - popup_h) // 2
-        popup.geometry(f"{popup_w}x{min(popup_h, 700)}+{px}+{py}")
+            for idx, cand in enumerate(page_candidates):
+                sku_id = cand["sku"]
+                base_row = idx * 2 + 2
 
-        # ── Populate action buttons (btn_frame anchored to bottom earlier) ──
+                ttk.Label(inner, text=sku_id, wraplength=130).grid(
+                    row=base_row, column=0, sticky="w", padx=(4, 2), pady=2
+                )
+                ttk.Label(inner, text=cand["description"][:32], wraplength=190).grid(
+                    row=base_row, column=1, sticky="w", padx=(4, 2), pady=2
+                )
+                ttk.Label(inner, text=str(cand["oos_days_count"]), anchor="center").grid(
+                    row=base_row, column=2, sticky="ew", padx=(4, 2), pady=2
+                )
 
-        # "Select all" shortcuts — sets every row's choice_var AND updates button visuals
+                # Restore from backing store
+                current_choice = _store[sku_id]["choice"]
+                btn_refs: dict = {}
+
+                def _make_select(sid, key, btns_dict):
+                    def _select():
+                        _store[sid]["choice"] = key
+                        for k, b in btns_dict.items():
+                            if k == key:
+                                b.config(relief="sunken", bg=SEL_BG[k], fg=SEL_FG)
+                            else:
+                                b.config(relief="flat", bg="SystemButtonFace", fg=UNSEL_FG)
+                    return _select
+
+                for col, choice_key in CHOICE_COLS.items():
+                    is_sel = (choice_key == current_choice)
+                    btn = tk.Button(
+                        inner,
+                        text=btn_labels[col],
+                        width=6,
+                        font=("Helvetica", 8),
+                        relief="sunken" if is_sel else "flat",
+                        bg=SEL_BG[choice_key] if is_sel else "SystemButtonFace",
+                        fg=SEL_FG if is_sel else UNSEL_FG,
+                        cursor="hand2",
+                        pady=1,
+                    )
+                    btn.grid(row=base_row, column=col, padx=(3, 2), pady=2)
+                    btn_refs[choice_key] = btn
+
+                for col, choice_key in CHOICE_COLS.items():
+                    btn_refs[choice_key].config(
+                        command=_make_select(sku_id, choice_key, btn_refs)
+                    )
+
+                date_var = tk.StringVar(value=_store[sku_id]["estimate_date_str"])
+                date_var.trace_add("write", lambda *a, sv=date_var, sid=sku_id:
+                    _store[sid].update(estimate_date_str=sv.get()))
+                if TKCALENDAR_AVAILABLE:
+                    date_widget = DateEntry(  # type: ignore[misc]
+                        inner, textvariable=date_var, width=12, date_pattern="yyyy-mm-dd",
+                    )
+                else:
+                    date_widget = ttk.Entry(inner, textvariable=date_var, width=13)
+                date_widget.grid(row=base_row, column=7, sticky="ew", padx=(4, 2), pady=2)
+
+                colli_var = tk.StringVar(value=_store[sku_id]["estimate_colli_str"])
+                colli_var.trace_add("write", lambda *a, sv=colli_var, sid=sku_id:
+                    _store[sid].update(estimate_colli_str=sv.get()))
+                ttk.Entry(inner, textvariable=colli_var, width=9).grid(
+                    row=base_row, column=8, sticky="ew", padx=(4, 2), pady=2
+                )
+
+                ttk.Separator(inner, orient="horizontal").grid(
+                    row=base_row + 1, column=0, columnspan=len(headers), sticky="ew", padx=4
+                )
+
+            canvas.yview_moveto(0)  # scroll to top on page change
+            _page_lbl.set(f"Pagina {page_num + 1} / {n_pages}  ({n_total} SKU)")
+
+        def _go_prev():
+            if _page[0] > 0:
+                _page[0] -= 1
+                _render_page(_page[0])
+
+        def _go_next():
+            if _page[0] < n_pages - 1:
+                _page[0] += 1
+                _render_page(_page[0])
+
+        # ── Populate btn_frame ───────────────────────────────────────────────
         def _set_all(choice_key: str):
-            for rd in row_data:
-                rd["choice_var"].set(choice_key)
-                for k, b in rd["btn_refs"].items():
-                    if k == choice_key:
-                        b.config(relief="sunken", bg=SEL_BG[k], fg=SEL_FG)
-                    else:
-                        b.config(relief="flat", bg="SystemButtonFace", fg=UNSEL_FG)
+            """Set ALL candidates (all pages) to choice_key, update visible widgets."""
+            for cand in candidates:
+                _store[cand["sku"]]["choice"] = choice_key
+            # Refresh visible page button states
+            _render_page(_page[0])
 
+        # "Tutti:" shortcuts
         shortcut_frame = ttk.Frame(btn_frame)
         shortcut_frame.pack(side="left")
         ttk.Label(shortcut_frame, text="Tutti:", font=("Helvetica", 8)).pack(side="left", padx=(0, 4))
-        for label, key in [("Sì", "yes"), ("Sì sempre", "yes_always"),
-                            ("No", "no"), ("No mai", "no_never")]:
+        for lbl, key in [("Sì", "yes"), ("Sì sempre", "yes_always"),
+                         ("No", "no"), ("No mai", "no_never")]:
             ttk.Button(
-                shortcut_frame, text=label, width=9,
+                shortcut_frame, text=lbl, width=9,
                 command=lambda v=key: _set_all(v),
             ).pack(side="left", padx=2)
 
-        def _confirm():
-            for rd in row_data:
-                # choice_var holds the key directly ("yes", "no", etc.)
-                choice_key = rd["choice_var"].get()
+        # Page navigation (shown only when multiple pages)
+        if n_pages > 1:
+            nav_frame = ttk.Frame(btn_frame)
+            nav_frame.pack(side="left", padx=(16, 0))
+            ttk.Button(nav_frame, text="◀", width=3, command=_go_prev).pack(side="left")
+            ttk.Label(nav_frame, textvariable=_page_lbl,
+                      font=("Helvetica", 8), foreground="gray").pack(side="left", padx=4)
+            ttk.Button(nav_frame, text="▶", width=3, command=_go_next).pack(side="left")
 
+        def _confirm():
+            for cand in candidates:
+                s = _store[cand["sku"]]
+                choice_key = s["choice"]
                 estimate_date_val = None
                 estimate_colli_val = None
-                colli_raw = rd["colli_var"].get().strip()
+                colli_raw = s["estimate_colli_str"].strip()
                 if colli_raw:
                     try:
                         n_colli = int(colli_raw)
                         if n_colli > 0:
                             estimate_colli_val = n_colli
-                            estimate_date_val = date.fromisoformat(rd["date_var"].get().strip())
+                            estimate_date_val = date.fromisoformat(s["estimate_date_str"].strip())
                     except (ValueError, TypeError):
-                        pass  # ignore invalid input
-
-                decisions[rd["sku"]] = {
+                        pass
+                decisions[cand["sku"]] = {
                     "choice": choice_key,
                     "estimate_date": estimate_date_val,
                     "estimate_colli": estimate_colli_val,
@@ -3023,7 +2908,6 @@ class DesktopOrderApp:
             popup.destroy()
 
         def _cancel():
-            # decisions stays empty → caller treats as no-boost for all candidates
             popup.destroy()
 
         popup.protocol("WM_DELETE_WINDOW", _cancel)
@@ -3037,8 +2921,21 @@ class DesktopOrderApp:
         ).pack(side="right", padx=(5, 0))
         ttk.Button(btn_frame, text="Annulla", command=_cancel, width=10).pack(side="right")
 
+        # ── Geometry & initial render ────────────────────────────────────────
+        visible_rows = min(PAGE_SIZE, n_total, 14)  # cap at 14 rows for initial size
+        popup_h = 52 + visible_rows * 42 + 160      # header + rows + chrome
+        popup_w = 870
+        self.root.update_idletasks()
+        px = self.root.winfo_x() + (self.root.winfo_width() - popup_w) // 2
+        py = self.root.winfo_y() + (self.root.winfo_height() - popup_h) // 2
+        popup.geometry(f"{popup_w}x{min(popup_h, 700)}+{px}+{py}")
+
+        _render_page(0)
+
         popup.wait_window()
         return decisions
+
+
 
     def _ask_oos_boost(self, sku: str, description: str, oos_days_count: int, default_percent: float) -> tuple:
         """
