@@ -1802,6 +1802,8 @@ def calculate_daily_sales_average(
     asof_date: Optional[date] = None,
     oos_detection_mode: str = "strict",
     return_details: bool = False,
+    sku_transactions=None,  # pre-filtered transactions for this SKU (perf fast-path)
+    sku_sales=None,         # pre-filtered sales records for this SKU (perf fast-path)
 ) -> tuple:
     """
     Calculate average daily sales for a SKU using calendar-based approach.
@@ -1859,23 +1861,36 @@ def calculate_daily_sales_average(
         asof_date = date.today()
     
     # Build sales map: {date: qty_sold}
+    # Use pre-filtered sku_sales when provided — avoids O(|sales_records|) scan
     sku_sales_map = {}
-    for s in sales_records:
-        if s.sku == sku:
-            sku_sales_map[s.date] = sku_sales_map.get(s.date, 0) + s.qty_sold
+    _source_sales = sku_sales if sku_sales is not None else (
+        (s for s in sales_records if s.sku == sku) if sales_records else []
+    )
+    for s in _source_sales:
+        sku_sales_map[s.date] = sku_sales_map.get(s.date, 0) + s.qty_sold
     
     # Generate calendar days range
     start_date = asof_date - timedelta(days=days_lookback - 1)
     calendar_days = [start_date + timedelta(days=i) for i in range(days_lookback)]
+    calendar_days_set = set(calendar_days)
     
+    # Resolve per-SKU transaction list once
+    # Use pre-filtered sku_transactions when provided — avoids O(|transactions|) scan
+    if sku_transactions is not None:
+        _sku_txns = sku_transactions
+    elif transactions:
+        _sku_txns = [t for t in transactions if t.sku == sku]
+    else:
+        _sku_txns = []
+
     # Build map of out-of-assortment periods from ledger
     out_of_assortment_days = set()
     
-    if transactions:
-        # Find all assortment transitions for this SKU
+    if _sku_txns:
+        # Find all assortment transitions for this SKU (already filtered above)
         assortment_events = [
-            txn for txn in transactions 
-            if txn.sku == sku and txn.event in (EventType.ASSORTMENT_OUT, EventType.ASSORTMENT_IN)
+            txn for txn in _sku_txns
+            if txn.event in (EventType.ASSORTMENT_OUT, EventType.ASSORTMENT_IN)
         ]
         
         # Sort by date
@@ -1899,7 +1914,7 @@ def calculate_daily_sales_average(
                     # Mark all days from out_start to event.date-1 as out of assortment
                     current = out_start
                     while current < event.date:
-                        if current in calendar_days:
+                        if current in calendar_days_set:
                             out_of_assortment_days.add(current)
                         current += timedelta(days=1)
                 currently_out = False
@@ -1909,7 +1924,7 @@ def calculate_daily_sales_average(
         if currently_out and out_start:
             current = out_start
             while current <= asof_date:
-                if current in calendar_days:
+                if current in calendar_days_set:
                     out_of_assortment_days.add(current)
                 current += timedelta(days=1)
     
@@ -1917,27 +1932,32 @@ def calculate_daily_sales_average(
     oos_days = set()
     oos_override_days = set()  # Days with OOS_ESTIMATE_OVERRIDE marker
     
-    if transactions:
-        # First, identify days with override markers
-        for txn in transactions:
-            if txn.sku == sku and txn.note and "OOS_ESTIMATE_OVERRIDE:" in txn.note:
+    if _sku_txns or transactions:
+        # Identify days with override markers using pre-filtered list
+        for txn in _sku_txns:
+            if txn.note and "OOS_ESTIMATE_OVERRIDE:" in txn.note:
                 oos_override_days.add(txn.date)
         
-        # Then detect OOS days, excluding override days
-        for day in calendar_days:
-            if day in oos_override_days:
-                continue  # Skip days with estimate override
-            
-            stock = StockCalculator.calculate_asof(sku, day, transactions, sales_records)
-            # Apply OOS detection mode
-            if oos_detection_mode == "strict":
-                # Strict mode: count as OOS if on_hand == 0 (ignora on_order)
-                if stock.on_hand == 0:
-                    oos_days.add(day)
-            else:  # "relaxed" or default
-                # Relaxed mode: count as OOS only if both on_hand and on_order == 0
-                if stock.on_hand + stock.on_order == 0:
-                    oos_days.add(day)
+        # Detect OOS using incremental series calculator — O(T log T + D) total
+        # instead of O(D × T log T) from repeated calculate_asof calls.
+        days_to_check = [d for d in calendar_days if d not in oos_override_days]
+        if days_to_check:
+            # Pass pre-filtered sku data; calculate_stock_series avoids full-list rescans
+            stock_series = StockCalculator.calculate_stock_series(
+                sku,
+                days_to_check,
+                transactions or [],
+                sales_records,
+                sku_transactions=_sku_txns,
+                sku_sales=sku_sales,
+            )
+            for day, stock in stock_series.items():
+                if oos_detection_mode == "strict":
+                    if stock.on_hand == 0:
+                        oos_days.add(day)
+                else:  # "relaxed" or default
+                    if stock.on_hand + stock.on_order == 0:
+                        oos_days.add(day)
     
     # Calculate average excluding OOS days AND out-of-assortment days
     total_sales = 0

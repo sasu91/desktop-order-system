@@ -2364,6 +2364,15 @@ class DesktopOrderApp:
         # Read transactions and sales
         transactions = self.csv_layer.read_transactions()
         sales_records = self.csv_layer.read_sales()
+
+        # Pre-index by SKU once — avoids O(T) list scans inside the per-SKU OOS loop
+        from collections import defaultdict as _defaultdict
+        _txns_by_sku: dict = _defaultdict(list)
+        for _t in transactions:
+            _txns_by_sku[_t.sku].append(_t)
+        _sales_by_sku: dict = _defaultdict(list)
+        for _s in sales_records:
+            _sales_by_sku[_s.sku].append(_s)
         
         # Calculate stock for each SKU
         stocks = StockCalculator.calculate_all_skus(
@@ -2406,6 +2415,8 @@ class DesktopOrderApp:
                 asof_date=date.today(),
                 oos_detection_mode=oos_detection_mode,
                 return_details=True,
+                sku_transactions=_txns_by_sku.get(sku_id, []),
+                sku_sales=_sales_by_sku.get(sku_id, []),
             )
             history_valid_days = oos_lookback_days - len(oos_days_list) - len(out_of_assortment_days)
 
@@ -2491,7 +2502,9 @@ class DesktopOrderApp:
                             self.csv_layer.write_transaction(marker_txn)
                             transactions.append(marker_txn)
 
-                            # Recalculate daily average with override marker
+                            # Recalculate daily average with override marker.
+                            # Re-derive per-SKU slices from updated lists (marker_txn + new sale
+                            # were just appended, so the earlier _txns_by_sku index is stale).
                             daily_sales, oos_days_count, _oos_days_list, _ooa_days = calculate_daily_sales_average(
                                 sales_records, sku_id,
                                 days_lookback=oos_lookback_days,
@@ -2499,6 +2512,8 @@ class DesktopOrderApp:
                                 asof_date=date.today(),
                                 oos_detection_mode=oos_detection_mode,
                                 return_details=True,
+                                sku_transactions=[t for t in transactions if t.sku == sku_id],
+                                sku_sales=[s for s in sales_records if s.sku == sku_id],
                             )
                             history_valid_days = oos_lookback_days - len(_oos_days_list) - len(_ooa_days)
                             logger.info(
