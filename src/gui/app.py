@@ -5771,7 +5771,8 @@ class DesktopOrderApp:
         
         ttk.Button(toolbar_frame, text="➕ Nuovo SKU", command=self._new_sku).pack(side="left", padx=5)
         ttk.Button(toolbar_frame, text="✏️ Modifica SKU", command=self._edit_sku).pack(side="left", padx=5)
-        ttk.Button(toolbar_frame, text="🗑️ Elimina SKU", command=self._delete_sku).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="� Modifica in batch", command=self._edit_sku_batch).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="�🗑️ Elimina SKU", command=self._delete_sku).pack(side="left", padx=5)
         ttk.Button(toolbar_frame, text="🔄 Aggiorna", command=self._refresh_admin_tab).pack(side="left", padx=5)
         
         # Toggle for showing out-of-assortment SKUs
@@ -5796,6 +5797,7 @@ class DesktopOrderApp:
             columns=("SKU", "Description", "EAN", "Famiglia", "Sotto-famiglia", "Status"),
             height=20,
             yscrollcommand=scrollbar.set,
+            selectmode="extended",
         )
         scrollbar.config(command=self.admin_treeview.yview)
         
@@ -5819,6 +5821,21 @@ class DesktopOrderApp:
         # Bind double-click to edit
         self.admin_treeview.bind("<Double-1>", lambda e: self._edit_sku())
     
+    def _get_selected_admin_sku_codes(self) -> list:
+        """Return list of SKU codes for all currently selected rows in admin_treeview."""
+        selected = self.admin_treeview.selection()
+        sku_codes = []
+        for item_id in selected:
+            item = self.admin_treeview.item(item_id)
+            tags = item.get("tags", [])
+            if tags and tags[0].startswith("sku_"):
+                sku_codes.append(tags[0][4:])  # strip 'sku_' prefix
+            else:
+                values = item.get("values", [])
+                if values:
+                    sku_codes.append(str(values[0]))
+        return sku_codes
+
     def _refresh_admin_tab(self):
         """Refresh SKU table with all SKUs (filtered by assortment toggle)."""
         self.admin_treeview.delete(*self.admin_treeview.get_children())
@@ -5874,82 +5891,133 @@ class DesktopOrderApp:
         self._show_sku_form(mode="new")
     
     def _edit_sku(self):
-        """Open form to edit selected SKU."""
-        selected = self.admin_treeview.selection()
-        if not selected:
+        """Open form to edit selected SKU (single selection only)."""
+        sku_codes = self._get_selected_admin_sku_codes()
+        if not sku_codes:
             messagebox.showwarning("Nessuna Selezione", "Seleziona uno SKU da modificare.")
             return
-        
-        # Get selected SKU data - use tags to preserve original SKU (with leading zeros)
-        item = self.admin_treeview.item(selected[0])
-        tags = item.get("tags", [])
-        
-        if tags and tags[0].startswith("sku_"):
-            selected_sku = tags[0][4:]  # Remove 'sku_' prefix to get original SKU
-        else:
-            # Fallback to values if tags not available
-            values = item["values"]
-            selected_sku = values[0]  # SKU code
-        
-        self._show_sku_form(mode="edit", sku_code=selected_sku)
+        if len(sku_codes) > 1:
+            messagebox.showwarning(
+                "Selezione Multipla",
+                f"Sono selezionati {len(sku_codes)} SKU.\n"
+                "Usa \"Modifica in batch\" per modificare pi\u00f9 SKU contemporaneamente,\n"
+                "oppure seleziona un singolo SKU per la modifica individuale.",
+            )
+            return
+        self._show_sku_form(mode="edit", sku_code=sku_codes[0])
     
     def _delete_sku(self):
-        """Delete selected SKU after confirmation."""
-        selected = self.admin_treeview.selection()
-        if not selected:
-            messagebox.showwarning("Nessuna Selezione", "Seleziona uno SKU da eliminare.")
+        """Delete selected SKU(s) after confirmation.
+
+        Supports multi-selection: validates each SKU, deletes valid ones,
+        shows a summary of successes and failures.
+        """
+        sku_codes = self._get_selected_admin_sku_codes()
+        if not sku_codes:
+            messagebox.showwarning("Nessuna Selezione", "Seleziona uno o più SKU da eliminare.")
             return
-        
-        # Get selected SKU data - use tags to preserve original SKU (with leading zeros)
-        item = self.admin_treeview.item(selected[0])
-        tags = item.get("tags", [])
-        if tags and tags[0].startswith("sku_"):
-            sku_code = tags[0][4:]  # Remove 'sku_' prefix to get original SKU
-        else:
-            # Fallback to values if tags not available
-            values = item["values"]
-            sku_code = values[0]
-        
-        # Check if can delete
-        can_delete, reason = self.csv_layer.can_delete_sku(sku_code)
-        if not can_delete:
-            messagebox.showerror("Impossibile Eliminare", f"Impossibile eliminare SKU:\n{reason}")
-            return
-        
-        # Confirm deletion
-        confirm = messagebox.askyesno(
-            "Conferma Eliminazione",
-            f"Sei sicuro di voler eliminare lo SKU '{sku_code}'?\n\nQuesta azione non può essere annullata.",
-        )
-        if not confirm:
-            return
-        
-        # Delete SKU
-        success = self.csv_layer.delete_sku(sku_code)
-        if success:
-            # Log audit trail
-            self.csv_layer.log_audit(
-                operation="SKU_DELETE",
-                details=f"Deleted SKU: {sku_code}",
-                sku=sku_code,
+
+        # Pre-check each SKU
+        deletable = []       # sku_code strings that can be deleted
+        not_deletable = []   # (sku_code, reason) tuples
+
+        for sku_code in sku_codes:
+            can_delete, reason = self.csv_layer.can_delete_sku(sku_code)
+            if can_delete:
+                deletable.append(sku_code)
+            else:
+                not_deletable.append((sku_code, reason))
+
+        if not deletable:
+            detail = "\n".join(f"• {s}: {r}" for s, r in not_deletable)
+            messagebox.showerror(
+                "Impossibile Eliminare",
+                f"Nessuno degli SKU selezionati può essere eliminato:\n\n{detail}",
             )
-            
-            messagebox.showinfo("Successo", f"SKU '{sku_code}' eliminato con successo.")
-            self._refresh_admin_tab()
+            return
+
+        # Build confirmation message
+        if not_deletable:
+            skip_detail = "\n".join(f"• {s}: {r}" for s, r in not_deletable)
+            confirm_msg = (
+                f"Verranno eliminati {len(deletable)} SKU su {len(sku_codes)} selezionati.\n\n"
+                f"Eliminabili: {', '.join(deletable)}\n\n"
+                f"Non eliminabili (verranno saltati):\n{skip_detail}\n\n"
+                "Procedere con l'eliminazione dei validi?"
+            )
         else:
-            messagebox.showerror("Errore", f"Impossibile eliminare SKU '{sku_code}'.")
-    
-    def _show_sku_form(self, mode="new", sku_code=None):
+            names = ", ".join(deletable)
+            confirm_msg = (
+                f"Sei sicuro di voler eliminare {len(deletable)} SKU?\n\n"
+                f"{names}\n\nQuesta azione non può essere annullata."
+            )
+
+        if not messagebox.askyesno("Conferma Eliminazione", confirm_msg):
+            return
+
+        # Delete each valid SKU
+        succeeded = []
+        failed = []
+        for sku_code in deletable:
+            success = self.csv_layer.delete_sku(sku_code)
+            if success:
+                self.csv_layer.log_audit(
+                    operation="SKU_DELETE",
+                    details=f"Deleted SKU: {sku_code}",
+                    sku=sku_code,
+                )
+                succeeded.append(sku_code)
+            else:
+                failed.append(sku_code)
+
+        # Build result summary
+        parts = []
+        if succeeded:
+            parts.append(f"✅ Eliminati ({len(succeeded)}): {', '.join(succeeded)}")
+        if failed:
+            parts.append(f"❌ Errore durante eliminazione ({len(failed)}): {', '.join(failed)}")
+        if not_deletable:
+            skipped_names = ", ".join(s for s, _ in not_deletable)
+            parts.append(f"⚠️ Saltati ({len(not_deletable)}): {skipped_names}")
+
+        summary = "\n".join(parts)
+        if failed:
+            messagebox.showwarning("Eliminazione completata con errori", summary)
+        else:
+            messagebox.showinfo("Eliminazione completata", summary)
+
+        self._refresh_admin_tab()
+
+    def _edit_sku_batch(self):
+        """Open batch-edit form for all selected SKUs."""
+        sku_codes = self._get_selected_admin_sku_codes()
+        if not sku_codes:
+            messagebox.showwarning("Nessuna Selezione", "Seleziona almeno uno SKU da modificare.")
+            return
+        if len(sku_codes) == 1:
+            # With a single SKU, use the standard single-edit form
+            self._show_sku_form(mode="edit", sku_code=sku_codes[0])
+            return
+        self._show_sku_form(mode="batch", batch_sku_codes=sku_codes)
+
+    def _show_sku_form(self, mode="new", sku_code=None, batch_sku_codes=None):
         """
         Show SKU form in popup window.
-        
+
         Args:
-            mode: "new" or "edit"
+            mode: "new", "edit", or "batch"
             sku_code: SKU code to edit (for edit mode)
+            batch_sku_codes: list of SKU codes (for batch mode)
         """
         # Create popup window
         popup = tk.Toplevel(self.root)
-        popup.title("Nuovo SKU" if mode == "new" else "Modifica SKU")
+        if mode == "batch":
+            n = len(batch_sku_codes) if batch_sku_codes else 0
+            popup.title(f"Modifica SKU in batch ({n} SKU)")
+        elif mode == "new":
+            popup.title("Nuovo SKU")
+        else:
+            popup.title("Modifica SKU")
         popup.geometry("700x800")
         popup.resizable(True, True)
         
@@ -6009,19 +6077,85 @@ class DesktopOrderApp:
         # Form frame
         form_frame = ttk.Frame(scrollable_frame, padding=10)
         form_frame.pack(fill="both", expand=True)
-        
-        # Load existing SKU data if editing
+
+        # ------------------------------------------------------------------
+        # Load SKU data: single-edit, batch, or new
+        # ------------------------------------------------------------------
         current_sku = None
+        batch_skus = []
+
         if mode == "edit" and sku_code:
             skus = self.csv_layer.read_skus()
-            # Normalize SKU code for comparison (handle both string and numeric SKUs)
             sku_code_normalized = str(sku_code).strip()
-            
             current_sku = next((s for s in skus if str(s.sku).strip() == sku_code_normalized), None)
             if not current_sku:
                 messagebox.showerror("Error", f"SKU '{sku_code}' not found.")
                 popup.destroy()
                 return
+
+        elif mode == "batch" and batch_sku_codes:
+            all_skus_map = {s.sku: s for s in self.csv_layer.read_skus()}
+            batch_skus = [all_skus_map[c] for c in batch_sku_codes if c in all_skus_map]
+            if not batch_skus:
+                messagebox.showerror("Errore", "Nessuno SKU trovato per la modifica in batch.")
+                popup.destroy()
+                return
+            # Show banner with selected SKU names
+            banner_text = "SKU selezionati: " + ", ".join(s.sku for s in batch_skus)
+            ttk.Label(
+                form_frame,
+                text=banner_text,
+                font=("Helvetica", 9, "italic"),
+                foreground="#555",
+                wraplength=650,
+            ).pack(fill="x", side="top", pady=(0, 6))
+            ttk.Label(
+                form_frame,
+                text="ℹ  Lascia un campo invariato per conservare il valore originale di ciascuno SKU.\n"
+                     "   Compila un campo per applicare lo stesso valore a tutti gli SKU selezionati.",
+                font=("Helvetica", 8),
+                foreground="#777",
+                wraplength=650,
+                justify="left",
+            ).pack(fill="x", side="top", pady=(0, 8))
+
+        def bval(attr: str, default, transform=None):
+            """Return initial field value for the form.
+
+            - new mode: return default
+            - edit mode: return attribute from current_sku
+            - batch mode: return common value if all batch_skus share it, else ''
+
+            `transform` is an optional callable applied to the raw attribute.
+            """
+            raw_default = default
+            if mode == "batch":
+                if not batch_skus:
+                    return raw_default
+                vals = [
+                    (transform(getattr(s, attr)) if transform else str(getattr(s, attr)))
+                    for s in batch_skus
+                ]
+                return vals[0] if len(set(vals)) == 1 else ""
+            if current_sku:
+                raw = getattr(current_sku, attr)
+                return transform(raw) if transform else str(raw)
+            return raw_default
+
+        def bval_bool(attr: str, default: bool):
+            """Like bval but for BooleanVar fields."""
+            if mode == "batch":
+                if not batch_skus:
+                    return default
+                vals = [bool(getattr(s, attr)) for s in batch_skus]
+                return vals[0] if len(set(vals)) == 1 else default
+            if current_sku:
+                return bool(getattr(current_sku, attr))
+            return default
+
+        # initial_vals: snapshot of every StringVar value right after creation.
+        # Used at save time to detect which fields were actually changed by the user.
+        initial_vals: dict = {}
         
         # Storage for field rows (for search filtering)
         field_rows = []
@@ -6091,32 +6225,35 @@ class DesktopOrderApp:
         section_basic = CollapsibleFrame(form_frame, title="📋 Anagrafica", expanded=True)
         section_basic.pack(fill="x", pady=5)
         content_basic = section_basic.get_content_frame()
-        
-        # SKU Code
-        sku_var = tk.StringVar(value=current_sku.sku if current_sku else "")
-        sku_entry = add_field_row(
-            content_basic, 0, "Codice SKU:", "Identificativo univoco prodotto",
-            sku_var, "entry"
-        )
-        
+
+        # SKU Code — disabled/hidden in batch mode (can't rename multiple SKUs at once)
+        sku_var = tk.StringVar(value="" if mode == "batch" else (current_sku.sku if current_sku else ""))
+        if mode != "batch":
+            sku_entry = add_field_row(
+                content_basic, 0, "Codice SKU:", "Identificativo univoco prodotto",
+                sku_var, "entry"
+            )
+        else:
+            sku_entry = None  # Not shown in batch mode
+
         # Description
-        desc_var = tk.StringVar(value=current_sku.description if current_sku else "")
+        desc_var = tk.StringVar(value=bval("description", ""))
         desc_entry = add_field_row(
-            content_basic, 1, "Descrizione:", "Nome descrittivo prodotto",
+            content_basic, 0 if mode == "batch" else 1, "Descrizione:", "Nome descrittivo prodotto",
             desc_var, "entry"
         )
-        
+
         # EAN
-        ean_var = tk.StringVar(value=current_sku.ean if current_sku and current_sku.ean else "")
+        ean_var = tk.StringVar(value=bval("ean", "", transform=lambda v: v if v else ""))
         ean_entry = add_field_row(
-            content_basic, 2, "EAN (opzionale):", "Codice a barre EAN-8/EAN-13",
+            content_basic, 1 if mode == "batch" else 2, "EAN (opzionale):", "Codice a barre EAN-8/EAN-13",
             ean_var, "entry"
         )
-        
+
         # EAN validation button
         ean_status_var = tk.StringVar(value="")
         ean_validate_frame = ttk.Frame(content_basic)
-        ean_validate_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=5)
+        ean_validate_frame.grid(row=2 if mode == "batch" else 3, column=0, columnspan=2, sticky="ew", pady=5)
         ttk.Button(
             ean_validate_frame,
             text="Valida EAN",
@@ -6124,97 +6261,99 @@ class DesktopOrderApp:
         ).pack(side="left", padx=(0, 10))
         ean_status_label = ttk.Label(ean_validate_frame, textvariable=ean_status_var, foreground="green")
         ean_status_label.pack(side="left")
-        
+
         # In Assortment checkbox
-        in_assortment_var = tk.BooleanVar(value=current_sku.in_assortment if current_sku else True)
+        in_assortment_var = tk.BooleanVar(value=bval_bool("in_assortment", True))
         assortment_frame = ttk.Frame(content_basic)
-        assortment_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=5)
+        assortment_frame.grid(row=3 if mode == "batch" else 4, column=0, columnspan=2, sticky="ew", pady=5)
         ttk.Checkbutton(
             assortment_frame,
             text="In assortimento (attivo per proposte d'ordine)",
             variable=in_assortment_var
         ).pack(side="left", padx=(0, 10))
-        
+
         # ===== SECTION 2: Classificazione (Famiglia / Sotto-famiglia) =====
         section_class = CollapsibleFrame(form_frame, title="🏷️ Classificazione", expanded=True)
         section_class.pack(fill="x", pady=5)
         content_class = section_class.get_content_frame()
-        
+
         # Collect unique existing dept/category values for dropdown suggestions
         _all_skus_for_cls = self.csv_layer.read_skus()
         existing_families = sorted({s.department for s in _all_skus_for_cls if s.department})
         existing_subfamilies = sorted({s.category for s in _all_skus_for_cls if s.category})
-        
-        famiglia_var = tk.StringVar(value=current_sku.department if current_sku else "")
+
+        famiglia_var = tk.StringVar(value=bval("department", ""))
         add_field_row(
             content_class, 0, "Famiglia:",
             "Raggruppamento principale (es. Verdura, Latticini, Bevande)",
             famiglia_var, "combobox_editable", choices=existing_families,
         )
-        
-        sottofamiglia_var = tk.StringVar(value=current_sku.category if current_sku else "")
+
+        sottofamiglia_var = tk.StringVar(value=bval("category", ""))
         add_field_row(
             content_class, 1, "Sotto-famiglia:",
             "Sotto-categoria specifica (es. Radicchio, Formaggi, Succhi)",
             sottofamiglia_var, "combobox_editable", choices=existing_subfamilies,
         )
-        
+
         # ===== SECTION 3: Ordine & Stock =====
         section_order = CollapsibleFrame(form_frame, title="📦 Ordine & Stock", expanded=False)
         section_order.pack(fill="x", pady=5)
         content_order = section_order.get_content_frame()
-        
-        moq_var = tk.StringVar(value=str(current_sku.moq) if current_sku else "1")
+
+        moq_var = tk.StringVar(value=bval("moq", "1"))
         add_field_row(content_order, 0, "Q.tà Minima Ordine (MOQ):", "Multiplo minimo per ordini", moq_var, "entry")
-        
-        pack_size_var = tk.StringVar(value=str(current_sku.pack_size) if current_sku else "1")
+
+        pack_size_var = tk.StringVar(value=bval("pack_size", "1"))
         add_field_row(content_order, 1, "Confezione (Pack Size):", "Multiplo arrotondamento colli", pack_size_var, "entry")
-        
-        lead_time_var = tk.StringVar(value=str(current_sku.lead_time_days) if current_sku else "7")
+
+        lead_time_var = tk.StringVar(value=bval("lead_time_days", "7"))
         add_field_row(content_order, 2, "Lead Time (giorni):", "Tempo attesa ordine→ricezione (0=globale)", lead_time_var, "entry")
-        
-        review_period_var = tk.StringVar(value=str(current_sku.review_period) if current_sku else "7")
+
+        review_period_var = tk.StringVar(value=bval("review_period", "7"))
         add_field_row(content_order, 3, "Periodo Revisione (giorni):", "Finestra revisione target S", review_period_var, "entry")
-        
-        safety_stock_var = tk.StringVar(value=str(current_sku.safety_stock) if current_sku else "0")
+
+        safety_stock_var = tk.StringVar(value=bval("safety_stock", "0"))
         add_field_row(content_order, 4, "Scorta Sicurezza:", "Stock buffer aggiunto a target", safety_stock_var, "entry")
-        
-        shelf_life_var = tk.StringVar(value=str(current_sku.shelf_life_days) if current_sku else "0")
+
+        shelf_life_var = tk.StringVar(value=bval("shelf_life_days", "0"))
         add_field_row(content_order, 5, "Shelf Life (giorni):", "0 = nessuna scadenza", shelf_life_var, "entry")
-        
-        max_stock_var = tk.StringVar(value=str(current_sku.max_stock) if current_sku else "999")
+
+        max_stock_var = tk.StringVar(value=bval("max_stock", "999"))
         add_field_row(content_order, 6, "Stock Massimo:", "Limite massimo stock desiderato", max_stock_var, "entry")
-        
-        reorder_point_var = tk.StringVar(value=str(current_sku.reorder_point) if current_sku else "10")
+
+        reorder_point_var = tk.StringVar(value=bval("reorder_point", "10"))
         add_field_row(content_order, 7, "Punto di Riordino:", "Livello attivazione riordino", reorder_point_var, "entry")
-        
-        demand_var = tk.StringVar(value=current_sku.demand_variability.value if current_sku else "STABLE")
+
+        demand_var = tk.StringVar(
+            value=bval("demand_variability", "STABLE", transform=lambda v: v.value if hasattr(v, "value") else str(v))
+        )
         add_field_row(content_order, 8, "Variabilità Domanda:", "Livello variabilità vendite", demand_var, "combobox", choices=["STABLE", "LOW", "HIGH", "SEASONAL"])
-        
-        target_csl_var = tk.StringVar(value=str(current_sku.target_csl) if current_sku else "0")
+
+        target_csl_var = tk.StringVar(value=bval("target_csl", "0"))
         add_field_row(content_order, 9, "CSL Target (0-1, 0=cluster):", "0=usa cluster/globale, oppure 0.01-0.99 per override", target_csl_var, "entry")
-        
+
         # ===== SECTION 3: OOS (Out of Stock) =====
         section_oos = CollapsibleFrame(form_frame, title="⚠️ Out of Stock (OOS)", expanded=False)
         section_oos.pack(fill="x", pady=5)
         content_oos = section_oos.get_content_frame()
-        
-        oos_boost_var = tk.StringVar(value=str(current_sku.oos_boost_percent) if current_sku else "0")
+
+        oos_boost_var = tk.StringVar(value=bval("oos_boost_percent", "0"))
         add_field_row(content_oos, 0, "OOS Boost %:", "0 = usa valore globale", oos_boost_var, "entry")
-        
-        oos_mode_var = tk.StringVar(value=current_sku.oos_detection_mode if current_sku else "")
+
+        oos_mode_var = tk.StringVar(value=bval("oos_detection_mode", ""))
         add_field_row(content_oos, 1, "Modalità OOS:", "strict/relaxed/vuoto=globale", oos_mode_var, "combobox", choices=["", "strict", "relaxed"])
-        
-        oos_popup_var = tk.StringVar(value=current_sku.oos_popup_preference if current_sku else "ask")
+
+        oos_popup_var = tk.StringVar(value=bval("oos_popup_preference", "ask"))
         add_field_row(content_oos, 2, "Popup OOS:", "ask/always_yes/always_no", oos_popup_var, "combobox", choices=["ask", "always_yes", "always_no"])
-        
+
         # ===== SECTION 4: Shelf Life Policy =====
         section_shelf_life = CollapsibleFrame(form_frame, title="♻️ Shelf Life & Scadenze", expanded=False)
         section_shelf_life.pack(fill="x", pady=5)
         content_shelf_life = section_shelf_life.get_content_frame()
-        
+
         # has_expiry_label checkbox
-        has_expiry_label_var = tk.BooleanVar(value=current_sku.has_expiry_label if current_sku else False)
+        has_expiry_label_var = tk.BooleanVar(value=bval_bool("has_expiry_label", False))
         expiry_label_frame = ttk.Frame(content_shelf_life)
         expiry_label_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
         ttk.Checkbutton(
@@ -6229,16 +6368,16 @@ class DesktopOrderApp:
             foreground="gray",
         ).pack(side="left")
 
-        min_shelf_life_var = tk.StringVar(value=str(current_sku.min_shelf_life_days) if (current_sku and current_sku.min_shelf_life_days > 0) else "0")
+        min_shelf_life_var = tk.StringVar(value=bval("min_shelf_life_days", "0"))
         add_field_row(content_shelf_life, 1, "Shelf Life Minima (giorni):", "Giorni minimi shelf life accettabile (0=globale)", min_shelf_life_var, "entry")
-        
-        waste_penalty_mode_var = tk.StringVar(value=current_sku.waste_penalty_mode if current_sku else "")
+
+        waste_penalty_mode_var = tk.StringVar(value=bval("waste_penalty_mode", ""))
         add_field_row(content_shelf_life, 2, "Modalità Penalità Spreco:", "soft/hard/vuoto=globale", waste_penalty_mode_var, "combobox", choices=["", "soft", "hard"])
-        
-        waste_penalty_factor_var = tk.StringVar(value=str(current_sku.waste_penalty_factor) if (current_sku and current_sku.waste_penalty_factor > 0) else "0")
+
+        waste_penalty_factor_var = tk.StringVar(value=bval("waste_penalty_factor", "0"))
         add_field_row(content_shelf_life, 3, "Fattore Penalità:", "0-1 per % o qty fissa (0=globale)", waste_penalty_factor_var, "entry")
-        
-        waste_risk_threshold_var = tk.StringVar(value=str(current_sku.waste_risk_threshold) if (current_sku and current_sku.waste_risk_threshold > 0) else "0")
+
+        waste_risk_threshold_var = tk.StringVar(value=bval("waste_risk_threshold", "0"))
         add_field_row(content_shelf_life, 4, "Soglia Rischio Spreco (%):", "0-100, 0=globale", waste_risk_threshold_var, "entry")
         
         # ===== SECTION 5: Monte Carlo =====
@@ -6246,66 +6385,126 @@ class DesktopOrderApp:
         section_mc.pack(fill="x", pady=5)
         content_mc = section_mc.get_content_frame()
         
-        forecast_method_var = tk.StringVar(value=current_sku.forecast_method if current_sku else "")
+        forecast_method_var = tk.StringVar(value=bval("forecast_method", ""))
         add_field_row(content_mc, 0, "Metodo Forecast:", "simple/monte_carlo/croston/sba/tsb/intermittent_auto/vuoto=globale", forecast_method_var, "combobox", choices=["", "simple", "monte_carlo", "croston", "sba", "tsb", "intermittent_auto"])
-        
-        mc_distribution_var = tk.StringVar(value=current_sku.mc_distribution if current_sku else "")
+
+        mc_distribution_var = tk.StringVar(value=bval("mc_distribution", ""))
         add_field_row(content_mc, 1, "MC Distribuzione:", "empirical/normal/lognormal/residuals/vuoto=globale", mc_distribution_var, "combobox", choices=["", "empirical", "normal", "lognormal", "residuals"])
-        
-        mc_n_sims_var = tk.StringVar(value=str(current_sku.mc_n_simulations) if current_sku else "0")
+
+        mc_n_sims_var = tk.StringVar(value=bval("mc_n_simulations", "0"))
         add_field_row(content_mc, 2, "MC N Simulazioni:", "100-10000, 0=globale", mc_n_sims_var, "entry")
-        
-        mc_seed_var = tk.StringVar(value=str(current_sku.mc_random_seed) if current_sku else "0")
+
+        mc_seed_var = tk.StringVar(value=bval("mc_random_seed", "0"))
         add_field_row(content_mc, 3, "MC Random Seed:", "0=globale/casuale", mc_seed_var, "entry")
-        
-        mc_output_stat_var = tk.StringVar(value=current_sku.mc_output_stat if current_sku else "")
+
+        mc_output_stat_var = tk.StringVar(value=bval("mc_output_stat", ""))
         add_field_row(content_mc, 4, "MC Stat Output:", "mean/percentile/vuoto=globale", mc_output_stat_var, "combobox", choices=["", "mean", "percentile"])
-        
-        mc_percentile_var = tk.StringVar(value=str(current_sku.mc_output_percentile) if current_sku else "0")
+
+        mc_percentile_var = tk.StringVar(value=bval("mc_output_percentile", "0"))
         add_field_row(content_mc, 5, "MC Percentile:", "50-99, 0=globale", mc_percentile_var, "entry")
-        
-        mc_horizon_mode_var = tk.StringVar(value=current_sku.mc_horizon_mode if current_sku else "")
+
+        mc_horizon_mode_var = tk.StringVar(value=bval("mc_horizon_mode", ""))
         add_field_row(content_mc, 6, "MC Orizzonte Mode:", "auto/custom/vuoto=globale", mc_horizon_mode_var, "combobox", choices=["", "auto", "custom"])
-        
-        mc_horizon_days_var = tk.StringVar(value=str(current_sku.mc_horizon_days) if current_sku else "0")
+
+        mc_horizon_days_var = tk.StringVar(value=bval("mc_horizon_days", "0"))
         add_field_row(content_mc, 7, "MC Orizzonte Giorni:", "1-365, 0=globale", mc_horizon_days_var, "entry")
-        
+
         # Configure grid
         form_frame.columnconfigure(0, weight=1)
+
+        # Snapshot initial values (used by batch save to detect which fields were changed)
+        initial_vals.update({
+            "desc": desc_var.get(),
+            "ean": ean_var.get(),
+            "in_assortment": str(in_assortment_var.get()),
+            "famiglia": famiglia_var.get(),
+            "sottofamiglia": sottofamiglia_var.get(),
+            "moq": moq_var.get(),
+            "pack_size": pack_size_var.get(),
+            "lead_time": lead_time_var.get(),
+            "review_period": review_period_var.get(),
+            "safety_stock": safety_stock_var.get(),
+            "shelf_life": shelf_life_var.get(),
+            "max_stock": max_stock_var.get(),
+            "reorder_point": reorder_point_var.get(),
+            "demand": demand_var.get(),
+            "target_csl": target_csl_var.get(),
+            "oos_boost": oos_boost_var.get(),
+            "oos_mode": oos_mode_var.get(),
+            "oos_popup": oos_popup_var.get(),
+            "has_expiry_label": str(has_expiry_label_var.get()),
+            "min_shelf_life": min_shelf_life_var.get(),
+            "waste_penalty_mode": waste_penalty_mode_var.get(),
+            "waste_penalty_factor": waste_penalty_factor_var.get(),
+            "waste_risk_threshold": waste_risk_threshold_var.get(),
+            "forecast_method": forecast_method_var.get(),
+            "mc_distribution": mc_distribution_var.get(),
+            "mc_n_sims": mc_n_sims_var.get(),
+            "mc_seed": mc_seed_var.get(),
+            "mc_output_stat": mc_output_stat_var.get(),
+            "mc_percentile": mc_percentile_var.get(),
+            "mc_horizon_mode": mc_horizon_mode_var.get(),
+            "mc_horizon_days": mc_horizon_days_var.get(),
+        })
         
         # Button frame
         button_frame = ttk.Frame(main_container, padding=10)
         button_frame.pack(side="bottom", fill="x")
-        
-        ttk.Button(
-            button_frame,
-            text="Salva",
-            command=lambda: self._save_sku_form(
-                popup, mode, sku_var.get(), desc_var.get(), ean_var.get(),
-                moq_var.get(), pack_size_var.get(), lead_time_var.get(), 
-                review_period_var.get(), safety_stock_var.get(), shelf_life_var.get(),
-                max_stock_var.get(), reorder_point_var.get(), 
-                demand_var.get(), oos_boost_var.get(), oos_mode_var.get(), 
-                oos_popup_var.get(),
-                min_shelf_life_var.get(), waste_penalty_mode_var.get(), 
-                waste_penalty_factor_var.get(), waste_risk_threshold_var.get(),
-                forecast_method_var.get(), mc_distribution_var.get(), mc_n_sims_var.get(),
-                mc_seed_var.get(), mc_output_stat_var.get(), mc_percentile_var.get(),
-                mc_horizon_mode_var.get(), mc_horizon_days_var.get(),
-                in_assortment_var.get(),
-                target_csl_var.get(),
-                famiglia_var.get(),
-                sottofamiglia_var.get(),
-                has_expiry_label_var.get(),
-                current_sku
-            ),
-        ).pack(side="right", padx=5)
-        
+
+        if mode == "batch":
+            ttk.Button(
+                button_frame,
+                text="Salva in batch",
+                command=lambda: self._save_sku_batch_form(
+                    popup, batch_skus, initial_vals,
+                    desc_var, ean_var, in_assortment_var,
+                    moq_var, pack_size_var, lead_time_var,
+                    review_period_var, safety_stock_var, shelf_life_var,
+                    max_stock_var, reorder_point_var,
+                    demand_var, oos_boost_var, oos_mode_var,
+                    oos_popup_var,
+                    min_shelf_life_var, waste_penalty_mode_var,
+                    waste_penalty_factor_var, waste_risk_threshold_var,
+                    forecast_method_var, mc_distribution_var, mc_n_sims_var,
+                    mc_seed_var, mc_output_stat_var, mc_percentile_var,
+                    mc_horizon_mode_var, mc_horizon_days_var,
+                    famiglia_var, sottofamiglia_var,
+                    has_expiry_label_var, target_csl_var,
+                ),
+            ).pack(side="right", padx=5)
+        else:
+            ttk.Button(
+                button_frame,
+                text="Salva",
+                command=lambda: self._save_sku_form(
+                    popup, mode, sku_var.get(), desc_var.get(), ean_var.get(),
+                    moq_var.get(), pack_size_var.get(), lead_time_var.get(),
+                    review_period_var.get(), safety_stock_var.get(), shelf_life_var.get(),
+                    max_stock_var.get(), reorder_point_var.get(),
+                    demand_var.get(), oos_boost_var.get(), oos_mode_var.get(),
+                    oos_popup_var.get(),
+                    min_shelf_life_var.get(), waste_penalty_mode_var.get(),
+                    waste_penalty_factor_var.get(), waste_risk_threshold_var.get(),
+                    forecast_method_var.get(), mc_distribution_var.get(), mc_n_sims_var.get(),
+                    mc_seed_var.get(), mc_output_stat_var.get(), mc_percentile_var.get(),
+                    mc_horizon_mode_var.get(), mc_horizon_days_var.get(),
+                    in_assortment_var.get(),
+                    target_csl_var.get(),
+                    famiglia_var.get(),
+                    sottofamiglia_var.get(),
+                    has_expiry_label_var.get(),
+                    current_sku
+                ),
+            ).pack(side="right", padx=5)
+
         ttk.Button(button_frame, text="Annulla", command=popup.destroy).pack(side="right", padx=5)
-        
+
         # Focus on first field
         if mode == "new":
-            sku_entry.focus()  # type: ignore[union-attr]
+            if sku_entry:
+                sku_entry.focus()  # type: ignore[union-attr]
+        elif mode == "batch":
+            desc_entry.focus()  # type: ignore[union-attr]
         else:
             desc_entry.focus()  # type: ignore[union-attr]
     
@@ -6615,7 +6814,227 @@ class DesktopOrderApp:
         except ValueError as e:
             messagebox.showerror("Errore", str(e), parent=popup)
 
-    
+    def _save_sku_batch_form(
+        self,
+        popup,
+        batch_skus,
+        initial_vals: dict,
+        desc_var, ean_var, in_assortment_var,
+        moq_var, pack_size_var, lead_time_var,
+        review_period_var, safety_stock_var, shelf_life_var,
+        max_stock_var, reorder_point_var,
+        demand_var, oos_boost_var, oos_mode_var,
+        oos_popup_var,
+        min_shelf_life_var, waste_penalty_mode_var,
+        waste_penalty_factor_var, waste_risk_threshold_var,
+        forecast_method_var, mc_distribution_var, mc_n_sims_var,
+        mc_seed_var, mc_output_stat_var, mc_percentile_var,
+        mc_horizon_mode_var, mc_horizon_days_var,
+        famiglia_var, sottofamiglia_var,
+        has_expiry_label_var, target_csl_var,
+    ):
+        """Apply batch edits to all selected SKUs.
+
+        Only fields whose current value differs from their initial (snapshot)
+        value are applied.  Fields whose value is unchanged (including fields
+        left blank because the SKUs had divergent values) are preserved as-is
+        for each individual SKU.
+        """
+        from ..domain.models import DemandVariability
+
+        # ------------------------------------------------------------------ #
+        # 1. Determine which fields the user touched                          #
+        # ------------------------------------------------------------------ #
+        def changed(key: str, current_val: str) -> bool:
+            return current_val != initial_vals.get(key, current_val)
+
+        overrides: dict = {}  # field_key -> parsed value (only for changed fields)
+
+        # Helper: parse an int field if changed; return None if unchanged/blank
+        def opt_int(key: str, var, default: int):
+            v = var.get().strip()
+            if not changed(key, v) or v == "":
+                return None
+            try:
+                return int(v)
+            except ValueError:
+                messagebox.showerror(
+                    "Errore di Validazione",
+                    f"Il campo «{key}» deve essere un numero intero.",
+                    parent=popup,
+                )
+                raise
+
+        # Helper: parse a float field if changed; return None if unchanged/blank
+        def opt_float(key: str, var, default: float):
+            v = var.get().strip()
+            if not changed(key, v) or v == "":
+                return None
+            try:
+                return float(v)
+            except ValueError:
+                messagebox.showerror(
+                    "Errore di Validazione",
+                    f"Il campo «{key}» deve essere un numero.",
+                    parent=popup,
+                )
+                raise
+
+        # Helper: return string value if changed, else None
+        def opt_str(key: str, var):
+            v = var.get().strip()
+            return v if changed(key, v) else None
+
+        # Helper: return bool value only if different from initial snapshot
+        def opt_bool(key: str, boolvar):
+            v = str(boolvar.get())
+            return boolvar.get() if changed(key, v) else None
+
+        try:
+            ov_desc             = opt_str("desc", desc_var)
+            ov_ean              = opt_str("ean", ean_var)
+            ov_in_assortment    = opt_bool("in_assortment", in_assortment_var)
+            ov_famiglia         = opt_str("famiglia", famiglia_var)
+            ov_sottofamiglia    = opt_str("sottofamiglia", sottofamiglia_var)
+            ov_moq              = opt_int("moq", moq_var, 1)
+            ov_pack_size        = opt_int("pack_size", pack_size_var, 1)
+            ov_lead_time        = opt_int("lead_time", lead_time_var, 7)
+            ov_review_period    = opt_int("review_period", review_period_var, 7)
+            ov_safety_stock     = opt_int("safety_stock", safety_stock_var, 0)
+            ov_shelf_life       = opt_int("shelf_life", shelf_life_var, 0)
+            ov_max_stock        = opt_int("max_stock", max_stock_var, 999)
+            ov_reorder_point    = opt_int("reorder_point", reorder_point_var, 10)
+            ov_target_csl       = opt_float("target_csl", target_csl_var, 0.0)
+            ov_oos_boost        = opt_float("oos_boost", oos_boost_var, 0.0)
+            ov_min_shelf_life   = opt_int("min_shelf_life", min_shelf_life_var, 0)
+            ov_waste_factor     = opt_float("waste_penalty_factor", waste_penalty_factor_var, 0.0)
+            ov_waste_threshold  = opt_float("waste_risk_threshold", waste_risk_threshold_var, 0.0)
+            ov_mc_n_sims        = opt_int("mc_n_sims", mc_n_sims_var, 0)
+            ov_mc_seed          = opt_int("mc_seed", mc_seed_var, 0)
+            ov_mc_percentile    = opt_int("mc_percentile", mc_percentile_var, 0)
+            ov_mc_horizon_days  = opt_int("mc_horizon_days", mc_horizon_days_var, 0)
+        except ValueError:
+            return  # already shown error dialog
+
+        # String-only overrides
+        ov_demand           = opt_str("demand", demand_var)
+        ov_oos_mode         = opt_str("oos_mode", oos_mode_var)
+        ov_oos_popup        = opt_str("oos_popup", oos_popup_var)
+        ov_waste_penalty_mode = opt_str("waste_penalty_mode", waste_penalty_mode_var)
+        ov_forecast_method  = opt_str("forecast_method", forecast_method_var)
+        ov_mc_distribution  = opt_str("mc_distribution", mc_distribution_var)
+        ov_mc_output_stat   = opt_str("mc_output_stat", mc_output_stat_var)
+        ov_mc_horizon_mode  = opt_str("mc_horizon_mode", mc_horizon_mode_var)
+        ov_has_expiry_label = opt_bool("has_expiry_label", has_expiry_label_var)
+
+        # Validate demand variability string if changed
+        if ov_demand is not None:
+            try:
+                ov_demand_enum = DemandVariability[ov_demand]
+            except KeyError:
+                messagebox.showerror("Errore", f"Variabilità domanda non valida: {ov_demand}", parent=popup)
+                return
+        else:
+            ov_demand_enum = None  # no change
+
+        # Count actual changes
+        all_overrides = [
+            ov_desc, ov_ean, ov_in_assortment, ov_famiglia, ov_sottofamiglia,
+            ov_moq, ov_pack_size, ov_lead_time, ov_review_period, ov_safety_stock,
+            ov_shelf_life, ov_max_stock, ov_reorder_point, ov_target_csl,
+            ov_oos_boost, ov_oos_mode, ov_oos_popup, ov_min_shelf_life,
+            ov_waste_factor, ov_waste_threshold, ov_waste_penalty_mode,
+            ov_forecast_method, ov_mc_distribution, ov_mc_n_sims, ov_mc_seed,
+            ov_mc_output_stat, ov_mc_percentile, ov_mc_horizon_mode, ov_mc_horizon_days,
+            ov_has_expiry_label,
+        ]
+        n_changed = sum(1 for x in all_overrides if x is not None)
+
+        if n_changed == 0:
+            messagebox.showinfo(
+                "Nessuna Modifica",
+                "Nessun campo è stato modificato. Non è stato salvato nulla.",
+                parent=popup,
+            )
+            return
+
+        # ------------------------------------------------------------------ #
+        # 2. Apply to all SKUs                                                #
+        # ------------------------------------------------------------------ #
+        succeeded = []
+        failed = []
+
+        for orig_sku in batch_skus:
+            try:
+                ok = self.csv_layer.update_sku(
+                    old_sku_id=orig_sku.sku,
+                    new_sku_id=orig_sku.sku,  # batch mode never renames
+                    new_description=ov_desc if ov_desc is not None else orig_sku.description,
+                    new_ean=ov_ean if ov_ean is not None else orig_sku.ean,
+                    moq=ov_moq if ov_moq is not None else orig_sku.moq,
+                    pack_size=ov_pack_size if ov_pack_size is not None else orig_sku.pack_size,
+                    lead_time_days=ov_lead_time if ov_lead_time is not None else orig_sku.lead_time_days,
+                    review_period=ov_review_period if ov_review_period is not None else orig_sku.review_period,
+                    safety_stock=ov_safety_stock if ov_safety_stock is not None else orig_sku.safety_stock,
+                    shelf_life_days=ov_shelf_life if ov_shelf_life is not None else orig_sku.shelf_life_days,
+                    max_stock=ov_max_stock if ov_max_stock is not None else orig_sku.max_stock,
+                    reorder_point=ov_reorder_point if ov_reorder_point is not None else orig_sku.reorder_point,
+                    demand_variability=ov_demand_enum if ov_demand_enum is not None else orig_sku.demand_variability,
+                    oos_boost_percent=ov_oos_boost if ov_oos_boost is not None else orig_sku.oos_boost_percent,
+                    oos_detection_mode=ov_oos_mode if ov_oos_mode is not None else orig_sku.oos_detection_mode,
+                    oos_popup_preference=ov_oos_popup if ov_oos_popup is not None else orig_sku.oos_popup_preference,
+                    min_shelf_life_days=ov_min_shelf_life if ov_min_shelf_life is not None else orig_sku.min_shelf_life_days,
+                    waste_penalty_mode=ov_waste_penalty_mode if ov_waste_penalty_mode is not None else orig_sku.waste_penalty_mode,
+                    waste_penalty_factor=ov_waste_factor if ov_waste_factor is not None else orig_sku.waste_penalty_factor,
+                    waste_risk_threshold=ov_waste_threshold if ov_waste_threshold is not None else orig_sku.waste_risk_threshold,
+                    forecast_method=ov_forecast_method if ov_forecast_method is not None else orig_sku.forecast_method,
+                    mc_distribution=ov_mc_distribution if ov_mc_distribution is not None else orig_sku.mc_distribution,
+                    mc_n_simulations=ov_mc_n_sims if ov_mc_n_sims is not None else orig_sku.mc_n_simulations,
+                    mc_random_seed=ov_mc_seed if ov_mc_seed is not None else orig_sku.mc_random_seed,
+                    mc_output_stat=ov_mc_output_stat if ov_mc_output_stat is not None else orig_sku.mc_output_stat,
+                    mc_output_percentile=ov_mc_percentile if ov_mc_percentile is not None else orig_sku.mc_output_percentile,
+                    mc_horizon_mode=ov_mc_horizon_mode if ov_mc_horizon_mode is not None else orig_sku.mc_horizon_mode,
+                    mc_horizon_days=ov_mc_horizon_days if ov_mc_horizon_days is not None else orig_sku.mc_horizon_days,
+                    in_assortment=ov_in_assortment if ov_in_assortment is not None else orig_sku.in_assortment,
+                    target_csl=ov_target_csl if ov_target_csl is not None else orig_sku.target_csl,
+                    has_expiry_label=ov_has_expiry_label if ov_has_expiry_label is not None else orig_sku.has_expiry_label,
+                    category=ov_sottofamiglia if ov_sottofamiglia is not None else orig_sku.category,
+                    department=ov_famiglia if ov_famiglia is not None else orig_sku.department,
+                )
+                if ok:
+                    self.csv_layer.log_audit(
+                        operation="SKU_EDIT",
+                        details=f"Batch edit ({n_changed} campi modificati)",
+                        sku=orig_sku.sku,
+                    )
+                    succeeded.append(orig_sku.sku)
+                else:
+                    failed.append(orig_sku.sku)
+            except Exception as exc:
+                failed.append(f"{orig_sku.sku} ({exc})")
+
+        # ------------------------------------------------------------------ #
+        # 3. Summary                                                          #
+        # ------------------------------------------------------------------ #
+        parts = []
+        if succeeded:
+            parts.append(f"✅ Aggiornati ({len(succeeded)}): {', '.join(succeeded)}")
+        if failed:
+            parts.append(f"❌ Errore ({len(failed)}): {', '.join(str(f) for f in failed)}")
+
+        summary = "\n".join(parts)
+        if failed:
+            messagebox.showwarning("Batch completato con errori", summary, parent=popup)
+        else:
+            messagebox.showinfo(
+                "Batch completato",
+                f"{summary}\n\n{n_changed} campo/i modificato/i su {len(batch_skus)} SKU.",
+                parent=popup,
+            )
+
+        popup.destroy()
+        self._refresh_admin_tab()
+
     def _refresh_stock_tab(self):
         """Refresh stock calculations and update tab."""
         try:
