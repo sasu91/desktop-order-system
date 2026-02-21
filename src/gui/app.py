@@ -2844,6 +2844,9 @@ class DesktopOrderApp:
                     row=base_row + 1, column=0, columnspan=len(headers), sticky="ew", padx=4
                 )
 
+            # Force geometry resolution so scrollregion is correct even on first render
+            inner.update_idletasks()
+            canvas.configure(scrollregion=canvas.bbox("all"))
             canvas.yview_moveto(0)  # scroll to top on page change
             _page_lbl.set(f"Pagina {page_num + 1} / {n_pages}  ({n_total} SKU)")
 
@@ -2929,6 +2932,7 @@ class DesktopOrderApp:
         px = self.root.winfo_x() + (self.root.winfo_width() - popup_w) // 2
         py = self.root.winfo_y() + (self.root.winfo_height() - popup_h) // 2
         popup.geometry(f"{popup_w}x{min(popup_h, 700)}+{px}+{py}")
+        popup.update_idletasks()  # flush layout so canvas has real pixel dimensions
 
         _render_page(0)
 
