@@ -68,9 +68,15 @@ class StockCalculator:
         # Filter transactions for this SKU, date < asof_date
         sku_txns = [t for t in transactions if t.sku == sku and t.date < asof_date]
         
-        # Add implicit SALE events from sales_records
+        # Add implicit SALE events from sales_records, but skip dates that already
+        # have an explicit SALE transaction in the ledger (avoid double-counting when
+        # EOD writes both a ledger SALE event and a sales.csv record for the same day).
         if sales_records:
-            sku_sales = [s for s in sales_records if s.sku == sku and s.date < asof_date]
+            dates_with_ledger_sale = {t.date for t in sku_txns if t.event == EventType.SALE}
+            sku_sales = [
+                s for s in sales_records
+                if s.sku == sku and s.date < asof_date and s.date not in dates_with_ledger_sale
+            ]
             # Convert sales to SALE events
             sale_events = [
                 Transaction(date=s.date, sku=s.sku, event=EventType.SALE, qty=s.qty_sold)
@@ -357,31 +363,40 @@ def calculate_sold_from_eod_stock(
     # Stock at start of day (before any events on eod_date)
     stock_start = StockCalculator.calculate_asof(sku, eod_date, transactions, sales_records)
     
-    # Theoretical stock at end of day (include all events on eod_date except SALE from sales_records)
-    # We calculate AsOf next day, but exclude sales from sales_records for eod_date
+    # Theoretical stock at end of day = stock if no SALE events occurred today.
+    # We exclude BOTH today's sales.csv entries AND any existing SALE transactions
+    # in the ledger for eod_date (supports idempotent re-runs: previously written
+    # EOD SALEs are excluded so qty_sold is always calculated from a clean base).
     from datetime import timedelta
     next_day = eod_date + timedelta(days=1)
-    
-    # Filter out sales for eod_date from sales_records to calculate theoretical stock
-    sales_without_today = []
-    if sales_records:
-        sales_without_today = [s for s in sales_records if s.date != eod_date]
-    
-    stock_theoretical_end = StockCalculator.calculate_asof(sku, next_day, transactions, sales_without_today)
-    
-    # qty_sold = stock at start + receipts during day - stock at end (declared)
-    # Simplified: theoretical_end - eod_stock_on_hand
-    # This accounts for: stock_start + receipts - waste - adjust - sales = eod_stock
-    # So: sales = stock_start + receipts - waste - adjust - eod_stock
-    # Which is: theoretical_end_without_sales - eod_stock
-    
+
+    sales_without_today = [
+        s for s in sales_records if s.date != eod_date
+    ] if sales_records else []
+
+    txns_without_today_eod_sales = [
+        t for t in transactions
+        if not (t.sku == sku and t.date == eod_date and t.event == EventType.SALE)
+    ]
+
+    stock_theoretical_end = StockCalculator.calculate_asof(
+        sku, next_day, txns_without_today_eod_sales, sales_without_today
+    )
+
     qty_sold = max(0, stock_theoretical_end.on_hand - eod_stock_on_hand)
-    
-    # After accounting for sales, check if there's still a discrepancy (shrinkage, damage, etc.)
-    # theoretical after sales should equal eod_stock; if not, we need an adjustment
-    theoretical_after_sales = stock_theoretical_end.on_hand - qty_sold
-    adjustment = eod_stock_on_hand - theoretical_after_sales
-    
+
+    # Adjustment: accounts for accumulated ledger SALEs for today from previous
+    # re-runs PLUS the new qty_sold we are about to write. Only positive-qty ledger
+    # SALEs are counted (those are EOD-written SALEs; negative-qty SALEs from older
+    # imports are excluded as they have a different sign convention).
+    existing_ledger_sales_today = sum(
+        t.qty for t in transactions
+        if t.sku == sku and t.date == eod_date and t.event == EventType.SALE and t.qty > 0
+    )
+    total_sales_today = existing_ledger_sales_today + qty_sold
+    stock_after_all_sales = stock_theoretical_end.on_hand - total_sales_today
+    adjustment = eod_stock_on_hand - stock_after_all_sales
+
     return qty_sold, adjustment
 
 

@@ -91,10 +91,23 @@ class DailyCloseWorkflow:
                 sales_record = SalesRecord(date=eod_date, sku=sku, qty_sold=qty_sold)
                 self.csv_layer.append_sales(sales_record)
             
-            # Apply FEFO consumption to lots (real-time sync)
-            # Note: EOD sales are recorded in sales.csv only, not as SALE transactions in ledger
-            # Therefore FEFO must be applied explicitly here (auto-FEFO in write_transaction only
-            # applies to SALE/WASTE events written to ledger)
+            # Write SALE transaction to the ledger for audit trail and stock calculation.
+            # qty is positive (architecture convention: SALE on_hand -= qty).
+            # calculate_asof deduplicates: if a ledger SALE exists for a date, the
+            # corresponding sales.csv entry is skipped to avoid double-counting.
+            sale_txn = Transaction(
+                date=eod_date,
+                sku=sku,
+                event=EventType.SALE,
+                qty=qty_sold,
+                note="EOD chiusura giornaliera",
+            )
+            self.csv_layer.write_transaction(sale_txn)
+
+            # Apply FEFO consumption to lots (real-time sync).
+            # FEFO is triggered here because auto-FEFO in write_transaction only
+            # applies inside write_transaction for SALE/WASTE; we call it manually
+            # to keep lot quantities in sync.
             try:
                 lots = self.csv_layer.get_lots_by_sku(sku, sort_by_expiry=True)
                 if lots:
