@@ -568,7 +568,19 @@ class StorageAdapter(CSVLayer):
     def append_sales(self, sale: SalesRecord):
         """Append sales record (alias for write_sales_record)"""
         self.write_sales_record(sale)
-    
+
+    def write_sales(self, sales: List[SalesRecord]):
+        """Bulk-overwrite all sales records.
+
+        SQLite mode: upserts each record individually (ON CONFLICT UPDATE).
+        CSV mode: delegates to CSVLayer bulk overwrite.
+        """
+        if self.is_sqlite_mode():
+            for sale in sales:
+                self.write_sales_record(sale)
+        else:
+            self.csv_layer.write_sales(sales)
+
     # ============================================================
     # Settings & Holidays (Always use CSV for now)
     # ============================================================

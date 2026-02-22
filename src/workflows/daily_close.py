@@ -122,7 +122,7 @@ class DailyCloseWorkflow:
                 qty=eod_stock_on_hand,  # ADJUST sets stock to this value
                 note=f"EOD adjustment (discrepancy: {adjustment:+d})",
             )
-            self.csv_layer.append_transaction(adjust_txn)
+            self.csv_layer.write_transaction(adjust_txn)
         
         # Build status message
         msg_parts = []

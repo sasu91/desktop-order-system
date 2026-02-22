@@ -7637,6 +7637,11 @@ class DesktopOrderApp:
             
             # Clear edits and refresh
             self.eod_stock_edits.clear()
+            # Advance asof_date by 1 day so today's EOD sales are visible in the stock display
+            # (calculate_asof uses date < asof_date, so sales recorded for today only show
+            # when viewing as-of tomorrow)
+            next_day = selected_date + timedelta(days=1)
+            self.asof_date_var.set(next_day.isoformat())
             self._refresh_stock_tab()
             self._refresh_audit_timeline()
             
