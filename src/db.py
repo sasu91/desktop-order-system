@@ -792,18 +792,68 @@ def apply_migrations(conn: Optional[sqlite3.Connection] = None, dry_run: bool = 
             # 3. Calculate checksum for verification
             checksum = calculate_file_checksum(migration_path)
             
-            # 4. Execute migration in transaction
+            # 4. Execute migration statement-by-statement for idempotency.
+            # executescript() auto-commits and cannot be rolled back cleanly; instead
+            # we execute each statement individually so we can:
+            #   a) skip ALTER TABLE statements whose column already exists
+            #      (handles partially-applied migrations gracefully)
+            #   b) roll back on any truly unexpected error
             try:
-                with transaction(conn, isolation_level="EXCLUSIVE") as cur:
-                    # Execute migration SQL (may contain multiple statements)
-                    cur.executescript(migration_sql)
-                    
-                    # Note: executescript() auto-commits, so we update schema_version separately
-                    # This is acceptable because migration scripts wrap in BEGIN...COMMIT
-                
-                print(f"✓ Migration {version} applied successfully")
+                # Split SQL into individual statements (ignore blank / comment-only lines).
+                # Also drop any BEGIN/COMMIT/ROLLBACK the SQL file may include, since
+                # the runner manages its own EXCLUSIVE transaction below.
+                raw_statements = [s.strip() for s in migration_sql.split(";")]
+                statements = []
+                for s in raw_statements:
+                    if not s:
+                        continue
+                    # Skip if every non-empty line is a SQL comment
+                    if all(line.strip().startswith("--") or line.strip() == ""
+                           for line in s.splitlines()):
+                        continue
+                    # Strip top-level transaction control: the runner owns BEGIN/COMMIT
+                    normalized = s.upper().lstrip()
+                    if normalized in ("BEGIN", "BEGIN TRANSACTION", "COMMIT", "ROLLBACK"):
+                        continue
+                    statements.append(s)
+
+                skipped_idempotent = 0
+                # Switch to manual transaction mode to keep full control.
+                # Commit any implicit transaction Python may have open first.
+                prev_isolation = conn.isolation_level
+                conn.commit()
+                conn.isolation_level = None  # autocommit; we manage BEGIN/COMMIT ourselves
+                try:
+                    conn.execute("BEGIN EXCLUSIVE")
+                    try:
+                        for stmt in statements:
+                            try:
+                                conn.execute(stmt)
+                            except sqlite3.OperationalError as stmt_err:
+                                err_msg = str(stmt_err).lower()
+                                if "duplicate column name" in err_msg:
+                                    # Column already exists — desired state already reached
+                                    col = stmt_err.args[0].split(":")[-1].strip() if stmt_err.args else "unknown"
+                                    print(f"  ⚠ Skipped (already exists): {col}")
+                                    skipped_idempotent += 1
+                                elif "table" in err_msg and "already exists" in err_msg:
+                                    print(f"  ⚠ Skipped (already exists): {stmt[:60].strip()}")
+                                    skipped_idempotent += 1
+                                else:
+                                    raise
+                        conn.execute("COMMIT")
+                    except Exception:
+                        conn.execute("ROLLBACK")
+                        raise
+                finally:
+                    conn.isolation_level = prev_isolation  # restore original mode
+
+                if skipped_idempotent:
+                    print(f"✓ Migration {version} applied (idempotent: {skipped_idempotent} statement(s) already present)")
+                else:
+                    print(f"✓ Migration {version} applied successfully")
                 applied_count += 1
-            
+
             except Exception as e:
                 print(f"✗ Migration {version} failed: {e}")
                 print(f"→ Database state restored from backup: {backup_path}")

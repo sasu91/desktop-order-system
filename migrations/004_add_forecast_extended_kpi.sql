@@ -27,3 +27,11 @@ ALTER TABLE kpi_daily
 
 ALTER TABLE kpi_daily
     ADD COLUMN n_event_points      INTEGER NOT NULL DEFAULT 0;
+
+-- Update schema version
+INSERT INTO schema_version (version, description, checksum)
+VALUES (
+    4,
+    'Add extended forecast KPIs (PI80 coverage, promo/event segmented accuracy)',
+    'sha256:004_add_forecast_extended_kpi'
+);
