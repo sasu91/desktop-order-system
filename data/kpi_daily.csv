@@ -1,1 +1,1 @@
-sku,date,oos_rate,lost_sales_est,wmape,bias,fill_rate,otif_rate,avg_delay_days,n_periods,lookback_days,mode
+sku,date,oos_rate,lost_sales_est,wmape,bias,fill_rate,otif_rate,avg_delay_days,n_periods,lookback_days,mode,waste_rate,pi80_coverage,pi80_coverage_error,wmape_promo,bias_promo,n_promo_points,wmape_event,bias_event,n_event_points

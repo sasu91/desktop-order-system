@@ -544,26 +544,12 @@ class StorageAdapter(CSVLayer):
         return all_sales
     
     def write_sales_record(self, sale: SalesRecord):
-        """Write single sales record"""
-        if self.is_sqlite_mode():
-            # SQLite sales insertion via SQL (no repository method yet)
-            assert self.conn is not None
-            try:
-                cursor = self.conn.cursor()
-                cursor.execute("""
-                    INSERT INTO sales (date, sku, qty_sold, promo_flag)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(date, sku) DO UPDATE SET
-                        qty_sold = excluded.qty_sold,
-                        promo_flag = excluded.promo_flag
-                """, (sale.date.isoformat(), sale.sku, sale.qty_sold, sale.promo_flag))
-                self.conn.commit()
-            except Exception as e:
-                self._sqlite_degrade(e)
-                print(f"⚠ SQLite write_sales_record failed, falling back to CSV: {e}")
-                self.csv_layer.write_sales_record(sale)
-        else:
-            self.csv_layer.write_sales_record(sale)
+        """Write single sales record.
+        
+        Note: sales are always stored in CSV because read_sales always reads from CSV.
+        SQLite path for sales is not yet implemented on the read side.
+        """
+        self.csv_layer.write_sales_record(sale)
     
     def append_sales(self, sale: SalesRecord):
         """Append sales record (alias for write_sales_record)"""
@@ -571,15 +557,10 @@ class StorageAdapter(CSVLayer):
 
     def write_sales(self, sales: List[SalesRecord]):
         """Bulk-overwrite all sales records.
-
-        SQLite mode: upserts each record individually (ON CONFLICT UPDATE).
-        CSV mode: delegates to CSVLayer bulk overwrite.
+        
+        Always writes to CSV to remain consistent with read_sales (which always reads CSV).
         """
-        if self.is_sqlite_mode():
-            for sale in sales:
-                self.write_sales_record(sale)
-        else:
-            self.csv_layer.write_sales(sales)
+        self.csv_layer.write_sales(sales)
 
     # ============================================================
     # Settings & Holidays (Always use CSV for now)
