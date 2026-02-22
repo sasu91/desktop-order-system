@@ -890,10 +890,15 @@ class MigrationOrchestrator:
                 try:
                     with transaction(self.conn) as cur:
                         cur.execute("""
-                            INSERT INTO kpi_daily 
-                            (sku, date, mode, oos_rate, lost_sales_est, wmape, bias, 
-                             fill_rate, otif_rate, avg_delay_days, n_periods, lookback_days)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            INSERT INTO kpi_daily
+                            (sku, date, mode, oos_rate, lost_sales_est, wmape, bias,
+                             fill_rate, otif_rate, avg_delay_days, n_periods, lookback_days,
+                             waste_rate,
+                             pi80_coverage, pi80_coverage_error,
+                             wmape_promo, bias_promo, n_promo_points,
+                             wmape_event, bias_event, n_event_points)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                    ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             row['sku'], row['date'], row['mode'],
                             float(row['oos_rate']) if row.get('oos_rate') else None,
@@ -904,7 +909,16 @@ class MigrationOrchestrator:
                             float(row['otif_rate']) if row.get('otif_rate') else None,
                             float(row['avg_delay_days']) if row.get('avg_delay_days') else None,
                             int(row['n_periods']),
-                            int(row['lookback_days'])
+                            int(row['lookback_days']),
+                            float(row['waste_rate']) if row.get('waste_rate') else None,
+                            float(row['pi80_coverage']) if row.get('pi80_coverage') else None,
+                            float(row['pi80_coverage_error']) if row.get('pi80_coverage_error') else None,
+                            float(row['wmape_promo']) if row.get('wmape_promo') else None,
+                            float(row['bias_promo']) if row.get('bias_promo') else None,
+                            int(row['n_promo_points']) if row.get('n_promo_points') else 0,
+                            float(row['wmape_event']) if row.get('wmape_event') else None,
+                            float(row['bias_event']) if row.get('bias_event') else None,
+                            int(row['n_event_points']) if row.get('n_event_points') else 0,
                         ))
                     stats.inserted += 1
                 except Exception as e:

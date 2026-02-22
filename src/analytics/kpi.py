@@ -11,6 +11,8 @@ All functions reuse existing domain logic (OOS detection, stock calculation,
 forecast/uncertainty) and respect assortment exclusion + override markers.
 """
 
+import math
+import statistics
 from datetime import date as Date, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 from collections import defaultdict
@@ -692,6 +694,254 @@ def compute_supplier_proxy_kpi(
         "avg_delay_days": avg_delay_days,
         "n_orders": n_orders,
         "n_otif_calculable": n_otif_calculable,
+    }
+
+
+_PI80_TARGET = 0.80          # nominal coverage for 80 % prediction interval
+_PI80_Z = 1.28               # N(0,1) quantile for 80 % symmetric interval
+_MIN_PI80_POINTS = 14        # minimum evaluation residuals (7 train + 7 eval)
+_MIN_SEGMENT_POINTS = 3      # minimum days in a promo/event segment
+_EVENT_WINDOW_DAYS = 3       # days around event delivery_date to tag as event
+
+
+def compute_pi80_coverage_kpi(
+    sku: str,
+    lookback_days: int,
+    mode: str,
+    csv_layer: CSVLayer,
+    asof_date: Optional[Date] = None,
+    window_weeks: int = 8,
+) -> Dict[str, Any]:
+    """
+    Compute empirical PI80 (80 % prediction interval) coverage for a SKU.
+
+    Uses rolling one-step-ahead forecasts (same cadence as
+    compute_forecast_accuracy).  Residuals are split at the midpoint:
+      - first half  → estimate σ (interval half-width = 1.28 * σ)
+      - second half → measure fraction of actuals inside ±1.28 σ
+
+    Returns:
+        Dict:
+            pi80_coverage       – fraction [0,1] of eval actuals inside PI80
+                                  (None if insufficient data)
+            pi80_coverage_error – coverage − 0.80
+                                  (>0 = interval too wide / over-cautious,
+                                   <0 = interval too narrow / under-confident)
+            n_pi80_points       – number of evaluation residuals used
+            sufficient_data     – True if ≥ 7 eval residuals available
+    """
+    if asof_date is None:
+        asof_date = Date.today()
+
+    _empty: Dict[str, Any] = {
+        "pi80_coverage": None,
+        "pi80_coverage_error": None,
+        "n_pi80_points": 0,
+        "sufficient_data": False,
+    }
+
+    sales_records = csv_layer.read_sales()
+    transactions  = csv_layer.read_transactions()
+    start_date    = asof_date - timedelta(days=lookback_days - 1)
+
+    history: List[Dict] = [
+        {
+            "date": start_date + timedelta(days=i),
+            "qty_sold": sum(
+                s.qty_sold for s in sales_records
+                if s.sku == sku and s.date == start_date + timedelta(days=i)
+            ),
+        }
+        for i in range(lookback_days)
+    ]
+
+    from ..workflows.order import calculate_daily_sales_average
+    _, _, oos_days_list, assortment_out_list = calculate_daily_sales_average(
+        sales_records=sales_records,
+        sku=sku,
+        days_lookback=lookback_days,
+        transactions=transactions,
+        asof_date=asof_date,
+        oos_detection_mode=mode,
+        return_details=True,
+    )
+    censored_set = set(oos_days_list) | set(assortment_out_list)
+
+    window_days   = window_weeks * 7
+    min_start_idx = window_days + 7
+
+    residuals: List[float] = []
+    for i in range(min_start_idx, len(history)):
+        if history[i]["date"] in censored_set:
+            continue
+        train_hist = history[i - window_days: i]
+        try:
+            model   = fit_forecast_model(train_hist, alpha=0.3)
+            fc_vals = predict(model, horizon=1)
+            fc_val  = fc_vals[0] if fc_vals else 0.0
+            residuals.append(history[i]["qty_sold"] - fc_val)
+        except Exception:
+            continue
+
+    if len(residuals) < _MIN_PI80_POINTS:
+        return _empty
+
+    mid       = len(residuals) // 2
+    train_res = residuals[:mid]
+    eval_res  = residuals[mid:]
+
+    try:
+        sigma = statistics.stdev(train_res)
+    except statistics.StatisticsError:
+        sigma = 0.0
+
+    if sigma <= 0.0:
+        return _empty   # degenerate — can't form interval
+
+    half_width = _PI80_Z * sigma
+    inside     = sum(1 for r in eval_res if abs(r) <= half_width)
+    coverage   = inside / len(eval_res)
+    coverage_error = coverage - _PI80_TARGET
+
+    return {
+        "pi80_coverage":       round(coverage, 4),
+        "pi80_coverage_error": round(coverage_error, 4),
+        "n_pi80_points":       len(eval_res),
+        "sufficient_data":     len(eval_res) >= 7,
+    }
+
+
+def compute_promo_event_forecast_kpi(
+    sku: str,
+    lookback_days: int,
+    mode: str,
+    csv_layer: CSVLayer,
+    asof_date: Optional[Date] = None,
+    window_weeks: int = 8,
+    sku_obj: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """
+    Compute forecast accuracy metrics segmented by promo days and event days.
+
+    Uses the same rolling one-step-ahead forecast cadence as
+    compute_forecast_accuracy, then splits evaluation days into three groups:
+      - promo days  : covered by any PromoWindow for this SKU
+      - event days  : within ±EVENT_WINDOW_DAYS of any matching EventUpliftRule
+      - baseline    : neither promo nor event (not returned yet; available for extension)
+
+    Returns:
+        Dict:
+            wmape_promo / bias_promo / n_promo_points
+            wmape_event / bias_event / n_event_points
+        All WMAPE values are on the [0,100] percent scale (consistent with kpi.py).
+        None if the segment has fewer than _MIN_SEGMENT_POINTS evaluation days.
+    """
+    if asof_date is None:
+        asof_date = Date.today()
+
+    _empty: Dict[str, Any] = {
+        "wmape_promo":   None, "bias_promo":  None, "n_promo_points": 0,
+        "wmape_event":   None, "bias_event":  None, "n_event_points": 0,
+    }
+
+    sales_records = csv_layer.read_sales()
+    transactions  = csv_layer.read_transactions()
+    start_date    = asof_date - timedelta(days=lookback_days - 1)
+
+    history: List[Dict] = [
+        {
+            "date": start_date + timedelta(days=i),
+            "qty_sold": sum(
+                s.qty_sold for s in sales_records
+                if s.sku == sku and s.date == start_date + timedelta(days=i)
+            ),
+        }
+        for i in range(lookback_days)
+    ]
+
+    from ..workflows.order import calculate_daily_sales_average
+    _, _, oos_days_list, assortment_out_list = calculate_daily_sales_average(
+        sales_records=sales_records,
+        sku=sku,
+        days_lookback=lookback_days,
+        transactions=transactions,
+        asof_date=asof_date,
+        oos_detection_mode=mode,
+        return_details=True,
+    )
+    censored_set = set(oos_days_list) | set(assortment_out_list)
+
+    # --- Load promo windows for this SKU ---
+    try:
+        promo_windows = [
+            w for w in csv_layer.read_promo_calendar()
+            if w.sku == sku
+        ]
+    except Exception:
+        promo_windows = []
+
+    def _is_promo_day(d: Date) -> bool:
+        return any(w.contains_date(d) for w in promo_windows)
+
+    # --- Load event rules that apply to this SKU ---
+    try:
+        event_rules = csv_layer.read_event_uplift_rules()
+        if sku_obj is not None:
+            event_rules = [r for r in event_rules if r.applies_to_sku(sku_obj)]
+    except Exception:
+        event_rules = []
+
+    def _is_event_day(d: Date) -> bool:
+        return any(
+            abs((d - r.delivery_date).days) <= _EVENT_WINDOW_DAYS
+            for r in event_rules
+        )
+
+    # --- Rolling forecast evaluation ---
+    window_days   = window_weeks * 7
+    min_start_idx = window_days + 7
+
+    promo_data: List[Tuple[float, float]] = []   # (actual, forecast)
+    event_data: List[Tuple[float, float]] = []
+
+    for i in range(min_start_idx, len(history)):
+        day = history[i]["date"]
+        if day in censored_set:
+            continue
+        train_hist = history[i - window_days: i]
+        try:
+            model   = fit_forecast_model(train_hist, alpha=0.3)
+            fc_vals = predict(model, horizon=1)
+            fc_val  = fc_vals[0] if fc_vals else 0.0
+        except Exception:
+            continue
+
+        actual = history[i]["qty_sold"]
+        if _is_promo_day(day):
+            promo_data.append((actual, fc_val))
+        if _is_event_day(day):
+            event_data.append((actual, fc_val))
+
+    def _compute_segment(pairs: List[Tuple[float, float]]) -> Tuple[Optional[float], Optional[float]]:
+        """Return (wmape_pct, bias) for a list of (actual, forecast) pairs."""
+        if len(pairs) < _MIN_SEGMENT_POINTS:
+            return None, None
+        sum_abs_error = sum(abs(a - f) for a, f in pairs)
+        sum_abs_actual = sum(abs(a) for a, _ in pairs)
+        bias = sum(a - f for a, f in pairs) / len(pairs)
+        wmape = (sum_abs_error / sum_abs_actual * 100.0) if sum_abs_actual > 0 else None
+        return wmape, bias
+
+    wmape_promo, bias_promo = _compute_segment(promo_data)
+    wmape_event, bias_event = _compute_segment(event_data)
+
+    return {
+        "wmape_promo":    wmape_promo,
+        "bias_promo":     bias_promo,
+        "n_promo_points": len(promo_data),
+        "wmape_event":    wmape_event,
+        "bias_event":     bias_event,
+        "n_event_points": len(event_data),
     }
 
 

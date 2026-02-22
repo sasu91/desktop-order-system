@@ -50,8 +50,31 @@ class CSVLayer:
         "promo_calendar.csv": ["sku", "start_date", "end_date", "store_id", "promo_flag"],
         "kpi_daily.csv": ["sku", "date", "oos_rate", "lost_sales_est", "wmape", "bias",
                           "fill_rate", "otif_rate", "avg_delay_days", "n_periods", "lookback_days", "mode",
-                          "waste_rate"],
+                          "waste_rate",
+                          # --- forecast extended KPIs (schema v4) ---
+                          "pi80_coverage", "pi80_coverage_error",
+                          "wmape_promo", "bias_promo", "n_promo_points",
+                          "wmape_event", "bias_event", "n_event_points"],
         "event_uplift_rules.csv": ["delivery_date", "reason", "strength", "scope_type", "scope_key", "notes"],
+        # SKU scoring cache — Importance / Health / Priority
+        "sku_scores_daily.csv": [
+            "date", "sku", "lookback_days", "scoring_version",
+            # top-level scores
+            "importance_score", "health_score", "priority_score",
+            # importance breakdown
+            "importance_units_component", "importance_freq_component",
+            # health sub-scores
+            "health_availability_score", "health_waste_score",
+            "health_inventory_eff_score", "health_supplier_score", "health_forecast_score",
+            # active weights (post-renormalisation)
+            "weight_availability", "weight_waste", "weight_inventory_eff",
+            "weight_supplier", "weight_forecast",
+            # priority internals
+            "raw_priority",
+            # metadata / quality
+            "is_perishable", "confidence_score", "data_quality_flag",
+            "missing_features_count", "notes",
+        ],
     }
     
     def __init__(self, data_dir: Optional[Path] = None):
@@ -1084,6 +1107,15 @@ class CSVLayer:
                 "mode": snapshot.get("mode", ""),
                 # waste_rate: always numeric (0.0 default → never None in cache)
                 "waste_rate": str(snapshot.get("waste_rate") if snapshot.get("waste_rate") is not None else 0.0),
+                # --- forecast extended KPIs (schema v4) ---
+                "pi80_coverage":       str(snapshot.get("pi80_coverage", "")),
+                "pi80_coverage_error": str(snapshot.get("pi80_coverage_error", "")),
+                "wmape_promo":         str(snapshot.get("wmape_promo", "")),
+                "bias_promo":          str(snapshot.get("bias_promo", "")),
+                "n_promo_points":      str(snapshot.get("n_promo_points", 0)),
+                "wmape_event":         str(snapshot.get("wmape_event", "")),
+                "bias_event":          str(snapshot.get("bias_event", "")),
+                "n_event_points":      str(snapshot.get("n_event_points", 0)),
             })
         
         self._write_csv("kpi_daily.csv", rows)
@@ -1165,8 +1197,62 @@ class CSVLayer:
         
         # Write back
         self._write_csv("kpi_daily.csv", existing_kpis)
-    
+
+    # ============ SKU Scores Daily Operations ============
+
+    def read_sku_scores_daily(
+        self,
+        sku: Optional[str] = None,
+        date_str: Optional[str] = None,
+    ) -> List[Dict]:
+        """
+        Read SKU scoring cache (Importance / Health / Priority).
+
+        Args:
+            sku:      Filter by SKU code (optional).
+            date_str: Filter by exact date ISO string (optional).
+
+        Returns:
+            List of dicts matching SCHEMAS["sku_scores_daily.csv"] columns.
+            All numeric fields are still strings (raw CSV); callers cast as needed.
+        """
+        rows = self._read_csv("sku_scores_daily.csv")
+        if sku:
+            rows = [r for r in rows if r.get("sku") == sku]
+        if date_str:
+            rows = [r for r in rows if r.get("date") == date_str]
+        return rows
+
+    def write_sku_scores_daily_batch(
+        self,
+        score_results: List[Dict],
+    ) -> None:
+        """
+        Write a full batch of SKU score results (overwrites entire file).
+
+        Args:
+            score_results: List of dicts produced by
+                           ``scoring.score_all_skus()`` (or equivalent).
+                           Keys must match SCHEMAS["sku_scores_daily.csv"].
+
+        Use this for the daily "Calcola Score" bulk run.
+        """
+        cols = self.SCHEMAS["sku_scores_daily.csv"]
+
+        def _s(val) -> str:
+            """Serialize value to string; None → empty string."""
+            if val is None:
+                return ""
+            return str(val)
+
+        rows = []
+        for r in score_results:
+            rows.append({col: _s(r.get(col)) for col in cols})
+
+        self._write_csv("sku_scores_daily.csv", rows)
+
     # ============ Order Log Operations ============
+
     
     def read_order_logs(self) -> List[Dict]:
         """Read order logs."""

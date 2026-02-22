@@ -1,6 +1,0 @@
-# Backup Manifest
-# Created: 2026-02-22T08:54:22.799449
-# Reason: pre_restore
-# Source: /tmp/pytest-of-codespace/pytest-0/test_restore_creates_safety_ba0/target.db
-#
-target_20260222_085422_pre_restore.db

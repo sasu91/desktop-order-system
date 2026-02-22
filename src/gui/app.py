@@ -195,6 +195,7 @@ class DesktopOrderApp:
         self.expiry_tab = ttk.Frame(self.notebook)  # NEW: Expiry tracking tab
         self.promo_tab = ttk.Frame(self.notebook)  # NEW: Promo calendar tab
         self.event_uplift_tab = ttk.Frame(self.notebook)  # NEW: Event uplift tab
+        self.score_tab = ttk.Frame(self.notebook)  # SKU scoring tab
         self.admin_tab = ttk.Frame(self.notebook)
         self.settings_tab = ttk.Frame(self.notebook)
         
@@ -207,6 +208,7 @@ class DesktopOrderApp:
             "expiry": self.expiry_tab,  # NEW
             "promo": self.promo_tab,  # NEW
             "event_uplift": self.event_uplift_tab,  # NEW
+            "score": self.score_tab,
             "dashboard": self.dashboard_tab,
             "admin": self.admin_tab,
             "settings": self.settings_tab
@@ -222,6 +224,7 @@ class DesktopOrderApp:
             "expiry": "⏰ Scadenze",  # NEW
             "promo": "📅 Calendario Promo",  # NEW
             "event_uplift": "📈 Eventi/Uplift",  # NEW
+            "score": "🎯 Score SKU",
             "admin": "🔧 Admin",
             "settings": "⚙️ Impostazioni"
         }
@@ -242,6 +245,7 @@ class DesktopOrderApp:
         self._build_expiry_tab()  # NEW
         self._build_promo_tab()  # NEW
         self._build_event_uplift_tab()  # NEW
+        self._build_score_tab()
         self._build_admin_tab()
         self._build_settings_tab()
     
@@ -479,8 +483,15 @@ class DesktopOrderApp:
             text="📊 Calcola KPI",
             command=self._calculate_kpi_all_skus,
             style="Accent.TButton"
+        ).pack(side="left", padx=(0, 10))
+
+        # Scoring button
+        ttk.Button(
+            controls_row,
+            text="🎯 Calcola Score SKU",
+            command=self._calculate_scoring_all_skus,
         ).pack(side="left", padx=(0, 15))
-        
+
         # Refresh from cache button
         ttk.Button(
             controls_row,
@@ -884,6 +895,8 @@ class DesktopOrderApp:
                 compute_forecast_accuracy,
                 compute_supplier_proxy_kpi,
                 compute_waste_rate,
+                compute_pi80_coverage_kpi,
+                compute_promo_event_forecast_kpi,
             )
             
             # Get parameters
@@ -893,6 +906,7 @@ class DesktopOrderApp:
             
             # Get all SKUs
             sku_ids = self.csv_layer.get_all_sku_ids()
+            skus_by_id = {s.sku: s for s in self.csv_layer.read_skus()}
             
             if not sku_ids:
                 messagebox.showinfo("Info", "Nessun SKU disponibile per l'analisi KPI.")
@@ -907,11 +921,16 @@ class DesktopOrderApp:
             for sku in sku_ids:
                 try:
                     # Compute all KPIs
-                    oos_result = compute_oos_kpi(sku, lookback_days, mode, self.csv_layer, today)
+                    oos_result        = compute_oos_kpi(sku, lookback_days, mode, self.csv_layer, today)
                     lost_sales_result = estimate_lost_sales(sku, lookback_days, mode, self.csv_layer, today, method="forecast")
-                    accuracy_result = compute_forecast_accuracy(sku, lookback_days, mode, self.csv_layer, today)
-                    supplier_result = compute_supplier_proxy_kpi(sku, lookback_days, self.csv_layer, today)
+                    accuracy_result   = compute_forecast_accuracy(sku, lookback_days, mode, self.csv_layer, today)
+                    supplier_result   = compute_supplier_proxy_kpi(sku, lookback_days, self.csv_layer, today)
                     waste_rate_val, _ = compute_waste_rate(sku, lookback_days, self.csv_layer, today)
+                    pi80_result       = compute_pi80_coverage_kpi(sku, lookback_days, mode, self.csv_layer, today)
+                    pe_result         = compute_promo_event_forecast_kpi(
+                        sku, lookback_days, mode, self.csv_layer, today,
+                        sku_obj=skus_by_id.get(sku),
+                    )
                     
                     # Build snapshot
                     snapshot = {
@@ -929,6 +948,15 @@ class DesktopOrderApp:
                         "mode": mode,
                         # waste_rate: always numeric; 0.0 when no waste (compute_waste_rate guarantee)
                         "waste_rate": waste_rate_val,
+                        # --- forecast extended (schema v4) ---
+                        "pi80_coverage":       pi80_result.get("pi80_coverage"),
+                        "pi80_coverage_error": pi80_result.get("pi80_coverage_error"),
+                        "wmape_promo":         pe_result.get("wmape_promo"),
+                        "bias_promo":          pe_result.get("bias_promo"),
+                        "n_promo_points":      pe_result.get("n_promo_points", 0),
+                        "wmape_event":         pe_result.get("wmape_event"),
+                        "bias_event":          pe_result.get("bias_event"),
+                        "n_event_points":      pe_result.get("n_event_points", 0),
                     }
                     
                     kpi_snapshots.append(snapshot)
@@ -950,7 +978,87 @@ class DesktopOrderApp:
         except Exception as e:
             logger.error(f"KPI calculation failed: {str(e)}", exc_info=True)
             messagebox.showerror("Errore", f"Calcolo KPI fallito: {str(e)}")
-    
+
+    def _calculate_scoring_all_skus(self):
+        """Compute Importance / Health / Priority scores for all SKUs and write to sku_scores_daily.csv."""
+        try:
+            from dataclasses import asdict
+            from ..analytics.scoring import build_feature_row, score_all_skus
+
+            today = date.today()
+            lookback_days = self.kpi_lookback_var.get()
+
+            # --- Load data ---
+            sku_ids = self.csv_layer.get_all_sku_ids()
+            if not sku_ids:
+                messagebox.showinfo("Info", "Nessun SKU disponibile per il calcolo degli score.")
+                return
+
+            skus_by_id = {sku.sku: sku for sku in self.csv_layer.read_skus()}
+            transactions = self.csv_layer.read_transactions()
+            sales_records = self.csv_layer.read_sales()
+
+            # Latest KPI record per SKU (most recent date wins)
+            all_kpi_rows = self.csv_layer.read_kpi_daily()
+            kpi_by_sku: dict = {}
+            for row in all_kpi_rows:
+                s = row.get("sku", "")
+                existing = kpi_by_sku.get(s)
+                if existing is None or row.get("date", "") >= existing.get("date", ""):
+                    kpi_by_sku[s] = row
+
+            # Stock on-hand as-of today
+            stocks = StockCalculator.calculate_all_skus(
+                sku_ids,
+                today,
+                transactions,
+                sales_records,
+            )
+
+            logger.info(f"Building feature rows for {len(sku_ids)} SKUs (lookback={lookback_days}d) ...")
+
+            # --- Build FeatureRows ---
+            feature_rows = []
+            for sku_id in sku_ids:
+                try:
+                    sku_obj = skus_by_id.get(sku_id)
+                    stock_oh = stocks[sku_id].on_hand if sku_id in stocks else 0.0
+                    row = build_feature_row(
+                        sku=sku_id,
+                        ref_date=today,
+                        lookback_days=lookback_days,
+                        sales_records=sales_records,
+                        transactions=transactions,
+                        kpi_record=kpi_by_sku.get(sku_id),
+                        sku_obj=sku_obj,
+                        stock_on_hand=float(stock_oh),
+                    )
+                    feature_rows.append(row)
+                except Exception as e_row:
+                    logger.warning(f"Feature extraction failed for SKU {sku_id}: {e_row}")
+
+            if not feature_rows:
+                messagebox.showwarning("Attenzione", "Nessun feature row estratto. Controllare i dati.")
+                return
+
+            # --- Score ---
+            logger.info(f"Scoring {len(feature_rows)} SKUs ...")
+            results = score_all_skus(feature_rows)
+
+            # --- Persist ---
+            result_dicts = [asdict(r) for r in results]
+            self.csv_layer.write_sku_scores_daily_batch(result_dicts)
+
+            logger.info(f"Scoring complete. {len(results)} SKUs written to sku_scores_daily.csv.")
+            messagebox.showinfo(
+                "Score SKU",
+                f"Score calcolati per {len(results)} SKU.\nRisultati salvati in sku_scores_daily.csv"
+            )
+
+        except Exception as e:
+            logger.error(f"Scoring calculation failed: {str(e)}", exc_info=True)
+            messagebox.showerror("Errore", f"Calcolo Score fallito: {str(e)}")
+
     def _refresh_kpi_from_cache(self):
         """Refresh KPI table from cached data."""
         try:
@@ -5714,6 +5822,261 @@ class DesktopOrderApp:
                 ),
             )
     
+    # ------------------------------------------------------------------ #
+    #  Score SKU tab                                                      #
+    # ------------------------------------------------------------------ #
+
+    def _build_score_tab(self):
+        """Build Score SKU tab — Importance / Health / Priority per SKU."""
+        main_frame = ttk.Frame(self.score_tab)
+        main_frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # --- Controls row ---
+        ctrl_frame = ttk.Frame(main_frame)
+        ctrl_frame.pack(side="top", fill="x", pady=(0, 5))
+
+        ttk.Button(
+            ctrl_frame,
+            text="🔄 Aggiorna da File",
+            command=self._refresh_scoring_from_file,
+        ).pack(side="left", padx=(0, 10))
+
+        ttk.Button(
+            ctrl_frame,
+            text="📤 Esporta CSV",
+            command=self._export_score_csv,
+        ).pack(side="left", padx=(0, 15))
+
+        ttk.Label(
+            ctrl_frame,
+            text=(
+                "💡 Clicca intestazione per ordinare  |  "
+                "Calcola KPI → poi '🎯 Calcola Score SKU' nel tab Stock"
+            ),
+            font=("Helvetica", 8, "italic"),
+            foreground="gray",
+        ).pack(side="left", padx=(5, 0))
+
+        # --- Summary label ---
+        self.score_summary_label = ttk.Label(
+            main_frame,
+            text=(
+                "Nessun dato. Calcola Score SKU nel tab Stock "
+                "oppure clicca 'Aggiorna da File'."
+            ),
+            foreground="gray",
+        )
+        self.score_summary_label.pack(side="top", anchor="w", pady=(0, 4))
+
+        # --- Colour legend ---
+        legend_frame = ttk.Frame(main_frame)
+        legend_frame.pack(side="top", fill="x", pady=(0, 4))
+        ttk.Label(legend_frame, text="Priorità: ", font=("Helvetica", 8)).pack(side="left")
+        tk.Label(legend_frame, text=" Alta (≥67) ",    background="#ffcccc", font=("Helvetica", 8)).pack(side="left", padx=2)
+        tk.Label(legend_frame, text=" Media (33-66) ", background="#ffe0b2", font=("Helvetica", 8)).pack(side="left", padx=2)
+        tk.Label(legend_frame, text=" Bassa (<33) ",   background="#c8e6c9", font=("Helvetica", 8)).pack(side="left", padx=2)
+        tk.Label(legend_frame, text=" Dati insufficienti ", foreground="gray", font=("Helvetica", 8)).pack(side="left", padx=2)
+
+        # --- Treeview ---
+        table_frame = ttk.Frame(main_frame)
+        table_frame.pack(side="top", fill="both", expand=True)
+
+        scroll_y = ttk.Scrollbar(table_frame, orient="vertical")
+        scroll_y.pack(side="right", fill="y")
+        scroll_x = ttk.Scrollbar(table_frame, orient="horizontal")
+        scroll_x.pack(side="bottom", fill="x")
+
+        _SCORE_COLS = (
+            "SKU", "Importanza", "Salute", "Priorità",
+            "Conf.", "Flag", "Waste W.", "Vers.",
+        )
+        self.score_treeview = ttk.Treeview(
+            table_frame,
+            columns=_SCORE_COLS,
+            show="headings",
+            yscrollcommand=scroll_y.set,
+            xscrollcommand=scroll_x.set,
+        )
+        self.score_treeview.pack(fill="both", expand=True)
+        scroll_y.config(command=self.score_treeview.yview)
+        scroll_x.config(command=self.score_treeview.xview)
+
+        col_cfg = {
+            "SKU":        (110, tk.W),
+            "Importanza": (90,  tk.CENTER),
+            "Salute":     (80,  tk.CENTER),
+            "Priorità":   (80,  tk.CENTER),
+            "Conf.":      (70,  tk.CENTER),
+            "Flag":       (120, tk.CENTER),
+            "Waste W.":   (80,  tk.CENTER),
+            "Vers.":      (80,  tk.CENTER),
+        }
+        for col in _SCORE_COLS:
+            width, anchor = col_cfg.get(col, (90, tk.CENTER))
+            self.score_treeview.column(col, anchor=anchor, width=width)
+            self.score_treeview.heading(
+                col, text=col, anchor=anchor,
+                command=lambda c=col: self._sort_score_column(c),
+            )
+
+        # Colour tags
+        self.score_treeview.tag_configure("priority_high",   background="#ffcccc")
+        self.score_treeview.tag_configure("priority_medium", background="#ffe0b2")
+        self.score_treeview.tag_configure("priority_low",    background="#c8e6c9")
+        self.score_treeview.tag_configure("no_data",         foreground="gray")
+
+        # Internal sort/cache state
+        self._score_sort_col: str = "Priorità"
+        self._score_sort_reverse: bool = True   # highest priority first by default
+        self._score_raw_data: list = []         # cached dicts from csv_layer
+
+    def _refresh_scoring_from_file(self):
+        """Read sku_scores_daily.csv and populate the Score SKU treeview."""
+        try:
+            rows = self.csv_layer.read_sku_scores_daily()
+            self._score_raw_data = rows
+
+            if not rows:
+                self.score_treeview.delete(*self.score_treeview.get_children())
+                self.score_summary_label.config(
+                    text=(
+                        "Nessun dato in sku_scores_daily.csv. "
+                        "Calcola prima gli Score dal tab Stock."
+                    ),
+                    foreground="gray",
+                )
+                return
+
+            self._populate_score_treeview(rows)
+
+            dates = [r.get("date", "") for r in rows if r.get("date")]
+            last_date = max(dates) if dates else "N/D"
+            self.score_summary_label.config(
+                text=f"{len(rows)} SKU  |  Ultimo aggiornamento: {last_date}",
+                foreground="black",
+            )
+        except Exception as e:
+            logger.error(f"Failed to refresh score tab: {e}", exc_info=True)
+            messagebox.showerror("Errore", f"Caricamento score fallito: {e}")
+
+    def _populate_score_treeview(self, rows: list):
+        """Sort rows and insert them into score_treeview with colour tags."""
+        _NUMERIC_COLS = {"Importanza", "Salute", "Priorità", "Conf."}
+        _col_to_key = {
+            "SKU":        "sku",
+            "Importanza": "importance_score",
+            "Salute":     "health_score",
+            "Priorità":   "priority_score",
+            "Conf.":      "confidence_score",
+            "Flag":       "data_quality_flag",
+            "Waste W.":   "weight_waste",
+            "Vers.":      "scoring_version",
+        }
+        sort_field = _col_to_key.get(self._score_sort_col, "priority_score")
+
+        def _sort_key(r):
+            val = r.get(sort_field, "")
+            if self._score_sort_col in _NUMERIC_COLS:
+                try:
+                    return float(val) if val not in (None, "", "None") else -1.0
+                except (ValueError, TypeError):
+                    return -1.0
+            return str(val).lower()
+
+        sorted_rows = sorted(rows, key=_sort_key, reverse=self._score_sort_reverse)
+        self.score_treeview.delete(*self.score_treeview.get_children())
+
+        def _fmt(r, key, dec=1):
+            val = r.get(key)
+            if val in (None, "", "None"):
+                return "—"
+            try:
+                return f"{float(val):.{dec}f}"
+            except (ValueError, TypeError):
+                return str(val)
+
+        for r in sorted_rows:
+            try:
+                pv = float(r.get("priority_score", 0) or 0)
+            except (ValueError, TypeError):
+                pv = 0.0
+
+            flag = r.get("data_quality_flag", "OK")
+
+            if flag in ("LOW_DATA", "MISSING_KPI", "INCONSISTENT"):
+                tag = "no_data"
+            elif pv >= 67.0:
+                tag = "priority_high"
+            elif pv >= 33.0:
+                tag = "priority_medium"
+            else:
+                tag = "priority_low"
+
+            self.score_treeview.insert(
+                "", "end",
+                values=(
+                    r.get("sku", ""),
+                    _fmt(r, "importance_score"),
+                    _fmt(r, "health_score"),
+                    _fmt(r, "priority_score"),
+                    _fmt(r, "confidence_score", dec=2),
+                    flag,
+                    _fmt(r, "weight_waste", dec=2),
+                    r.get("scoring_version", ""),
+                ),
+                tags=(tag,),
+            )
+
+    def _sort_score_column(self, col: str):
+        """Toggle sort direction; switch column if different from current."""
+        if self._score_sort_col == col:
+            self._score_sort_reverse = not self._score_sort_reverse
+        else:
+            self._score_sort_col = col
+            # Numeric columns default to descending (largest first)
+            self._score_sort_reverse = col in {"Importanza", "Salute", "Priorità", "Conf."}
+        if self._score_raw_data:
+            self._populate_score_treeview(self._score_raw_data)
+
+    def _export_score_csv(self):
+        """Export sku_scores_daily data to a user-chosen CSV file."""
+        if not self._score_raw_data:
+            messagebox.showinfo(
+                "Export",
+                "Nessun dato da esportare.\nAggiorna prima il tab Score SKU.",
+            )
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            title="Salva Score SKU",
+            initialfile="sku_scores_export.csv",
+        )
+        if not path:
+            return
+        try:
+            export_cols = [
+                "date", "sku",
+                "importance_score", "health_score", "priority_score",
+                "confidence_score", "data_quality_flag", "scoring_version",
+                "health_availability_score", "health_waste_score",
+                "health_inventory_eff_score", "health_supplier_score",
+                "health_forecast_score",
+                "weight_availability", "weight_waste", "weight_inventory_eff",
+                "weight_supplier", "weight_forecast",
+                "is_perishable", "missing_features_count", "notes",
+            ]
+            with open(path, "w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=export_cols, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(self._score_raw_data)
+            messagebox.showinfo("Export", f"Esportati {len(self._score_raw_data)} SKU in:\n{path}")
+        except Exception as e:
+            logger.error(f"Score CSV export failed: {e}", exc_info=True)
+            messagebox.showerror("Errore Export", str(e))
+
+    # ------------------------------------------------------------------ #
+
     def _build_admin_tab(self):
         """Build Admin tab (SKU management, data view)."""
         main_frame = ttk.Frame(self.admin_tab)
@@ -10913,7 +11276,7 @@ class DesktopOrderApp:
         Returns:
             List of tab IDs in saved order (or default order if not saved)
         """
-        default_order = ["stock", "order", "receiving", "exception", "expiry", "promo", "event_uplift", "dashboard", "admin", "settings"]
+        default_order = ["stock", "order", "receiving", "exception", "expiry", "promo", "event_uplift", "score", "dashboard", "admin", "settings"]
         
         try:
             settings = self.csv_layer.read_settings()
