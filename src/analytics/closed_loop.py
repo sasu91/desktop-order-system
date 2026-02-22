@@ -296,19 +296,24 @@ def _load_latest_kpi_metrics(csv_layer, sku_id: str, asof_date: datetime) -> Dic
     }
 
 
-def _compute_waste_rate(csv_layer, sku_id: str, asof_date: datetime, lookback_days: int = 30) -> Tuple[Optional[float], int]:
+def _compute_waste_rate(csv_layer, sku_id: str, asof_date: datetime, lookback_days: int = 30) -> Tuple[float, int]:
     """
     Compute waste rate as (total WASTE qty) / (total sales qty) over lookback period.
-    
+
+    Result convention:
+    - waste_qty == 0  → 0.0  (no waste in period)
+    - total_sales == 0 (denominator zero) → 0.0  (stable score, no crashes)
+    - both > 0 →  waste_qty / total_sales  (fraction; may exceed 1.0 in edge cases)
+
     Args:
         csv_layer: CSVLayer instance
         sku_id: SKU identifier
         asof_date: Reference date (datetime)
         lookback_days: Period to analyze
-    
+
     Returns:
-        (waste_rate, waste_events_count) tuple
-        waste_rate is None if no sales or waste data available
+        (waste_rate: float, waste_events_count: int)
+        waste_rate is ALWAYS a float (never None).
     """
     from datetime import timedelta
     from datetime import date as Date
@@ -338,9 +343,13 @@ def _compute_waste_rate(csv_layer, sku_id: str, asof_date: datetime, lookback_da
     ]
     total_sales = sum(s.qty_sold for s in sku_sales)
     
-    if total_sales == 0 or waste_qty == 0:
-        return None, waste_count
-    
+    if waste_qty == 0:
+        return 0.0, waste_count
+
+    if total_sales == 0:
+        # Denominator zero: no sales to compare against; return 0.0 for scoring stability
+        return 0.0, waste_count
+
     waste_rate = waste_qty / total_sales
     return waste_rate, waste_count
 

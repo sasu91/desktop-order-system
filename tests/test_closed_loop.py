@@ -85,7 +85,7 @@ def test_suggest_mode_no_modifications(csv_layer, temp_data_dir):
     settings["closed_loop"]["enabled"]["value"] = True
     settings["closed_loop"]["action_mode"]["value"] = "suggest"
     settings["closed_loop"]["oos_rate_threshold"]["value"] = 0.05
-    settings["closed_loop"]["wmape_threshold"]["value"] = 0.60
+    settings["closed_loop"]["wmape_threshold"]["value"] = 60.0  # [0-100] percent scale
     settings["closed_loop"]["max_alpha_step_per_review"]["value"] = 0.02
     csv_layer.write_settings(settings)
     
@@ -104,7 +104,7 @@ def test_suggest_mode_no_modifications(csv_layer, temp_data_dir):
         "date": "2025-01-14",
         "oos_rate": 0.10,  # 10% OOS > threshold
         "lost_sales_est": 50,
-        "wmape": 0.30,  # Good forecast accuracy
+        "wmape": 30.0,  # 30% WMAPE — good forecast ([0,100] scale)
         "bias": 0.0,
         "fill_rate": 0.95,
         "otif_rate": 0.90,
@@ -149,7 +149,7 @@ def test_apply_mode_modifies_target_csl(csv_layer):
     settings["closed_loop"]["enabled"]["value"] = True
     settings["closed_loop"]["action_mode"]["value"] = "apply"
     settings["closed_loop"]["oos_rate_threshold"]["value"] = 0.05
-    settings["closed_loop"]["wmape_threshold"]["value"] = 0.60
+    settings["closed_loop"]["wmape_threshold"]["value"] = 60.0  # [0-100] percent scale
     settings["closed_loop"]["max_alpha_step_per_review"]["value"] = 0.02
     csv_layer.write_settings(settings)
     
@@ -168,7 +168,7 @@ def test_apply_mode_modifies_target_csl(csv_layer):
         "date": "2025-01-14",
         "oos_rate": 0.08,  # 8% OOS
         "lost_sales_est": 60,
-        "wmape": 0.25,  # Reliable forecast
+        "wmape": 25.0,  # 25% — reliable forecast ([0,100] scale)
         "bias": 0.05,
         "fill_rate": 0.92,
         "otif_rate": 0.88,
@@ -206,7 +206,7 @@ def test_high_wmape_blocks_changes(csv_layer):
     settings["closed_loop"]["enabled"]["value"] = True
     settings["closed_loop"]["action_mode"]["value"] = "suggest"
     settings["closed_loop"]["oos_rate_threshold"]["value"] = 0.05
-    settings["closed_loop"]["wmape_threshold"]["value"] = 0.60
+    settings["closed_loop"]["wmape_threshold"]["value"] = 60.0  # [0-100] percent scale
     csv_layer.write_settings(settings)
     
     # Write KPI with high OOS but ALSO high WMAPE (unreliable forecast)
@@ -215,7 +215,7 @@ def test_high_wmape_blocks_changes(csv_layer):
         "date": "2025-01-14",
         "oos_rate": 0.12,  # 12% OOS (high)
         "lost_sales_est": 100,
-        "wmape": 0.85,  # 85% WMAPE (unreliable!) > 60% threshold
+        "wmape": 85.0,  # 85% WMAPE ([0,100] scale) > 60% threshold → unreliable
         "bias": 0.20,
         "fill_rate": 0.80,
         "otif_rate": 0.75,
@@ -492,7 +492,7 @@ def test_no_kpi_data_hold_action(csv_layer):
 
 
 def test_compute_waste_rate_no_sales(csv_layer):
-    """Test _compute_waste_rate with no sales returns None."""
+    """Test _compute_waste_rate with no sales returns 0.0 (never None)."""
     asof_date = datetime(2025, 1, 15)
     
     # Create waste event but no sales
@@ -507,12 +507,12 @@ def test_compute_waste_rate_no_sales(csv_layer):
     
     waste_rate, waste_count = _compute_waste_rate(csv_layer, "SKU001", asof_date, lookback_days=30)
     
-    assert waste_rate is None  # No sales means no rate calculation
+    assert waste_rate == 0.0  # Denominator zero → 0.0 (never None)
     assert waste_count == 1
 
 
 def test_compute_waste_rate_no_waste(csv_layer):
-    """Test _compute_waste_rate with sales but no waste returns None."""
+    """Test _compute_waste_rate with sales but no waste returns 0.0 (never None)."""
     asof_date = datetime(2025, 1, 15)
     
     # Create sales but no waste
@@ -527,7 +527,7 @@ def test_compute_waste_rate_no_waste(csv_layer):
     
     waste_rate, waste_count = _compute_waste_rate(csv_layer, "SKU001", asof_date, lookback_days=30)
     
-    assert waste_rate is None  # No waste
+    assert waste_rate == 0.0  # No waste → 0.0 (never None)
     assert waste_count == 0
 
 

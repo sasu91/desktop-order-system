@@ -225,6 +225,7 @@ CREATE TABLE kpi_daily (
     avg_delay_days REAL,
     n_periods INTEGER NOT NULL CHECK(n_periods >= 0),
     lookback_days INTEGER NOT NULL CHECK(lookback_days > 0),
+    waste_rate REAL CHECK(waste_rate >= 0.0),  -- fraction waste/sales; 0.0 when no waste (never NULL)
     
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),

@@ -413,19 +413,20 @@ def test_restore_creates_safety_backup(temp_db, temp_backup_dir, tmp_path):
     target_db = tmp_path / "target.db"
     shutil.copy2(temp_db, target_db)
     
-    # Count backups before restore (in default BACKUP_DIR, not temp)
-    # Note: restore_backup creates safety backup in default BACKUP_DIR
+    # Count backups before restore (safety backups go to data/backups/other/ since
+    # reason "pre_restore" is categorised as "other")
     from src.db import BACKUP_DIR
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    backups_before = len(list(BACKUP_DIR.glob("*pre_restore*.db")))
+    other_dir = BACKUP_DIR / "other"
+    other_dir.mkdir(parents=True, exist_ok=True)
+    backups_before = len(list(other_dir.glob("*pre_restore*.db")))
     
     # Restore from backup (this should create safety backup)
     success = restore_backup(backup_path, target_path=target_db, force=True)
     
     assert success is True, "Restore should succeed"
     
-    # Count backups after restore (in default BACKUP_DIR)
-    backups_after = len(list(BACKUP_DIR.glob("*pre_restore*.db")))
+    # Count backups after restore (in other/ subdir)
+    backups_after = len(list(other_dir.glob("*pre_restore*.db")))
     
     assert backups_after > backups_before, "Should create safety backup before restore"
 

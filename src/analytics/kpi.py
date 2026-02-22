@@ -693,3 +693,60 @@ def compute_supplier_proxy_kpi(
         "n_orders": n_orders,
         "n_otif_calculable": n_otif_calculable,
     }
+
+
+def compute_waste_rate(
+    sku: str,
+    lookback_days: int,
+    csv_layer: CSVLayer,
+    asof_date: Optional[Date] = None,
+) -> Tuple[float, int]:
+    """
+    Compute waste rate as (total WASTE qty) / (total sales qty) over lookback period.
+
+    This is the canonical public KPI for waste measurement. Both the batch KPI cache
+    and the closed-loop tuner MUST use this function so results are always consistent.
+
+    Result convention (numerically stable, never None):
+    - waste_qty == 0                        → 0.0  (no waste in period)
+    - total_sales == 0 (denom zero, no txn) → 0.0  (stable default)
+    - waste_qty > 0 and total_sales > 0     → waste_qty / total_sales  [0.0 – 1.0+]
+
+    Args:
+        sku: SKU code to analyze
+        lookback_days: Number of days to look back
+        csv_layer: CSV persistence layer
+        asof_date: Reference date (default: today)
+
+    Returns:
+        (waste_rate: float, waste_events_count: int)
+        waste_rate is ALWAYS a float ≥ 0.0; never None.
+    """
+    if asof_date is None:
+        asof_date = Date.today()
+
+    start_date = asof_date - timedelta(days=lookback_days)
+
+    # Load transactions for WASTE events
+    all_txns = csv_layer.read_transactions()
+    sku_txns = [
+        t for t in all_txns
+        if t.sku == sku and start_date <= t.date < asof_date
+    ]
+
+    waste_qty = sum(abs(t.qty) for t in sku_txns if t.event.value == "WASTE")
+    waste_count = sum(1 for t in sku_txns if t.event.value == "WASTE")
+
+    if waste_qty == 0:
+        return 0.0, waste_count
+
+    # Load sales for denominator
+    sales = csv_layer.read_sales()
+    sku_sales = [s for s in sales if s.sku == sku and start_date <= s.date < asof_date]
+    total_sales = sum(s.qty_sold for s in sku_sales)
+
+    if total_sales == 0:
+        # No sales denominator: return 0.0 for scoring stability (documented choice)
+        return 0.0, waste_count
+
+    return waste_qty / total_sales, waste_count

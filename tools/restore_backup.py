@@ -71,20 +71,32 @@ from src.db import (
 def list_available_backups(backup_dir: Path = BACKUP_DIR) -> list:
     """
     List all available backups with metadata.
-    
+
+    Scans both the given *backup_dir* and any first-level category subdirectories
+    (startup/, pre_migration/, manual/, other/) so that backups written by the
+    categorised backup system are visible alongside legacy root-level backups.
+
     Returns:
-        List of tuples: (backup_path, manifest_data)
+        List of dicts with backup metadata, sorted most-recent first.
     """
     if not backup_dir.exists():
         return []
-    
+
+    # Collect .db files from root dir AND all immediate subdirs
+    candidate_files: list[Path] = []
+    for f in backup_dir.glob("*.db"):
+        if not f.name.endswith(("-wal", "-shm")):
+            candidate_files.append(f)
+    for subdir in backup_dir.iterdir():
+        if subdir.is_dir():
+            for f in subdir.glob("*.db"):
+                if not f.name.endswith(("-wal", "-shm")):
+                    candidate_files.append(f)
+
     backups = []
-    
+
     # Find all backup files (*.db, excluding -wal and -shm)
-    for backup_file in sorted(backup_dir.glob("*.db"), key=lambda f: f.stat().st_mtime, reverse=True):
-        if backup_file.name.endswith(("-wal", "-shm")):
-            continue
-        
+    for backup_file in sorted(candidate_files, key=lambda f: f.stat().st_mtime, reverse=True):
         # Parse filename: app_YYYYMMDD_HHMMSS_reason.db
         parts = backup_file.stem.split("_")
         

@@ -41,6 +41,32 @@ MIGRATIONS_DIR: Path = get_migrations_dir()
 BACKUP_DIR: Path = get_backup_dir()
 SETTINGS_FILE: Path = _get_data_dir() / "settings.json"
 
+# ---------------------------------------------------------------------------
+# Backup category configuration
+# ---------------------------------------------------------------------------
+# Each backup reason is routed to a named subdirectory under BACKUP_DIR so
+# that startup, migration and manual backups have independent retention limits.
+
+#: Per-category maximum number of backup sets to keep.
+_BACKUP_CATEGORY_RETENTION: dict[str, int] = {
+    "startup": 7,
+    "pre_migration": 10,
+    "manual": 20,
+    "other": 5,
+}
+
+
+def _backup_category(reason: str) -> str:
+    """Map a *backup_reason* string to a storage subcategory directory name."""
+    r = reason.lower()
+    if r == "startup":
+        return "startup"
+    if "migration" in r:
+        return "pre_migration"
+    if r == "manual":
+        return "manual"
+    return "other"
+
 # Connection PRAGMAs
 # FASE 7 TASK 7.1: Enhanced concurrency and lock handling
 PRAGMA_CONFIG = {
@@ -516,7 +542,8 @@ def backup_database(db_path: Path, backup_reason: str = "migration", backup_dir:
         raise FileNotFoundError(f"Database {db_path} does not exist")
     
     if backup_dir is None:
-        backup_dir = BACKUP_DIR
+        category = _backup_category(backup_reason)
+        backup_dir = BACKUP_DIR / category
     
     backup_dir.mkdir(parents=True, exist_ok=True)
     
@@ -563,8 +590,11 @@ def backup_database(db_path: Path, backup_reason: str = "migration", backup_dir:
 
 def cleanup_old_backups(max_backups: int = 10, backup_dir: Path = BACKUP_DIR) -> int:
     """
-    Remove old backups, keeping only the most recent N backups (FASE 7 TASK 7.3).
-    
+    Remove old backups from *backup_dir*, keeping only the most recent N.
+
+    This function operates on a single directory.  To apply per-category
+    retention across all subdirectories use :func:`cleanup_all_backups`.
+
     Args:
         max_backups: Maximum number of backups to keep (default: 10)
         backup_dir: Directory containing backups
@@ -625,6 +655,31 @@ def cleanup_old_backups(max_backups: int = 10, backup_dir: Path = BACKUP_DIR) ->
     return deleted_count
 
 
+def cleanup_all_backups() -> int:
+    """Apply per-category retention across all backup subcategories.
+
+    Uses *_BACKUP_CATEGORY_RETENTION* limits::
+
+        startup:        7 backups
+        pre_migration: 10 backups
+        manual:        20 backups
+        other:          5 backups
+
+    Also cleans legacy root-level backups (limit 5) created before the
+    categorised layout was introduced.
+
+    Returns:
+        Total number of backup sets deleted.
+    """
+    total = 0
+    for category, limit in _BACKUP_CATEGORY_RETENTION.items():
+        cat_dir = BACKUP_DIR / category
+        total += cleanup_old_backups(max_backups=limit, backup_dir=cat_dir)
+    # Legacy: root-level backups created before subcategory routing
+    total += cleanup_old_backups(max_backups=5, backup_dir=BACKUP_DIR)
+    return total
+
+
 def automatic_backup_on_startup(db_path: Path = DB_PATH, max_backups: int = 10) -> Optional[Path]:
     """
     Create automatic backup on application startup (FASE 7 TASK 7.3).
@@ -654,10 +709,10 @@ def automatic_backup_on_startup(db_path: Path = DB_PATH, max_backups: int = 10) 
     print("💾 Creating automatic startup backup...")
     backup_path = backup_database(db_path, backup_reason="startup")
     
-    # Apply retention policy
-    deleted = cleanup_old_backups(max_backups=max_backups)
+    # Apply per-category retention across all backup subdirectories
+    deleted = cleanup_all_backups()
     if deleted > 0:
-        print(f"  Cleaned up {deleted} old backup(s) (retention: {max_backups})")
+        print(f"  Cleaned up {deleted} old backup(s) (per-category retention)")
     
     return backup_path
 
@@ -1325,15 +1380,99 @@ if __name__ == "__main__":
             reason = sys.argv[2] if len(sys.argv) > 2 else "manual"
             backup_path = backup_database(DB_PATH, reason)
             print(f"✓ Backup created: {backup_path}")
-        
+
+        elif command == "recover":
+            # Guided recovery diagnostic for a corrupted / inaccessible database.
+            # Does NOT automatically restore — diagnoses the situation and prints
+            # clear next-step instructions.
+            print(f"\n🔧 Recovery diagnostic for: {DB_PATH}")
+
+            db_accessible = DB_PATH.exists()
+
+            # Step 1 — safety backup (if DB file exists and is at least readable)
+            safety_backup: Optional[Path] = None
+            print("\n[1/4] Safety backup...")
+            if db_accessible:
+                try:
+                    safety_backup = backup_database(DB_PATH, backup_reason="recovery_diagnostic")
+                    print(f"  ✓ Safety backup created: {safety_backup}")
+                except Exception as e:
+                    print(f"  ⚠ Could not create backup: {e}")
+            else:
+                print(f"  ⚠ Database file not found: {DB_PATH}")
+
+            # Step 2 — integrity check
+            print("\n[2/4] Integrity check...")
+            db_healthy = False
+            if db_accessible:
+                try:
+                    check_conn = open_connection()
+                    db_healthy = integrity_check(check_conn)
+                    run_startup_checks(check_conn, verbose=True)
+                    check_conn.close()
+                    if db_healthy:
+                        print("  ✓ Integrity OK — the error may have been transient")
+                    else:
+                        print("  ✗ Integrity FAIL — database is corrupted")
+                except Exception as e:
+                    print(f"  ✗ Cannot open database: {e}")
+
+            # Step 3 — list available backups (all categories + legacy root)
+            print("\n[3/4] Available backups (most recent first):")
+            backup_candidates: list[Path] = []
+            for cat in _BACKUP_CATEGORY_RETENTION:
+                cat_dir = BACKUP_DIR / cat
+                if cat_dir.exists():
+                    backup_candidates.extend(
+                        sorted(cat_dir.glob("*.db"), key=lambda f: f.stat().st_mtime, reverse=True)[:3]
+                    )
+            # Legacy root-level
+            backup_candidates.extend(
+                sorted(BACKUP_DIR.glob("*.db"), key=lambda f: f.stat().st_mtime, reverse=True)[:3]
+            )
+            backup_candidates = sorted(backup_candidates, key=lambda f: f.stat().st_mtime, reverse=True)[:10]
+            if backup_candidates:
+                for bf in backup_candidates:
+                    ts = datetime.fromtimestamp(bf.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                    size_kb = bf.stat().st_size // 1024
+                    try:
+                        rel = bf.relative_to(BACKUP_DIR.parent)
+                    except ValueError:
+                        rel = bf
+                    print(f"  {ts}  {size_kb:>6} KB  {rel}")
+            else:
+                print("  (no backups found)")
+
+            # Step 4 — guided next steps
+            print("\n[4/4] Suggested next steps:")
+            if db_healthy:
+                print("  ✓ Database appears healthy. No action needed.")
+                print("    The error may have been a transient WAL-checkpoint issue.")
+                print("    Restart the application; if the error persists, try Option A below.")
+            else:
+                print("  Option A — Restore from backup:")
+                print(f"    python tools/restore_backup.py list")
+                print(f"    python tools/restore_backup.py restore <backup_file>")
+                print()
+                print("  Option B — Repair in-place with SQLite .recover:")
+                print(f"    sqlite3 \"{DB_PATH}\" \".recover\" | sqlite3 \"{DB_PATH.parent}/recovered.db\"")
+                print(f"    cp \"{DB_PATH}\" \"{DB_PATH.parent}/corrupted_$(date +%Y%m%d).db\"")
+                print(f"    cp \"{DB_PATH.parent}/recovered.db\" \"{DB_PATH}\"")
+                print()
+                print("  Option C — Switch to CSV backend (immediate workaround):")
+                print("    Edit config.py: set STORAGE_BACKEND = 'csv'")
+                print("    Data continues to work on CSV — re-migrate to SQLite when ready.")
+
+            sys.exit(0 if db_healthy else 1)
+
         else:
             print(f"Unknown command: {command}")
-            print("Usage: python src/db.py [init|migrate|verify|stats|backup]")
+            print("Usage: python src/db.py [init|migrate|verify|stats|backup|recover]")
             sys.exit(1)
-    
+
     else:
         # Default: initialize database
-        print("Usage: python src/db.py [init|migrate|verify|stats|backup]")
+        print("Usage: python src/db.py [init|migrate|verify|stats|backup|recover]")
         print("\nCommands:")
         print("  init           Initialize database with schema")
         print("  init --force   Recreate database from scratch")
@@ -1341,4 +1480,5 @@ if __name__ == "__main__":
         print("  migrate --dry-run  Show pending migrations without applying")
         print("  verify         Verify schema and integrity")
         print("  stats          Show database statistics")
-        print("  backup [reason]  Create manual backup")
+        print("  backup [reason]  Create manual backup (stored in data/backups/manual/)")
+        print("  recover        Diagnose corruption, list backups, print recovery steps")

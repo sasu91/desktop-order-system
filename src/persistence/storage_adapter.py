@@ -80,7 +80,12 @@ class StorageAdapter(CSVLayer):
         # Keep separate CSV layer reference for explicit delegation in overrides
         # (slight redundancy but clearer code and backward compatibility)
         self.csv_layer = CSVLayer(data_dir=self.data_dir)
-        
+
+        # Set when a hard SQLite error downgrades the session to CSV so that the
+        # GUI can show a one-time warning dialog.  Consumed by
+        # consume_degradation_alert() which clears it after first read.
+        self._degradation_info: dict | None = None
+
         # Determine backend
         if force_backend:
             self.backend = force_backend if force_backend in ('csv', 'sqlite') else 'csv'
@@ -178,11 +183,27 @@ class StorageAdapter(CSVLayer):
         self.conn = None
         self.repos = None
         self.backend = 'csv'
+        # Record degradation info for one-time GUI alert
+        from datetime import datetime as _dt
+        self._degradation_info = {
+            "cause": str(exc),
+            "timestamp": _dt.now().isoformat(timespec="seconds"),
+        }
+
+    def consume_degradation_alert(self) -> dict | None:
+        """Return degradation info and clear it so the caller shows the alert once.
+
+        Returns a dict with keys ``cause`` (str) and ``timestamp`` (ISO str),
+        or ``None`` if no hard degradation occurred in this session.
+        """
+        info = self._degradation_info
+        self._degradation_info = None
+        return info
 
     # ============================================================
     # SKU Operations
     # ============================================================
-    
+
     def read_skus(self) -> List[SKU]:
         """Read all SKUs from storage"""
         if self.is_sqlite_mode():

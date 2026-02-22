@@ -48,8 +48,9 @@ class CSVLayer:
         "audit_log.csv": ["timestamp", "operation", "sku", "details", "user"],
         "lots.csv": ["lot_id", "sku", "expiry_date", "qty_on_hand", "receipt_id", "receipt_date"],
         "promo_calendar.csv": ["sku", "start_date", "end_date", "store_id", "promo_flag"],
-        "kpi_daily.csv": ["sku", "date", "oos_rate", "lost_sales_est", "wmape", "bias", 
-                          "fill_rate", "otif_rate", "avg_delay_days", "n_periods", "lookback_days", "mode"],
+        "kpi_daily.csv": ["sku", "date", "oos_rate", "lost_sales_est", "wmape", "bias",
+                          "fill_rate", "otif_rate", "avg_delay_days", "n_periods", "lookback_days", "mode",
+                          "waste_rate"],
         "event_uplift_rules.csv": ["delivery_date", "reason", "strength", "scope_type", "scope_key", "notes"],
     }
     
@@ -1081,6 +1082,8 @@ class CSVLayer:
                 "n_periods": str(snapshot.get("n_periods", "")),
                 "lookback_days": str(snapshot.get("lookback_days", "")),
                 "mode": snapshot.get("mode", ""),
+                # waste_rate: always numeric (0.0 default → never None in cache)
+                "waste_rate": str(snapshot.get("waste_rate") if snapshot.get("waste_rate") is not None else 0.0),
             })
         
         self._write_csv("kpi_daily.csv", rows)
@@ -1099,12 +1102,13 @@ class CSVLayer:
         otif_rate: Optional[float] = None,
         avg_delay_days: Optional[float] = None,
         n_periods: Optional[int] = None,
+        waste_rate: Optional[float] = None,
     ):
         """
         Upsert a single KPI snapshot (update if exists, insert if new).
-        
+
         Uniqueness key: (sku, date, lookback_days, mode)
-        
+
         Args:
             sku: SKU code
             date_str: Snapshot date (ISO format)
@@ -1112,13 +1116,14 @@ class CSVLayer:
             mode: OOS detection mode ("strict" or "relaxed")
             oos_rate: OOS rate (0.0-1.0)
             lost_sales_est: Lost sales estimate (units)
-            wmape: WMAPE percentage
+            wmape: WMAPE as percentage [0.0-100.0+] (NOT fraction)
             bias: Forecast bias
             fill_rate: Fill rate (0.0-1.0)
             otif_rate: OTIF rate (0.0-1.0)
             avg_delay_days: Average delay in days
             n_periods: Number of periods analyzed
-        
+            waste_rate: Waste rate fraction (0.0-1.0+); 0.0 when no waste (never None)
+
         Use for incremental daily updates.
         """
         # Read existing KPIs
@@ -1148,6 +1153,8 @@ class CSVLayer:
             "n_periods": str(n_periods) if n_periods is not None else "",
             "lookback_days": str(lookback_days),
             "mode": mode,
+            # waste_rate: always numeric; 0.0 when absent (never None in cache)
+            "waste_rate": str(waste_rate if waste_rate is not None else 0.0),
         }
         
         # Update or insert
@@ -1620,12 +1627,10 @@ class CSVLayer:
                     "description": "Modalità stima sigma_P: rolling (residui rolling), bootstrap (simulazione), fallback (proxy da z_t)"
                 }
             },
-            "dashboard": {
-                "stock_unit_price": {
-                    "value": 10,
-                    "description": "Prezzo unitario medio per calcolo valore stock"
-                }
-            },
+            # "dashboard" section intentionally has no monetary keys.
+            # Stock value (€) metrics have been removed from the dashboard.
+            # Add non-monetary dashboard settings here if needed in future.
+            "dashboard": {},
             "promo_uplift": {
                 "min_uplift": {
                     "value": 1.0,
@@ -1926,10 +1931,10 @@ class CSVLayer:
                     "description": "OOS rate threshold to trigger CSL increase (e.g., 0.05 = 5% stockout rate)"
                 },
                 "wmape_threshold": {
-                    "value": 0.60,
+                    "value": 60.0,
                     "min": 0.0,
-                    "max": 2.0,
-                    "description": "WMAPE threshold for forecast reliability check (blocks CSL changes if exceeded)"
+                    "max": 200.0,
+                    "description": "WMAPE threshold for forecast reliability check [0-100 percent scale] (blocks CSL changes if exceeded, e.g. 60.0 = 60%)"
                 },
                 "waste_rate_threshold": {
                     "value": 0.10,

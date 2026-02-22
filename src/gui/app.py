@@ -430,25 +430,17 @@ class DesktopOrderApp:
         self.kpi_total_skus_label = ttk.Label(kpi_row1, text="Totale SKU: -", font=("Helvetica", 11, "bold"))
         self.kpi_total_skus_label.pack(side="left", padx=20)
         
-        # Total Stock Value
-        self.kpi_stock_value_label = ttk.Label(kpi_row1, text="Valore Stock: -", font=("Helvetica", 11, "bold"))
-        self.kpi_stock_value_label.pack(side="left", padx=20)
-        
         # Avg Days Cover
         self.kpi_days_cover_label = ttk.Label(kpi_row1, text="Giorni Copertura Medi: -", font=("Helvetica", 11, "bold"))
         self.kpi_days_cover_label.pack(side="left", padx=20)
         
-        # Row 2: Alerts and Turnover
+        # Row 2: Alerts
         kpi_row2 = ttk.Frame(kpi_frame)
         kpi_row2.pack(side="top", fill="x", pady=5)
         
         # Low Stock Alerts
         self.kpi_low_stock_label = ttk.Label(kpi_row2, text="⚠️ Avvisi Stock Basso: -", font=("Helvetica", 11, "bold"), foreground="red")
         self.kpi_low_stock_label.pack(side="left", padx=20)
-        
-        # Turnover Ratio
-        self.kpi_turnover_label = ttk.Label(kpi_row2, text="Indice di Rotazione: -", font=("Helvetica", 11, "bold"))
-        self.kpi_turnover_label.pack(side="left", padx=20)
         
         # === REORDER KPI ANALYSIS ===
         reorder_kpi_frame = ttk.LabelFrame(main_frame, text="Analisi KPI Riordino", padding=10)
@@ -672,13 +664,6 @@ class DesktopOrderApp:
             total_skus = len(sku_ids)
             self.kpi_total_skus_label.config(text=f"Totale SKU: {total_skus}")
             
-            # 2. Total Stock Value (from settings)
-            settings = self.csv_layer.read_settings()
-            unit_price = settings.get("dashboard", {}).get("stock_unit_price", {}).get("value", 10)
-            total_stock_units = sum(stock.on_hand for stock in stocks.values())
-            total_stock_value = total_stock_units * unit_price
-            self.kpi_stock_value_label.config(text=f"Valore Stock: €{total_stock_value:,.0f}")
-            
             # 3. Average Days Cover
             total_days_cover = 0
             skus_with_sales = 0
@@ -704,14 +689,6 @@ class DesktopOrderApp:
                     low_stock_count += 1
             
             self.kpi_low_stock_label.config(text=f"⚠️ Avvisi Stock Basso: {low_stock_count}")
-            
-            # 5. Turnover Ratio (Total Sales Last 30 Days / Avg Stock)
-            thirty_days_ago = today - timedelta(days=30)
-            recent_sales = [sr for sr in sales_records if sr.date >= thirty_days_ago]
-            total_recent_sales = sum(sr.qty_sold for sr in recent_sales)
-            avg_stock = total_stock_units  # Simplified; ideally average over period
-            turnover_ratio = total_recent_sales / avg_stock if avg_stock > 0 else 0
-            self.kpi_turnover_label.config(text=f"Indice di Rotazione: {turnover_ratio:.2f}")
             
             # === CHARTS ===
             
@@ -906,6 +883,7 @@ class DesktopOrderApp:
                 estimate_lost_sales,
                 compute_forecast_accuracy,
                 compute_supplier_proxy_kpi,
+                compute_waste_rate,
             )
             
             # Get parameters
@@ -933,6 +911,7 @@ class DesktopOrderApp:
                     lost_sales_result = estimate_lost_sales(sku, lookback_days, mode, self.csv_layer, today, method="forecast")
                     accuracy_result = compute_forecast_accuracy(sku, lookback_days, mode, self.csv_layer, today)
                     supplier_result = compute_supplier_proxy_kpi(sku, lookback_days, self.csv_layer, today)
+                    waste_rate_val, _ = compute_waste_rate(sku, lookback_days, self.csv_layer, today)
                     
                     # Build snapshot
                     snapshot = {
@@ -948,6 +927,8 @@ class DesktopOrderApp:
                         "n_periods": oos_result.get("n_periods"),
                         "lookback_days": lookback_days,
                         "mode": mode,
+                        # waste_rate: always numeric; 0.0 when no waste (compute_waste_rate guarantee)
+                        "waste_rate": waste_rate_val,
                     }
                     
                     kpi_snapshots.append(snapshot)
@@ -1149,7 +1130,8 @@ class DesktopOrderApp:
             delta = f"{decision.delta_csl:+.3f}" if decision.delta_csl != 0 else "0.000"
             
             oos = f"{decision.oos_rate * 100:.1f}%" if decision.oos_rate is not None else "n/a"
-            wmape = f"{decision.wmape * 100:.1f}%" if decision.wmape is not None else "n/a"
+            # wmape is stored in [0,100] percent scale — display directly without re-multiplying
+            wmape = f"{decision.wmape:.1f}%" if decision.wmape is not None else "n/a"
             waste = f"{decision.waste_rate * 100:.1f}%" if decision.waste_rate is not None else "n/a"
             
             # Translate action
@@ -7592,7 +7574,7 @@ class DesktopOrderApp:
                         logging.warning(f"Failed to generate proposal for SKU {sku_obj.sku} during export: {e}")
             
             # Live KPI calculation for each SKU
-            from src.analytics.kpi import compute_oos_kpi, compute_forecast_accuracy, compute_supplier_proxy_kpi
+            from src.analytics.kpi import compute_oos_kpi, compute_forecast_accuracy, compute_supplier_proxy_kpi, compute_waste_rate
             
             kpi_lookback_days = settings.get("kpi_metrics", {}).get("oos_lookback_days", {}).get("value", 90)
             oos_mode = settings.get("kpi_metrics", {}).get("oos_detection_mode", {}).get("value", "strict")
@@ -7627,8 +7609,13 @@ class DesktopOrderApp:
                     asof_date=date.today(),
                 )
                 
-                # Waste rate (from analytics if available, else 0)
-                waste_rate = 0.0  # TODO: integrate waste_rate calculation if available
+                # Waste rate via canonical compute_waste_rate (always float, never None)
+                waste_rate_val, _ = compute_waste_rate(
+                    sku=sku,
+                    lookback_days=kpi_lookback_days,
+                    csv_layer=self.csv_layer,
+                    asof_date=date.today(),
+                )
                 
                 kpi_map[sku] = {
                     "oos_rate": oos_kpi.get("oos_rate", 0.0),
@@ -7638,7 +7625,7 @@ class DesktopOrderApp:
                     "otif": supplier_kpi.get("otif", 100.0),
                     "qty_unfulfilled": supplier_kpi.get("qty_unfulfilled", 0),
                     "n_unfulfilled_events": supplier_kpi.get("n_unfulfilled_events", 0),
-                    "waste_rate": waste_rate,
+                    "waste_rate": waste_rate_val,
                 }
             
             # Write CSV
@@ -8362,7 +8349,33 @@ class DesktopOrderApp:
         self._refresh_smart_exceptions()  # Populate smart exception filters on startup
         self._refresh_promo_tab()
         self._refresh_settings_tab()
-    
+        self._check_sqlite_degradation()
+
+    def _check_sqlite_degradation(self):
+        """Show a one-time GUI warning if the SQLite backend hard-degraded to CSV.
+
+        Consumes the degradation info from the adapter so the dialog appears
+        exactly once per session regardless of how many times _refresh_all runs.
+        """
+        if not hasattr(self, "csv_layer"):
+            return
+        info = self.csv_layer.consume_degradation_alert()
+        if not info:
+            return
+        messagebox.showwarning(
+            "⚠ Database corrotto — Modalità CSV attiva",
+            f"È stato rilevato un errore critico nel database SQLite.\n\n"
+            f"Causa: {info['cause']}\n"
+            f"Ora: {info['timestamp']}\n\n"
+            f"L'applicazione continuerà in modalità CSV per questa sessione.\n"
+            f"I dati rimarranno leggibili e modificabili su CSV.\n\n"
+            f"Al prossimo riavvio, esegui la diagnostica:\n"
+            f"  python src/db.py recover\n\n"
+            f"per ottenere le istruzioni di ripristino.",
+        )
+
+
+
     def _build_promo_tab(self):
         """Build Promo Calendar tab (add/edit/remove promotional windows)."""
         main_frame = ttk.Frame(self.promo_tab)
@@ -9738,17 +9751,8 @@ class DesktopOrderApp:
         ttk.Checkbutton(dashboard_auto_frame, text="✓ Auto-applica tutti i parametri di questa sezione ai nuovi SKU", variable=dashboard_auto_var).pack(anchor="w")
         self.settings_section_widgets["dashboard"] = dashboard_auto_var
         
-        # Parameters
-        dashboard_params = [
-            {
-                "key": "stock_unit_price",
-                "label": "Prezzo Unitario Stock (€)",
-                "description": "Prezzo medio unitario per calcolo valore stock in Dashboard",
-                "type": "int",
-                "min": 1,
-                "max": 10000
-            }
-        ]
+        # Parameters (no monetary keys — stock value removed from dashboard)
+        dashboard_params: list = []
         
         self._create_param_rows(scrollable_frame, dashboard_params, "dashboard")
 
@@ -10204,10 +10208,10 @@ class DesktopOrderApp:
             {
                 "key": "cl_wmape_threshold",
                 "label": "Soglia WMAPE (Reliability)",
-                "description": "Soglia WMAPE max per forecast affidabile (blocca CSL change se superata)",
+                "description": "Soglia WMAPE blocca modifiche CSL se superata [scala 0-100, es. 60 = 60%]",
                 "type": "float",
                 "min": 0.0,
-                "max": 2.0
+                "max": 200.0
             },
             {
                 "key": "cl_waste_rate_threshold",
@@ -10505,7 +10509,6 @@ class DesktopOrderApp:
                 "mc_show_comparison": ("monte_carlo", "show_comparison"),
                 "expiry_critical_threshold_days": ("expiry_alerts", "critical_threshold_days"),
                 "expiry_warning_threshold_days": ("expiry_alerts", "warning_threshold_days"),
-                "stock_unit_price": ("dashboard", "stock_unit_price"),
                 "event_uplift_enabled": ("event_uplift", "enabled"),
                 "event_default_quantile": ("event_uplift", "default_quantile"),
                 "event_min_factor": ("event_uplift", "min_factor"),
@@ -10613,7 +10616,6 @@ class DesktopOrderApp:
                 "mc_show_comparison": ("monte_carlo", "show_comparison"),
                 "expiry_critical_threshold_days": ("expiry_alerts", "critical_threshold_days"),
                 "expiry_warning_threshold_days": ("expiry_alerts", "warning_threshold_days"),
-                "stock_unit_price": ("dashboard", "stock_unit_price"),
                 "event_uplift_enabled": ("event_uplift", "enabled"),
                 "event_default_quantile": ("event_uplift", "default_quantile"),
                 "event_min_factor": ("event_uplift", "min_factor"),

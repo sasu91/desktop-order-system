@@ -191,11 +191,6 @@
       "description": "Override parametri per categoria demand_variability"
     }
   },
-  "dashboard": {
-    "stock_unit_price": {
-      "value": 10,
-      "description": "Prezzo unitario medio per calcolo valore stock"
-    }
-  },
+  "dashboard": {},
   "storage_backend": "sqlite"
 }
