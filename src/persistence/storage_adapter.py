@@ -36,7 +36,7 @@ from config import (
 
 # Import SQLite components (conditional)
 try:
-    from ..db import open_connection, transaction, apply_migrations
+    from ..db import open_connection, transaction, apply_migrations, automatic_backup_on_startup
     from ..repositories import RepositoryFactory
     SQLITE_AVAILABLE = True
 except ImportError as e:
@@ -100,6 +100,8 @@ class StorageAdapter(CSVLayer):
                 self.backend = 'csv'
             else:
                 try:
+                    # Backup before migrations so the pre-migration state is always recoverable
+                    automatic_backup_on_startup(max_backups=10)
                     self.conn = open_connection(DATABASE_PATH)
                     apply_migrations(self.conn)  # apply any pending schema migrations
                     self.repos = RepositoryFactory(self.conn)
@@ -121,7 +123,62 @@ class StorageAdapter(CSVLayer):
             self.conn.close()
             self.conn = None
             self.repos = None
-    
+
+    # ------------------------------------------------------------------ #
+    # Connection health helpers                                           #
+    # ------------------------------------------------------------------ #
+
+    _HARD_ERROR_KEYWORDS = (
+        "malformed",
+        "disk image",
+        "disk i/o error",
+        "file is not a database",
+        "unable to open database file",
+        "database is corrupted",
+    )
+
+    def _is_hard_sqlite_error(self, exc: Exception) -> bool:
+        """Return True for SQLite errors that indicate permanent DB corruption/inaccessibility.
+
+        These errors make the open connection unreliable for all future
+        operations and warrant a permanent session-level downgrade to CSV.
+        Transient errors (lock timeout, schema mismatch, etc.) return False
+        so that only the individual operation falls back.
+        """
+        import sqlite3 as _sqlite3
+        msg = str(exc).lower()
+        # OperationalError covers lock timeouts, "table not found", etc. — treat
+        # as transient UNLESS the message indicates physical corruption.
+        if isinstance(exc, _sqlite3.OperationalError):
+            return any(kw in msg for kw in self._HARD_ERROR_KEYWORDS)
+        # Any other DatabaseError subclass (DataError, InternalError, etc.) is hard.
+        return isinstance(exc, _sqlite3.DatabaseError)
+
+    def _sqlite_degrade(self, exc: Exception) -> None:
+        """Permanently downgrade this session to CSV if *exc* is a hard SQLite error.
+
+        After calling this method the backend is 'csv' for the remainder of the
+        session — all subsequent is_sqlite_mode() checks return False, so no
+        further SQLite I/O is attempted.  This prevents the split-brain scenario
+        where reads fall back to CSV while writes still go to SQLite.
+        """
+        if not self._is_hard_sqlite_error(exc):
+            return  # transient error; let the caller do a per-operation fallback
+        if self.backend != 'sqlite':
+            return  # already degraded
+        print(
+            f"🔴 SQLite hard error — downgrading to CSV for this session. "
+            f"Re-start the application once the database is repaired. Cause: {exc}"
+        )
+        try:
+            if self.conn:
+                self.conn.close()
+        except Exception:
+            pass
+        self.conn = None
+        self.repos = None
+        self.backend = 'csv'
+
     # ============================================================
     # SKU Operations
     # ============================================================
@@ -135,6 +192,7 @@ class StorageAdapter(CSVLayer):
                 skus_dict = self.repos.skus().list()
                 return [self._dict_to_sku(s) for s in skus_dict]
             except Exception as e:
+                self._sqlite_degrade(e)
                 print(f"⚠ SQLite read_skus failed, falling back to CSV: {e}")
                 return self.csv_layer.read_skus()
         else:
@@ -150,6 +208,7 @@ class StorageAdapter(CSVLayer):
                 sku_dict = self._sku_to_dict(sku)
                 self.repos.skus().upsert(sku_dict)
             except Exception as e:
+                self._sqlite_degrade(e)
                 print(f"⚠ SQLite write_sku failed, falling back to CSV: {e}")
                 self.csv_layer.write_sku(sku)
         else:
@@ -164,6 +223,7 @@ class StorageAdapter(CSVLayer):
                 skus = self.repos.skus().list()
                 return [s['sku'] for s in skus]
             except Exception as e:
+                self._sqlite_degrade(e)
                 print(f"⚠ SQLite get_all_sku_ids failed, falling back to CSV: {e}")
                 return self.csv_layer.get_all_sku_ids()
         else:
@@ -176,6 +236,7 @@ class StorageAdapter(CSVLayer):
             try:
                 return self.repos.skus().exists(sku_id)
             except Exception as e:
+                self._sqlite_degrade(e)
                 print(f"⚠ SQLite sku_exists failed, falling back to CSV: {e}")
                 return self.csv_layer.sku_exists(sku_id)
         else:
@@ -202,6 +263,7 @@ class StorageAdapter(CSVLayer):
                 self.repos.skus().upsert(sku_dict)
                 return True
             except Exception as e:
+                self._sqlite_degrade(e)
                 print(f"⚠ SQLite update_sku failed, falling back to CSV: {e}")
                 return self.csv_layer.update_sku_object(old_sku_id, sku_object)
         else:
@@ -308,6 +370,7 @@ class StorageAdapter(CSVLayer):
                 self.repos.skus().delete(sku_id)
                 return True
             except Exception as e:
+                self._sqlite_degrade(e)
                 print(f"⚠ SQLite delete_sku failed, falling back to CSV: {e}")
                 return self.csv_layer.delete_sku(sku_id)
         else:
@@ -330,6 +393,7 @@ class StorageAdapter(CSVLayer):
                 txns_dict = self.repos.ledger().list_transactions(limit=10000)
                 return [self._dict_to_transaction(t) for t in txns_dict]
             except Exception as e:
+                self._sqlite_degrade(e)
                 print(f"⚠ SQLite read_transactions failed, falling back to CSV: {e}")
                 return self.csv_layer.read_transactions()
         else:
@@ -349,6 +413,7 @@ class StorageAdapter(CSVLayer):
                     note=txn.note or ''
                 )
             except Exception as e:
+                self._sqlite_degrade(e)
                 print(f"⚠ SQLite write_transaction failed, falling back to CSV: {e}")
                 self.csv_layer.write_transaction(txn)
         else:
@@ -371,6 +436,7 @@ class StorageAdapter(CSVLayer):
                     })
                 self.repos.ledger().append_batch(batch)
             except Exception as e:
+                self._sqlite_degrade(e)
                 print(f"⚠ SQLite write_transactions_batch failed, falling back to CSV: {e}")
                 self.csv_layer.write_transactions_batch(txns)
         else:
@@ -424,6 +490,7 @@ class StorageAdapter(CSVLayer):
                         self.repos.ledger().delete_by_id(row['transaction_id'])
 
             except Exception as e:
+                self._sqlite_degrade(e)
                 print(f"⚠ SQLite overwrite_transactions failed, falling back to CSV: {e}")
                 self.csv_layer.overwrite_transactions(txns)
         else:
@@ -471,6 +538,7 @@ class StorageAdapter(CSVLayer):
                 """, (sale.date.isoformat(), sale.sku, sale.qty_sold, sale.promo_flag))
                 self.conn.commit()
             except Exception as e:
+                self._sqlite_degrade(e)
                 print(f"⚠ SQLite write_sales_record failed, falling back to CSV: {e}")
                 self.csv_layer.write_sales_record(sale)
         else:

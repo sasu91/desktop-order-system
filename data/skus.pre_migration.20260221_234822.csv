@@ -1,0 +1,3 @@
+sku,description,ean,moq,pack_size,lead_time_days,review_period,safety_stock,shelf_life_days,min_shelf_life_days,waste_penalty_mode,waste_penalty_factor,waste_risk_threshold,max_stock,reorder_point,demand_variability,category,department,oos_boost_percent,oos_detection_mode,oos_popup_preference,forecast_method,mc_distribution,mc_n_simulations,mc_random_seed,mc_output_stat,mc_output_percentile,mc_horizon_mode,mc_horizon_days,in_assortment,target_csl
+SKU_A,Fresh Yogurt 150g,8000000000001,12,6,3,7,5,14,5,soft,0.3,15.0,200,30,HIGH,,,10.0,strict,ask,simple,,0,0,,0,,0,true,
+SKU_B,Dry Pasta 500g,8000000000002,10,10,7,7,10,0,0,,0.0,0.0,500,60,STABLE,,,0.0,,ask,simple,,0,0,,0,,0,true,
