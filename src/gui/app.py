@@ -1644,7 +1644,7 @@ class DesktopOrderApp:
 
         legend_row = ttk.Frame(chart_lf)
         legend_row.pack(fill="x", pady=(2, 0))
-        for dot_color, dot_label in [("#94a3b8", "Storico"), ("#3b82f6", "Proj. Stock"), ("#f87171", "Safety")]:
+        for dot_color, dot_label in [("#94a3b8", "Storico"), ("#3b82f6", "Proj. Stock"), ("#f87171", "Safety"), ("#f59e0b", "Ric. confermati")]:
             _dc = tk.Canvas(legend_row, width=10, height=10, highlightthickness=0)
             _dc.create_oval(1, 1, 9, 9, fill=dot_color, outline="")
             _dc.pack(side="left", padx=(4, 1))
@@ -1754,6 +1754,20 @@ class DesktopOrderApp:
         # Future: project day-by-day until receipt_date + 5 extra days
         receipt_offset = (receipt_date - today).days if receipt_date else 14
         future_end = max(receipt_offset + 5, 10)
+
+        # Load already-confirmed pending pipeline orders for this SKU
+        # These are ORDER events in the ledger not yet received
+        pipeline_by_day: dict[int, int] = {}
+        try:
+            pipeline_txns = self.csv_layer.read_transactions()
+            pipeline_pending = StockCalculator.on_order_by_date(proposal.sku, pipeline_txns)
+            for p_receipt_date, p_qty in pipeline_pending.items():
+                p_offset = (p_receipt_date - today).days
+                if 0 < p_offset <= future_end:
+                    pipeline_by_day[p_offset] = pipeline_by_day.get(p_offset, 0) + p_qty
+        except Exception:
+            pass  # Never crash the chart
+
         future_x: list[int] = []
         future_stock: list[float] = []
         for d in range(0, future_end + 1):
@@ -1761,6 +1775,10 @@ class DesktopOrderApp:
                 s = float(proposal.current_on_hand)
             else:
                 s = future_stock[-1] - daily_avg
+                # Add already-confirmed pipeline receipts (ORDER events in ledger)
+                if d in pipeline_by_day:
+                    s += pipeline_by_day[d]
+                # Add current proposal's receipt (not yet in ledger)
                 if receipt_date and d == receipt_offset and proposed_qty > 0:
                     s += proposed_qty
                 s = max(s, 0.0)
@@ -1775,7 +1793,13 @@ class DesktopOrderApp:
         # Today marker
         ax.axvline(x=0, color="#1e293b", linewidth=0.8, linestyle=":", alpha=0.6, zorder=4)
 
-        # Receipt date marker
+        # Pipeline order markers (already confirmed, orange)
+        for p_day in sorted(pipeline_by_day):
+            if 0 < p_day <= future_end:
+                ax.axvline(x=p_day, color="#f59e0b", linewidth=0.8,
+                           linestyle=":", alpha=0.8, zorder=4)
+
+        # Receipt date marker (current proposal, green)
         if receipt_date and 0 < receipt_offset <= future_end:
             ax.axvline(x=receipt_offset, color="#10b981", linewidth=0.8,
                        linestyle=":", alpha=0.7, zorder=4)
@@ -2189,9 +2213,21 @@ class DesktopOrderApp:
         details.append(f"On Order: {to_colli(proposal.current_on_order, pack_size)}")
         if proposal.unfulfilled_qty > 0:
             details.append(f"Unfulfilled (backorder): {to_colli(proposal.unfulfilled_qty, pack_size)}")
-        ip_formula = "IP = usable_stock + on_order - unfulfilled" if proposal.usable_stock < proposal.current_on_hand else "IP = on_hand + on_order - unfulfilled"
-        details.append(ip_formula)
-        details.append(f"IP = {to_colli(proposal.inventory_position, pack_size)}")
+        # Detect if calendar-aware projected IP was used (IP ≠ simple on_hand + on_order)
+        base_qty = proposal.usable_stock if proposal.usable_stock < proposal.current_on_hand else proposal.current_on_hand
+        traditional_ip = base_qty + proposal.current_on_order - proposal.unfulfilled_qty
+        if proposal.receipt_date and proposal.inventory_position != traditional_ip:
+            details.append("(modalità proiettata al ricevimento)")
+            days_to_receipt = (proposal.receipt_date - date.today()).days
+            forecast_consumed = int(proposal.daily_sales_avg * days_to_receipt)
+            pipeline_receipts = proposal.current_on_order - max(0, traditional_ip - proposal.inventory_position - forecast_consumed)
+            details.append(f"  - Vendite previste ({days_to_receipt}gg): -{forecast_consumed} pz")
+            details.append(f"  - On Order in arrivo prima di ricevimento incluso nell'IP")
+            details.append(f"IP (proiettato) = {to_colli(proposal.inventory_position, pack_size)}")
+        else:
+            ip_formula = "IP = usable_stock + on_order - unfulfilled" if proposal.usable_stock < proposal.current_on_hand else "IP = on_hand + on_order - unfulfilled"
+            details.append(ip_formula)
+            details.append(f"IP = {to_colli(proposal.inventory_position, pack_size)}")
         if proposal.shelf_life_penalty_applied:
             details.append(f"⚠️ PENALTY SHELF LIFE: {proposal.shelf_life_penalty_message}")
         details.append("")
@@ -4338,7 +4374,7 @@ class DesktopOrderApp:
         # Conferma
         confirm = messagebox.askyesno(
             "Conferma Ricevimento",
-            f"Confermare ricevimento{date_label} per {len(items)} articolo/i?\n"
+            f"Confermare ricevimento{date_label} per {len(visible_edits)} articolo/i?\n"
             f"Documento: {document_id}\n\n"
             f"Questa azione creerà eventi RECEIPT nel ledger.",
         )
