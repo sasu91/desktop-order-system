@@ -3888,11 +3888,30 @@ class DesktopOrderApp:
         )
         pending_search_ac.pack(side="left", padx=(2, 0))
         self.pending_search_var.trace("w", lambda *_: self._filter_pending_orders())
-        ttk.Label(p_toolbar, text="Cerca SKU o Descrizione…", foreground="gray", font=("Helvetica", 9)).pack(side="left")
+
+        # ── Date filter (left side of toolbar) ──────────────────────────────
+        date_filter_frame = ttk.Frame(p_toolbar)
+        date_filter_frame.pack(side="left", fill="x", expand=True)
+        ttk.Label(date_filter_frame, text="📅  Data Prevista:", font=("Helvetica", 9, "bold")).pack(side="left", padx=(0, 4))
+        self.pending_date_filter_var = tk.StringVar(value="— Tutte le date —")
+        self.pending_date_combo = ttk.Combobox(
+            date_filter_frame,
+            textvariable=self.pending_date_filter_var,
+            state="readonly",
+            width=16,
+        )
+        self.pending_date_combo["values"] = ["— Tutte le date —"]
+        self.pending_date_combo.pack(side="left", padx=(0, 6))
+        self.pending_date_filter_var.trace("w", lambda *_: self._filter_pending_orders())
+        self.pending_count_label = ttk.Label(
+            date_filter_frame, text="", foreground="gray", font=("Helvetica", 9)
+        )
+        self.pending_count_label.pack(side="left")
 
         # Pending qty edits dict
         self.pending_qty_edits = {}
         self.pending_expiry_edits = {}  # Per-row expiry dates for has_expiry_label SKUs
+        self._all_pending_item_ids = []  # All item IDs – kept for re-attach on filter change
 
         # Treeview + scrollbar
         p_tv_frame = ttk.Frame(pending_card)
@@ -4020,19 +4039,42 @@ class DesktopOrderApp:
         self._refresh_receiving_history()
     
     def _filter_pending_orders(self):
-        """Filtra ordini in sospeso per SKU o descrizione."""
+        """Filtra ordini in sospeso per data prevista e/o SKU/descrizione."""
         search_text = self.pending_search_var.get().strip().lower()
-        
+        active_date_var = getattr(self, "pending_date_filter_var", None)
+        active_date = active_date_var.get() if active_date_var else "— Tutte le date —"
+        filter_by_date = bool(active_date) and active_date != "— Tutte le date —"
+
+        # Re-attach every known item first so we evaluate the full set
+        for item_id in getattr(self, "_all_pending_item_ids", []):
+            try:
+                self.pending_treeview.reattach(item_id, "", "end")
+            except tk.TclError:
+                pass
+
+        visible_count = 0
         for item_id in self.pending_treeview.get_children():
             values = self.pending_treeview.item(item_id)["values"]
             sku = str(values[1]).lower()
             description = str(values[2]).lower()
-            
-            # Mostra se match o se ricerca vuota
-            if not search_text or search_text in sku or search_text in description:
-                self.pending_treeview.reattach(item_id, "", "end")
+            item_date = str(values[7]) if len(values) > 7 else ""
+
+            date_match = (not filter_by_date) or (item_date == active_date)
+            text_match = (not search_text) or (search_text in sku or search_text in description)
+
+            if date_match and text_match:
+                visible_count += 1
             else:
                 self.pending_treeview.detach(item_id)
+
+        # Update count label
+        count_label = getattr(self, "pending_count_label", None)
+        if count_label:
+            total = len(getattr(self, "_all_pending_item_ids", []))
+            if filter_by_date:
+                count_label.config(text=f"{visible_count} ordine/i per {active_date}")
+            else:
+                count_label.config(text=f"{total} ordine/i in sospeso")
     
     def _refresh_pending_orders(self):
         """Calculate and display pending orders at per-order granularity."""
@@ -4096,7 +4138,27 @@ class DesktopOrderApp:
             )
             # Pre-populate edits dict with full ordered quantity (pezzi)
             self.pending_qty_edits[item_id] = colli_ordinati * pack_size
-    
+
+        # Store all item IDs so _filter_pending_orders can re-attach on filter change
+        self._all_pending_item_ids = list(self.pending_treeview.get_children())
+
+        # Populate date-filter combobox with distinct receipt_dates from pending rows
+        receipt_dates_in_tree = sorted({
+            str(self.pending_treeview.item(iid)["values"][7])
+            for iid in self._all_pending_item_ids
+            if self.pending_treeview.item(iid)["values"][7]
+        })
+        options = ["— Tutte le date —"] + receipt_dates_in_tree
+        combo = getattr(self, "pending_date_combo", None)
+        if combo is not None:
+            combo["values"] = options
+            current_sel = self.pending_date_filter_var.get()
+            if current_sel not in options:
+                self.pending_date_filter_var.set("— Tutte le date —")
+
+        # Apply current filter (date + text search)
+        self._filter_pending_orders()
+
     def _on_pending_cell_click(self, event):
         """Edita quantità ricevuta (inline) o data scadenza (popup) con click singolo."""
         region = self.pending_treeview.identify("region", event.x, event.y)
@@ -4243,11 +4305,22 @@ class DesktopOrderApp:
             entry.bind("<Escape>", lambda e: entry.destroy())
 
     def _close_receipt_bulk(self):
-        """Chiudi ricevimento per tutte le quantità modificate con tracciabilità documento."""
-        if not self.pending_qty_edits:
+        """Chiudi ricevimento per le righe visibili (filtrate per data prevista)."""
+        # Scope to visible (attached) rows only — respects the date filter
+        visible_item_ids = set(self.pending_treeview.get_children())
+        active_date_var = getattr(self, "pending_date_filter_var", None)
+        active_date = active_date_var.get() if active_date_var else "— Tutte le date —"
+        filter_by_date = bool(active_date) and active_date != "— Tutte le date —"
+        date_label = f" per {active_date}" if filter_by_date else ""
+
+        visible_edits = {
+            iid: v for iid, v in self.pending_qty_edits.items()
+            if iid in visible_item_ids and v > 0
+        }
+        if not visible_edits:
             messagebox.showwarning(
                 "Nessuna Modifica",
-                "Nessuna quantità ricevuta modificata.\n\nModifica le quantità nella tabella prima di confermare.",
+                f"Nessuna quantità da ricevere{date_label}.\n\nModifica le quantità nella tabella prima di confermare.",
             )
             return
         
@@ -4265,7 +4338,7 @@ class DesktopOrderApp:
         # Conferma
         confirm = messagebox.askyesno(
             "Conferma Ricevimento",
-            f"Confermare ricevimento per {len(self.pending_qty_edits)} SKU modificati?\n"
+            f"Confermare ricevimento{date_label} per {len(items)} articolo/i?\n"
             f"Documento: {document_id}\n\n"
             f"Questa azione creerà eventi RECEIPT nel ledger.",
         )
@@ -4274,22 +4347,21 @@ class DesktopOrderApp:
             return
         
         receipt_date_obj = date.today()
-        
-        # Prepara items per il nuovo metodo
+
+        # Build items from visible (date-filtered) rows only
         items = []
-        for item_id, new_qty_received in self.pending_qty_edits.items():
+        for item_id in visible_item_ids:
+            new_qty_received = self.pending_qty_edits.get(item_id, 0)
             if new_qty_received <= 0:
-                continue  # Skip se qty = 0
-            
+                continue
             values = self.pending_treeview.item(item_id)["values"]
             sku = values[1]
             expiry_date_for_item = self.pending_expiry_edits.get(item_id, "")
-            
             items.append({
                 "sku": sku,
                 "qty_received": new_qty_received,
                 "order_ids": [],  # FIFO allocation automatica
-                "expiry_date": expiry_date_for_item,  # Per-row expiry (only used for has_expiry_label SKUs)
+                "expiry_date": expiry_date_for_item,
             })
         
         if not items:
@@ -4380,6 +4452,12 @@ class DesktopOrderApp:
         """Clear history filter and refresh."""
         self.history_filter_sku_var.set("")
         self._refresh_receiving_history()
+
+    def _clear_pending_date_filter(self):
+        """Reset pending date filter to show all dates."""
+        if hasattr(self, "pending_date_filter_var"):
+            self.pending_date_filter_var.set("— Tutte le date —")
+        # _filter_pending_orders is triggered automatically via trace
     
     # === AUTOCOMPLETE CALLBACK METHODS ===
     
