@@ -8840,6 +8840,10 @@ class DesktopOrderApp:
     def _check_sqlite_degradation(self):
         """Show a one-time GUI warning if the SQLite backend hard-degraded to CSV.
 
+        If a healthy backup younger than 24 h is available the user is offered
+        an automatic restore.  On success the app is restarted; on failure or
+        refusal the existing CSV-fallback warning is shown.
+
         Consumes the degradation info from the adapter so the dialog appears
         exactly once per session regardless of how many times _refresh_all runs.
         """
@@ -8848,11 +8852,65 @@ class DesktopOrderApp:
         info = self.csv_layer.consume_degradation_alert()
         if not info:
             return
+
+        cause     = info.get("cause", "sconosciuta")
+        timestamp = info.get("timestamp", "")
+        candidates: list = info.get("recovery_candidates", [])
+
+        if candidates:
+            best = candidates[0]
+            age_h   = best["age_hours"]
+            size_mb = best["size_mb"]
+            ts      = best["timestamp_str"]
+            cat     = best["category"]
+            age_label = f"{age_h:.1f}h" if age_h >= 1 else f"{int(age_h * 60)}min"
+
+            do_restore = messagebox.askyesno(
+                "⚠ Database corrotto — Ripristino disponibile",
+                f"È stato rilevato un errore critico nel database SQLite.\n\n"
+                f"Causa: {cause}\n"
+                f"Ora: {timestamp}\n\n"
+                f"È stato trovato un backup valido ({cat}):\n"
+                f"  • Creato: {ts} ({age_label} fa)\n"
+                f"  • Dimensione: {size_mb} MB\n\n"
+                f"Vuoi ripristinare automaticamente il database adesso?\n"
+                f"(L'applicazione si chiuderà per riavviarsi pulita.)",
+                icon="warning",
+            )
+
+            if do_restore:
+                try:
+                    from ..db import restore_from_backup, DATABASE_PATH
+                except ImportError:
+                    from src.db import restore_from_backup
+                    from config import DATABASE_PATH
+
+                success, err_msg = restore_from_backup(best["path"], DATABASE_PATH)
+
+                if success:
+                    messagebox.showinfo(
+                        "✓ Ripristino completato",
+                        f"Il database è stato ripristinato dal backup del {ts}.\n\n"
+                        f"L'applicazione verrà chiusa.\n"
+                        f"Riavviala per tornare alla modalità SQLite.\n\n"
+                        f"(Se necessario, le migrazioni verranno applicate al prossimo avvio.)",
+                    )
+                    self.root.after(200, self.root.destroy)
+                    return
+                else:
+                    messagebox.showerror(
+                        "✗ Ripristino fallito",
+                        f"Il ripristino automatico non è riuscito:\n\n{err_msg}\n\n"
+                        f"L'applicazione continuerà in modalità CSV per questa sessione.",
+                    )
+                    # fall through to the CSV-mode informational below
+
+        # No candidates available (or restore failed / user refused): show CSV fallback info
         messagebox.showwarning(
             "⚠ Database corrotto — Modalità CSV attiva",
             f"È stato rilevato un errore critico nel database SQLite.\n\n"
-            f"Causa: {info['cause']}\n"
-            f"Ora: {info['timestamp']}\n\n"
+            f"Causa: {cause}\n"
+            f"Ora: {timestamp}\n\n"
             f"L'applicazione continuerà in modalità CSV per questa sessione.\n"
             f"I dati rimarranno leggibili e modificabili su CSV.\n\n"
             f"Al prossimo riavvio, esegui la diagnostica:\n"

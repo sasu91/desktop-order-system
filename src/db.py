@@ -717,6 +717,174 @@ def automatic_backup_on_startup(db_path: Path = DB_PATH, max_backups: int = 10) 
     return backup_path
 
 
+# ============================================================
+# Auto-Recovery: candidate discovery + restore
+# ============================================================
+
+def find_recovery_candidates(
+    db_path: Path = DB_PATH,
+    max_age_hours: float = 24,
+) -> List[Dict]:
+    """
+    Scan backup directories and return healthy candidates for auto-recovery.
+
+    Args:
+        db_path:        Path to the target database (used for size comparison).
+        max_age_hours:  Reject backups older than this many hours (default 24).
+
+    Returns:
+        List of dicts, newest first, each with keys:
+          - path (Path)         – absolute path to the .db backup file
+          - category (str)      – backup category ("startup", "pre_migration", …)
+          - timestamp_str (str) – human-readable creation time
+          - age_hours (float)   – age in hours at time of call
+          - size_mb (float)     – file size in MB
+          - integrity_ok (bool) – True if PRAGMA integrity_check passed
+    """
+    import time as _time
+
+    now = _time.time()
+    max_age_secs = max_age_hours * 3600
+
+    # Search categories ordered by preference (startup backups first)
+    search_order = ["startup", "pre_migration", "other", "manual"]
+    candidates: List[Dict] = []
+
+    for category in search_order:
+        cat_dir = BACKUP_DIR / category
+        if not cat_dir.exists():
+            continue
+        for backup_file in sorted(cat_dir.glob("*.db"), key=lambda f: f.stat().st_mtime, reverse=True):
+            try:
+                mtime = backup_file.stat().st_mtime
+                age_secs = now - mtime
+                if age_secs > max_age_secs:
+                    continue  # Too old
+                size_mb = backup_file.stat().st_size / (1024 * 1024)
+                ts_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+                age_hours = age_secs / 3600
+
+                # Quick integrity check on the candidate
+                integrity_ok = False
+                try:
+                    check_conn = sqlite3.connect(str(backup_file), timeout=5)
+                    try:
+                        cur = check_conn.execute("PRAGMA integrity_check")
+                        result = cur.fetchone()
+                        integrity_ok = bool(result and result[0] == "ok")
+                    finally:
+                        check_conn.close()
+                except Exception:
+                    integrity_ok = False
+
+                if integrity_ok:
+                    candidates.append({
+                        "path": backup_file,
+                        "category": category,
+                        "timestamp_str": ts_str,
+                        "age_hours": round(age_hours, 2),
+                        "size_mb": round(size_mb, 2),
+                        "integrity_ok": True,
+                    })
+            except Exception:
+                continue  # Skip unreadable files
+
+    # Sort overall by mtime (newest first) across all categories
+    candidates.sort(key=lambda c: c["path"].stat().st_mtime, reverse=True)
+    return candidates
+
+
+def restore_from_backup(
+    backup_path: Path,
+    db_path: Path = DB_PATH,
+) -> Tuple[bool, str]:
+    """
+    Restore the SQLite database from a known-good backup.
+
+    Steps:
+      1. Quarantine the corrupted file as <db_path>.corrupted_<timestamp>
+      2. Copy the backup over db_path
+      3. Open the restored DB and run PRAGMA integrity_check
+      4. Apply any pending schema migrations
+      5. Return (True, '') on full success; (False, reason) on any failure.
+         On failure the quarantined copy is moved back so no data is lost.
+
+    Args:
+        backup_path: Path to the healthy backup .db file.
+        db_path:     Path to the target database file to restore over.
+
+    Returns:
+        (success: bool, message: str)
+    """
+    if not backup_path.exists():
+        return False, f"Backup non trovato: {backup_path}"
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    quarantine_path = db_path.with_suffix(f".corrupted_{timestamp}")
+
+    # Step 1: quarantine corrupted file (if it still exists)
+    if db_path.exists():
+        try:
+            shutil.move(str(db_path), str(quarantine_path))
+        except Exception as exc:
+            return False, f"Impossibile isolare il database corrotto: {exc}"
+    else:
+        quarantine_path = None  # Nothing to quarantine
+
+    # Step 2: copy backup over target
+    try:
+        shutil.copy2(str(backup_path), str(db_path))
+        # Also restore WAL/SHM companions if present alongside the backup
+        for ext in ("-wal", "-shm"):
+            companion = Path(str(backup_path) + ext)
+            if companion.exists():
+                shutil.copy2(str(companion), str(db_path) + ext)
+    except Exception as exc:
+        # Roll back: restore quarantine
+        if quarantine_path and quarantine_path.exists():
+            try:
+                shutil.move(str(quarantine_path), str(db_path))
+            except Exception:
+                pass
+        return False, f"Errore durante la copia del backup: {exc}"
+
+    # Step 3: integrity check on restored file
+    try:
+        check_conn = sqlite3.connect(str(db_path), timeout=10)
+        try:
+            cur = check_conn.execute("PRAGMA integrity_check")
+            result_row = cur.fetchone()
+            if not result_row or result_row[0] != "ok":
+                raise RuntimeError(f"integrity_check fallito: {result_row}")
+        finally:
+            check_conn.close()
+    except Exception as exc:
+        # Integrity failed: roll back
+        if quarantine_path and quarantine_path.exists():
+            try:
+                shutil.move(str(quarantine_path), str(db_path))
+            except Exception:
+                pass
+        return False, f"Il backup ripristinato non supera integrity_check: {exc}"
+
+    # Step 4: apply pending migrations on restored DB (best-effort)
+    try:
+        conn = open_connection(db_path)
+        try:
+            apply_migrations(conn)
+        finally:
+            conn.close()
+    except Exception as exc:
+        # Migrations failed, but the file itself is healthy — the next full startup
+        # will re-attempt migrations.  Log the warning and still report success.
+        print(f"⚠ Restore successful but migrations had issues (will retry on restart): {exc}")
+
+    print(f"✓ Database ripristinato da: {backup_path.name}")
+    if quarantine_path:
+        print(f"  DB corrotto quarantenato in: {quarantine_path.name}")
+    return True, ""
+
+
 def calculate_file_checksum(filepath: Path) -> str:
     """Calculate SHA256 checksum of file for migration verification."""
     sha256 = hashlib.sha256()

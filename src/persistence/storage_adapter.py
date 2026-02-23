@@ -36,7 +36,7 @@ from config import (
 
 # Import SQLite components (conditional)
 try:
-    from ..db import open_connection, transaction, apply_migrations, automatic_backup_on_startup
+    from ..db import open_connection, transaction, apply_migrations, automatic_backup_on_startup, find_recovery_candidates
     from ..repositories import RepositoryFactory
     SQLITE_AVAILABLE = True
 except ImportError as e:
@@ -113,6 +113,17 @@ class StorageAdapter(CSVLayer):
                 except Exception as e:
                     print(f"⚠ SQLite init failed, falling back to CSV: {e}")
                     self.backend = 'csv'
+                    # Attempt to find recovery candidates so the GUI can offer restore
+                    try:
+                        candidates = find_recovery_candidates(max_age_hours=24) if SQLITE_AVAILABLE else []
+                    except Exception:
+                        candidates = []
+                    from datetime import datetime as _dt
+                    self._degradation_info = {
+                        "cause": str(e),
+                        "timestamp": _dt.now().isoformat(timespec="seconds"),
+                        "recovery_candidates": candidates,
+                    }
     
     def get_backend(self) -> str:
         """Get current backend ('csv' or 'sqlite')"""
@@ -183,11 +194,16 @@ class StorageAdapter(CSVLayer):
         self.conn = None
         self.repos = None
         self.backend = 'csv'
-        # Record degradation info for one-time GUI alert
+        # Record degradation info for one-time GUI alert (with recovery candidates)
+        try:
+            candidates = find_recovery_candidates(max_age_hours=24) if SQLITE_AVAILABLE else []
+        except Exception:
+            candidates = []
         from datetime import datetime as _dt
         self._degradation_info = {
             "cause": str(exc),
             "timestamp": _dt.now().isoformat(timespec="seconds"),
+            "recovery_candidates": candidates,
         }
 
     def consume_degradation_alert(self) -> dict | None:

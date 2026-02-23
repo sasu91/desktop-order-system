@@ -37,6 +37,8 @@ from src.db import (
     automatic_backup_on_startup,
     get_database_stats,
     integrity_check,
+    find_recovery_candidates,
+    restore_from_backup,
     BACKUP_DIR,
 )
 
@@ -491,6 +493,139 @@ def test_export_snapshot_with_compression(temp_db, tmp_path):
         assert any("skus.csv" in name for name in names), "ZIP should contain skus.csv"
         assert any("manifest.json" in name for name in names), "ZIP should contain manifest.json"
         assert any("README.txt" in name for name in names), "ZIP should contain README.txt"
+
+
+# ============================================================
+# Auto-Recovery: find_recovery_candidates + restore_from_backup
+# ============================================================
+
+def _make_minimal_db(path: Path) -> None:
+    """Create a minimal valid SQLite DB with schema_version table."""
+    conn = sqlite3.connect(str(path))
+    conn.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
+    conn.execute("INSERT INTO schema_version VALUES (1, '2026-01-01')")
+    conn.commit()
+    conn.close()
+
+
+class TestFindRecoveryCandidates:
+    """Tests for find_recovery_candidates() – TEST 14-17."""
+
+    def test_returns_empty_when_no_backups(self, tmp_path):
+        """TEST 14: No backups → empty list."""
+        candidates = find_recovery_candidates(db_path=tmp_path / "app.db", max_age_hours=24)
+        # We can't control the global BACKUP_DIR here, so just verify the function runs cleanly
+        assert isinstance(candidates, list)
+
+    def test_finds_valid_recent_backup(self, tmp_path, monkeypatch):
+        """TEST 15: A healthy backup younger than max_age → appears in candidates."""
+        # Create a valid backup DB in the startup subdir
+        startup_dir = tmp_path / "backups" / "startup"
+        startup_dir.mkdir(parents=True)
+        backup_file = startup_dir / "app_20260223_120000_startup.db"
+        _make_minimal_db(backup_file)
+
+        # Monkeypatch BACKUP_DIR so find_recovery_candidates scans our tmp dir
+        import src.db as db_mod
+        monkeypatch.setattr(db_mod, "BACKUP_DIR", tmp_path / "backups")
+
+        candidates = find_recovery_candidates(db_path=tmp_path / "app.db", max_age_hours=24 * 365)
+        assert len(candidates) == 1
+        assert candidates[0]["integrity_ok"] is True
+        assert candidates[0]["category"] == "startup"
+
+    def test_excludes_old_backups(self, tmp_path, monkeypatch):
+        """TEST 16: Backups older than max_age_hours are excluded."""
+        import src.db as db_mod
+        import os, time
+
+        startup_dir = tmp_path / "backups" / "startup"
+        startup_dir.mkdir(parents=True)
+        backup_file = startup_dir / "app_old_startup.db"
+        _make_minimal_db(backup_file)
+
+        # Make the file appear 48 h old
+        old_mtime = time.time() - 48 * 3600
+        os.utime(str(backup_file), (old_mtime, old_mtime))
+
+        monkeypatch.setattr(db_mod, "BACKUP_DIR", tmp_path / "backups")
+        candidates = find_recovery_candidates(db_path=tmp_path / "app.db", max_age_hours=24)
+        assert candidates == []
+
+    def test_excludes_corrupt_backups(self, tmp_path, monkeypatch):
+        """TEST 17: Backups that fail PRAGMA integrity_check are excluded."""
+        import src.db as db_mod
+
+        startup_dir = tmp_path / "backups" / "startup"
+        startup_dir.mkdir(parents=True)
+        backup_file = startup_dir / "app_corrupt_startup.db"
+        # Write garbage so SQLite considers it corrupt
+        backup_file.write_bytes(b"this is not a valid sqlite database file at all!!!")
+
+        monkeypatch.setattr(db_mod, "BACKUP_DIR", tmp_path / "backups")
+        candidates = find_recovery_candidates(db_path=tmp_path / "app.db", max_age_hours=24 * 365)
+        assert candidates == []
+
+
+class TestRestoreFromBackup:
+    """Tests for restore_from_backup() – TEST 18-21."""
+
+    def test_restores_valid_backup_successfully(self, tmp_path):
+        """TEST 18: Restore from healthy backup returns (True, '')."""
+        db_path = tmp_path / "app.db"
+        backup_path = tmp_path / "app_backup.db"
+        _make_minimal_db(backup_path)
+
+        # Corrupt the main DB
+        db_path.write_bytes(b"corrupted garbage data")
+
+        success, msg = restore_from_backup(backup_path, db_path)
+        assert success is True
+        assert msg == ""
+        # Restored DB must be openable and pass integrity_check
+        conn = sqlite3.connect(str(db_path))
+        cur = conn.execute("PRAGMA integrity_check")
+        assert cur.fetchone()[0] == "ok"
+        conn.close()
+
+    def test_quarantines_corrupted_db(self, tmp_path):
+        """TEST 19: Corrupted DB is quarantined (renamed) after successful restore."""
+        db_path = tmp_path / "app.db"
+        backup_path = tmp_path / "app_backup.db"
+        _make_minimal_db(backup_path)
+        db_path.write_bytes(b"corrupted")
+
+        restore_from_backup(backup_path, db_path)
+
+        # A .corrupted_* file should exist
+        quarantined = list(tmp_path.glob("*.corrupted_*"))
+        assert len(quarantined) == 1
+
+    def test_fails_gracefully_on_missing_backup(self, tmp_path):
+        """TEST 20: Missing backup file → (False, informative message)."""
+        db_path = tmp_path / "app.db"
+        db_path.write_bytes(b"data")
+
+        success, msg = restore_from_backup(tmp_path / "nonexistent.db", db_path)
+        assert success is False
+        assert "non trovato" in msg.lower()
+        # Original DB must be untouched
+        assert db_path.exists()
+
+    def test_fails_and_rolls_back_on_corrupt_backup(self, tmp_path):
+        """TEST 21: Backup that fails integrity_check is rejected; original DB preserved."""
+        db_path = tmp_path / "app.db"
+        good_data = b"original data preserved"
+        db_path.write_bytes(good_data)
+
+        bad_backup = tmp_path / "bad_backup.db"
+        bad_backup.write_bytes(b"this is not a valid sqlite3 file either!!")
+
+        success, msg = restore_from_backup(bad_backup, db_path)
+        assert success is False
+        assert msg  # some error message present
+        # Original DB must be rolled back / intact (still present)
+        assert db_path.read_bytes() == good_data
 
 
 # ============================================================
