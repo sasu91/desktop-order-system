@@ -1434,10 +1434,20 @@ class DesktopOrderApp:
         row_override.pack(side="top", fill="x", pady=2)
         self.force_receipt_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(row_override, text="Forza Data Ricevimento:", variable=self.force_receipt_var, width=22).pack(side="left", padx=(0, 5))
-        self.override_receipt_var = tk.StringVar(value="")
-        self.override_receipt_entry = ttk.Entry(row_override, textvariable=self.override_receipt_var, width=12, state="disabled")
-        self.override_receipt_entry.pack(side="left", padx=(0, 5))
-        ttk.Label(row_override, text="(YYYY-MM-DD)", font=("Helvetica", 8), foreground="gray").pack(side="left")
+        self.override_receipt_var = tk.StringVar(value=date.today().isoformat())
+        if TKCALENDAR_AVAILABLE:
+            self.override_receipt_entry = DateEntry(  # type: ignore[misc]
+                row_override,
+                textvariable=self.override_receipt_var,
+                width=12,
+                date_pattern="yyyy-mm-dd",
+                state="disabled",
+            )
+            self.override_receipt_entry.pack(side="left", padx=(0, 5))
+        else:
+            self.override_receipt_entry = ttk.Entry(row_override, textvariable=self.override_receipt_var, width=12, state="disabled")
+            self.override_receipt_entry.pack(side="left", padx=(0, 5))
+            ttk.Label(row_override, text="(YYYY-MM-DD)", font=("Helvetica", 8), foreground="gray").pack(side="left")
 
         # ── Row 4: Motivo override (enabled only when force_receipt active) ──
         row_reason = ttk.Frame(param_frame)

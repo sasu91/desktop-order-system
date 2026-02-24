@@ -1,0 +1,8 @@
+# Backup Manifest
+# Created: 2026-02-24T04:49:59.625396
+# Reason: v1_pre_migration
+# Source: /tmp/pytest-of-codespace/pytest-0/test_full_batch_operation_work0/test.db
+#
+test_20260224_044959_v1_pre_migration.db
+test_20260224_044959_v1_pre_migration.db-wal
+test_20260224_044959_v1_pre_migration.db-shm
