@@ -1761,22 +1761,40 @@ class DesktopOrderApp:
         past_x = list(range(-past_days, 1))
         past_stock = [proposal.current_on_hand + daily_avg * abs(d) for d in past_x]
 
-        # Future: project day-by-day until receipt_date + 5 extra days
+        # Future: project day-by-day until receipt_date + 5 extra days (may expand below)
         receipt_offset = (receipt_date - today).days if receipt_date else 14
         future_end = max(receipt_offset + 5, 10)
 
-        # Load already-confirmed pending pipeline orders for this SKU
-        # These are ORDER events in the ledger not yet received
+        # Load already-confirmed pending pipeline orders for this SKU.
+        # These are ORDER events in the ledger not yet received.
+        # Use as_of_date = tomorrow so orders confirmed TODAY are included
+        # (on_order_by_date filters out txn.date >= cutoff, so today's orders
+        # would otherwise be silently dropped).
         pipeline_by_day: dict[int, int] = {}
+        pipeline_load_ok = False
         try:
             pipeline_txns = self.csv_layer.read_transactions()
-            pipeline_pending = StockCalculator.on_order_by_date(proposal.sku, pipeline_txns)
+            pipeline_pending = StockCalculator.on_order_by_date(
+                proposal.sku, pipeline_txns,
+                as_of_date=today + timedelta(days=1),  # include today's confirmed orders
+            )
             for p_receipt_date, p_qty in pipeline_pending.items():
                 p_offset = (p_receipt_date - today).days
-                if 0 < p_offset <= future_end:
+                if p_offset > 0:  # only future receipts
                     pipeline_by_day[p_offset] = pipeline_by_day.get(p_offset, 0) + p_qty
+            pipeline_load_ok = True
         except Exception:
             pass  # Never crash the chart
+
+        # Extend the chart window to cover all pipeline receipt dates
+        if pipeline_by_day:
+            future_end = max(future_end, max(pipeline_by_day.keys()) + 5)
+
+        # If current_on_order > 0 but no future receipt dates resolved, the pipeline
+        # has orders without a receipt_date (or all in the past already absorbed into
+        # current_on_hand). Flag this so we can annotate the chart.
+        pipeline_qty_resolved = sum(pipeline_by_day.values())
+        pipeline_unresolved = max(0, proposal.current_on_order - pipeline_qty_resolved)
 
         future_x: list[int] = []
         future_stock: list[float] = []
@@ -1805,9 +1823,27 @@ class DesktopOrderApp:
 
         # Pipeline order markers (already confirmed, orange)
         for p_day in sorted(pipeline_by_day):
-            if 0 < p_day <= future_end:
-                ax.axvline(x=p_day, color="#f59e0b", linewidth=0.8,
-                           linestyle=":", alpha=0.8, zorder=4)
+            ax.axvline(x=p_day, color="#f59e0b", linewidth=0.8,
+                       linestyle=":", alpha=0.8, zorder=4)
+            # Label each pipeline receipt with its qty
+            try:
+                ylim = ax.get_ylim()
+                label_y = ylim[1] * 0.95
+                ax.text(p_day + 0.2, label_y,
+                        f"+{pipeline_by_day[p_day]}",
+                        fontsize=5, color="#b45309", va="top", alpha=0.85)
+            except Exception:
+                pass
+
+        # Annotation: on-order stock with no known receipt date (orders missing receipt_date)
+        if pipeline_unresolved > 0:
+            try:
+                ax.text(0.02, 0.04,
+                        f"⚠ +{pipeline_unresolved} in ordine (data ric. ignota)",
+                        transform=ax.transAxes, fontsize=5,
+                        color="#b45309", va="bottom", alpha=0.85)
+            except Exception:
+                pass
 
         # Receipt date marker (current proposal, green)
         if receipt_date and 0 < receipt_offset <= future_end:
