@@ -32,18 +32,40 @@ jobs:
       - name: Install backend (editable)
         run: |
           python -m pip install --upgrade pip
-          # Installa dos_backend come pacchetto editable con tutte le dipendenze API
+          # Core package + API extras
           pip install -e backend[api]
-          # Dipendenze di testing
-          pip install pytest pytest-cov
+          # Test utilities: httpx is required by Starlette TestClient
+          pip install pytest pytest-cov httpx
+          # Linter (light — E and F rules only)
+          pip install "ruff>=0.4"
 
       - name: Smoke — dos_backend.smoke
         # Verifica che il package si importi e che la catena domain→persistence sia integra
         run: python -m dos_backend.smoke
 
-      - name: Smoke — pytest collect-only
-        # Raccoglie i test senza eseguirli: verifica sintassi/import di tutti i file di test.
-        # Non fallisce se non ci sono test (exit code 5 → success grazie a --co).
+      - name: Lint — ruff (E + F rules, new modules only)
+        # Scoped to api/routers/schemas (new code) — avoids noise from 90+ legacy violations.
+        # Fails on: undefined names (F821), unused imports (F401), obvious errors (E).
+        # E501 (line length) and some comparison operators ignored for compatibility.
+        run: |
+          ruff check \
+            backend/dos_backend/api/ \
+            backend/dos_backend/routers/ \
+            backend/dos_backend/schemas.py \
+            --config backend/pyproject.toml \
+            --select E,F \
+            --ignore E501,E711,E712,E721,E741
+
+      - name: Integration tests — TestClient + temp SQLite
+        # These tests MUST pass: they cover the base scenario for every endpoint.
+        # Exit code ≠ 0 fails the whole CI job.
+        working-directory: backend
+        run: |
+          python -m pytest tests/ -v --tb=short
+
+      - name: Legacy test collection (non-blocking)
+        # Raccoglie i vecchi test senza eseguirli: verifica sintassi/import.
+        # Non fallisce (|| true) perché molti usano ancora backend.src.* legacy.
         run: |
           python -m pytest --collect-only -q \
             --ignore=tests/test_db_concurrency_fase7.py \

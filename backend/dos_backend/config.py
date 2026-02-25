@@ -2,16 +2,27 @@
 dos_backend/config.py — Centralised configuration for the dos_backend package.
 
 Path resolution priority (highest → lowest):
-  1. Environment variable  (DOS_DB_PATH, DOS_DATA_DIR, DOS_STORAGE_BACKEND …)
+  1. Environment variable  (see table below)
   2. settings.json         (storage_backend only)
   3. utils/paths.py        (frozen-aware defaults; same logic as project-root config.py)
 
 Environment variables recognised
 ---------------------------------
+# Storage / paths
 DOS_DATA_DIR          Absolute path that overrides the default data directory.
 DOS_DB_PATH           Absolute path that overrides the SQLite database file.
 DOS_STORAGE_BACKEND   'csv' or 'sqlite' — overrides settings.json value.
 DOS_LOG_LEVEL         'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' (read externally).
+
+# API server
+DOS_API_HOST          Interface Uvicorn binds to (default: 127.0.0.1).
+DOS_API_PORT          TCP port Uvicorn listens on (default: 8000).
+DOS_API_TOKEN         Static Bearer token for all authenticated endpoints.
+                      When empty/unset the server runs in *dev mode*: all
+                      authenticated requests are allowed and a warning is logged.
+DOS_CORS_ORIGINS      Comma-separated list of allowed CORS origins.
+                      Default: empty (CORS middleware not added).
+                      Example: http://localhost:3000,https://app.example.com
 
 Backward-compatibility guarantee
 ---------------------------------
@@ -173,4 +184,72 @@ def is_sqlite_available() -> bool:
 # ---------------------------------------------------------------------------
 # Initialise _STORAGE_BACKEND at import time (mirrors root config.py behaviour)
 # ---------------------------------------------------------------------------
+_STORAGE_BACKEND = get_storage_backend()
+
+
+# ---------------------------------------------------------------------------
+# 5. API server settings
+#    All read lazily at call-time so tests can patch env vars freely.
+# ---------------------------------------------------------------------------
+
+def get_api_host() -> str:
+    """Return the interface Uvicorn should bind to (default: ``127.0.0.1``)."""
+    return os.environ.get("DOS_API_HOST", "127.0.0.1").strip() or "127.0.0.1"
+
+
+def get_api_port() -> int:
+    """Return the TCP port Uvicorn should listen on (default: ``8000``).
+
+    Invalid values (non-numeric or out of range 1-65535) are silently replaced
+    by the default.
+    """
+    raw = os.environ.get("DOS_API_PORT", "").strip()
+    try:
+        port = int(raw)
+        if 1 <= port <= 65535:
+            return port
+    except (ValueError, TypeError):
+        pass
+    return 8000
+
+
+def get_api_token() -> str:
+    """Return the configured Bearer token.
+
+    Returns an empty string when ``DOS_API_TOKEN`` is unset or blank, which
+    signals *dev mode* to ``auth.py``.
+    """
+    return os.environ.get("DOS_API_TOKEN", "").strip()
+
+
+def is_dev_mode() -> bool:
+    """Return ``True`` when no Bearer token is configured.
+
+    In dev mode all authenticated API endpoints are accessible without a token
+    and a startup warning is emitted.  **Never run in dev mode in production.**
+    """
+    return get_api_token() == ""
+
+
+def get_cors_origins() -> list[str]:
+    """Return the list of allowed CORS origins.
+
+    Reads ``DOS_CORS_ORIGINS`` (comma-separated, e.g.
+    ``http://localhost:3000,https://app.example.com``).
+    Returns an empty list when the variable is unset or blank — the CORS
+    middleware should not be added in that case.
+    """
+    raw = os.environ.get("DOS_CORS_ORIGINS", "").strip()
+    if not raw:
+        return []
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+# Convenience module-level snapshots (resolved at import time).
+# Use the getter functions above when you need env-var changes to take effect
+# without reloading the module (e.g. inside tests).
+API_HOST: str = get_api_host()
+API_PORT: int = get_api_port()
+API_TOKEN: str = get_api_token()
+CORS_ORIGINS: list[str] = get_cors_origins()
 _STORAGE_BACKEND = get_storage_backend()

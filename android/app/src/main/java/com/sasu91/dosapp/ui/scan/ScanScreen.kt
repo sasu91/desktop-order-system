@@ -1,0 +1,239 @@
+package com.sasu91.dosapp.ui.scan
+
+import android.util.Log
+import androidx.annotation.OptIn
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ExperimentalGetImage
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
+import com.google.accompanist.permissions.shouldShowRationale
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.common.InputImage
+import java.util.concurrent.Executors
+
+@OptIn(ExperimentalPermissionsApi::class)
+@Composable
+fun ScanScreen(
+    onNavigateToExceptions: (String) -> Unit = {},
+    viewModel: ScanViewModel = hiltViewModel(),
+) {
+    val uiState by viewModel.state.collectAsStateWithLifecycle()
+    val cameraPermission = rememberPermissionState(android.Manifest.permission.CAMERA)
+
+    Scaffold(
+        topBar = {
+            TopAppBar(title = { Text("Scan EAN") })
+        }
+    ) { padding ->
+        Box(Modifier.padding(padding).fillMaxSize()) {
+            when {
+                cameraPermission.status.isGranted -> {
+                    CameraPreview(
+                        onBarcodeDetected = viewModel::onBarcodeDetected,
+                        paused = uiState.paused,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    // Overlay: loading / result / error
+                    ScanOverlay(
+                        uiState = uiState,
+                        onResumeScan = viewModel::resumeScanning,
+                        onNavigateToExceptions = onNavigateToExceptions,
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                    )
+                }
+                cameraPermission.status.shouldShowRationale -> {
+                    PermissionRationale(onRequest = { cameraPermission.launchPermissionRequest() })
+                }
+                else -> {
+                    LaunchedEffect(Unit) { cameraPermission.launchPermissionRequest() }
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Camera preview + ML Kit analyser
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun CameraPreview(
+    onBarcodeDetected: (String) -> Unit,
+    paused: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    val analyserExecutor = remember { Executors.newSingleThreadExecutor() }
+
+    AndroidView(
+        factory = { ctx ->
+            PreviewView(ctx).also { previewView ->
+                val future = ProcessCameraProvider.getInstance(ctx)
+                future.addListener({
+                    val provider = future.get()
+                    val preview = Preview.Builder().build()
+                        .also { it.setSurfaceProvider(previewView.surfaceProvider) }
+
+                    val analyser = BarcodeImageAnalyser { ean ->
+                        if (!paused) onBarcodeDetected(ean)
+                    }
+
+                    val analysis = ImageAnalysis.Builder()
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .build()
+                        .also { it.setAnalyzer(analyserExecutor, analyser) }
+
+                    try {
+                        provider.unbindAll()
+                        provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                    } catch (e: Exception) {
+                        Log.e("ScanScreen", "Camera bind failed", e)
+                    }
+                }, ContextCompat.getMainExecutor(ctx))
+            }
+        },
+        modifier = modifier,
+    )
+}
+
+/** ML Kit barcode analyser for EAN-13 / EAN-8 / Code 128. */
+private class BarcodeImageAnalyser(
+    private val onDetected: (String) -> Unit,
+) : ImageAnalysis.Analyzer {
+
+    private val scanner = BarcodeScanning.getClient(
+        BarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_EAN_13, Barcode.FORMAT_EAN_8, Barcode.FORMAT_CODE_128)
+            .build()
+    )
+
+    @OptIn(ExperimentalGetImage::class)
+    override fun analyze(imageProxy: ImageProxy) {
+        val mediaImage = imageProxy.image ?: run { imageProxy.close(); return }
+        val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+        scanner.process(image)
+            .addOnSuccessListener { barcodes ->
+                barcodes.firstNotNullOfOrNull { it.rawValue }?.let(onDetected)
+            }
+            .addOnCompleteListener { imageProxy.close() }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Result overlay
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun ScanOverlay(
+    uiState: ScanUiState,
+    onResumeScan: () -> Unit,
+    onNavigateToExceptions: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val scrollState = rememberScrollState()
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
+            .padding(16.dp)
+            .verticalScroll(scrollState),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        when {
+            uiState.isLoading -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Ricerca in corso…")
+                }
+            }
+            uiState.error != null -> {
+                Text(uiState.error, color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                Button(onClick = onResumeScan) { Text("Scansiona di nuovo") }
+            }
+            uiState.sku != null -> {
+                val sku = uiState.sku
+                val stock = uiState.stock
+
+                Text("SKU: ${sku.sku}", fontWeight = FontWeight.Bold)
+                Text(sku.description)
+                if (stock != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        StockChip(label = "In magazzino", value = stock.onHand)
+                        StockChip(label = "In ordine", value = stock.onOrder)
+                        if (stock.unfulfilledQty > 0)
+                            StockChip(label = "Non evaso", value = stock.unfulfilledQty, tint = MaterialTheme.colorScheme.error)
+                    }
+                    Text("AsOf: ${stock.asof} · ${stock.mode}", style = MaterialTheme.typography.labelSmall)
+                }
+                Spacer(Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onResumeScan) { Text("Scansiona di nuovo") }
+                    OutlinedButton(onClick = { onNavigateToExceptions(sku.sku) }) {
+                        Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Eccezione")
+                    }
+                }
+            }
+            else -> {
+                Text("Inquadra un codice EAN", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun StockChip(label: String, value: Int, tint: Color = MaterialTheme.colorScheme.onSurface) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value.toString(), style = MaterialTheme.typography.headlineSmall, color = tint, fontWeight = FontWeight.Bold)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = tint)
+    }
+}
+
+@Composable
+private fun PermissionRationale(onRequest: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text("La fotocamera è necessaria per scansionare i codici EAN.", textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        Spacer(Modifier.height(16.dp))
+        Button(onClick = onRequest) { Text("Concedi permesso") }
+    }
+}
