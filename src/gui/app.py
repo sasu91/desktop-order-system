@@ -6077,9 +6077,9 @@ class DesktopOrderApp:
         }
         for col in _SCORE_COLS:
             width, anchor = col_cfg.get(col, (90, tk.CENTER))
-            self.score_treeview.column(col, anchor=anchor, width=width)
+            self.score_treeview.column(col, anchor=anchor, width=width)  # type: ignore[arg-type]
             self.score_treeview.heading(
-                col, text=col, anchor=anchor,
+                col, text=col, anchor=anchor,  # type: ignore[arg-type]
                 command=lambda c=col: self._sort_score_column(c),
             )
 
@@ -8926,10 +8926,9 @@ class DesktopOrderApp:
 
             if do_restore:
                 try:
-                    from ..db import restore_from_backup, DATABASE_PATH
+                    from ..db import restore_from_backup, DB_PATH as DATABASE_PATH
                 except ImportError:
-                    from src.db import restore_from_backup
-                    from config import DATABASE_PATH
+                    from src.db import restore_from_backup, DB_PATH as DATABASE_PATH  # type: ignore[assignment]
 
                 success, err_msg = restore_from_backup(best["path"], DATABASE_PATH)
 
