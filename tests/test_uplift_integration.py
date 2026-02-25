@@ -10,10 +10,10 @@ Validates end-to-end workflow:
 """
 import pytest
 from datetime import date, timedelta
-from src.domain.promo_uplift import estimate_uplift, UpliftReport
-from src.forecast import baseline_forecast
-from src.domain.models import SKU, SalesRecord, PromoWindow, Transaction, EventType
-from src.persistence.csv_layer import CSVLayer
+from backend.src.domain.promo_uplift import estimate_uplift, UpliftReport
+from backend.src.forecast import baseline_forecast
+from backend.src.domain.models import SKU, SalesRecord, PromoWindow, Transaction, EventType
+from backend.src.persistence.csv_layer import CSVLayer
 import tempfile
 from pathlib import Path
 

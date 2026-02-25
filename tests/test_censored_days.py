@@ -13,16 +13,16 @@ import pytest
 from datetime import date, timedelta
 from typing import List, Dict, Any
 
-from src.domain.ledger import StockCalculator, is_day_censored
-from src.domain.models import Transaction, EventType, SalesRecord, Stock
-from src.forecast import fit_forecast_model, predict
-from src.uncertainty import (
+from backend.src.domain.ledger import StockCalculator, is_day_censored
+from backend.src.domain.models import Transaction, EventType, SalesRecord, Stock
+from backend.src.forecast import fit_forecast_model, predict
+from backend.src.uncertainty import (
     calculate_forecast_residuals,
     estimate_demand_uncertainty,
     robust_sigma,
 )
-from src.replenishment_policy import compute_order, OrderConstraints
-from src.domain.calendar import Lane
+from backend.src.replenishment_policy import compute_order, OrderConstraints
+from backend.src.domain.calendar import Lane
 
 
 # ============================================================================

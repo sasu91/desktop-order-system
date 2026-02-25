@@ -37,7 +37,7 @@ from typing import Any, Dict, List, TYPE_CHECKING
 from unittest.mock import patch
 
 if TYPE_CHECKING:
-    from src.domain.models import SKU, Stock
+    from backend.src.domain.models import SKU, Stock
 
 import pytest
 
@@ -103,7 +103,7 @@ def _make_sku(sku_id: str, forecast_method: str = "",
               lead_time_days: int = 7, review_period: int = 7,
               safety_stock: int = 0, pack_size: int = 1, moq: int = 1,
               max_stock: int = 999, target_csl: float = 0.0) -> "SKU":
-    from src.domain.models import SKU, DemandVariability
+    from backend.src.domain.models import SKU, DemandVariability
     return SKU(
         sku=sku_id,
         description=f"QA SKU {sku_id}",
@@ -120,7 +120,7 @@ def _make_sku(sku_id: str, forecast_method: str = "",
 
 
 def _make_stock(sku_id: str, on_hand: int = 0, on_order: int = 0) -> "Stock":
-    from src.domain.models import Stock
+    from backend.src.domain.models import Stock
     return Stock(sku=sku_id, on_hand=on_hand, on_order=on_order)
 
 
@@ -178,8 +178,8 @@ def _settings_legacy(forecast_method: str = "simple") -> Dict:
 
 def _make_meta_modifier(modifier_type: str, value: float, precedence: int):
     """Build a _ModifierWithMeta for patching list_modifiers."""
-    from src.domain.modifier_builder import _ModifierWithMeta, _PREC_EVENT
-    from src.domain.contracts import Modifier, DATE_BASIS_DELIVERY
+    from backend.src.domain.modifier_builder import _ModifierWithMeta, _PREC_EVENT
+    from backend.src.domain.contracts import Modifier, DATE_BASIS_DELIVERY
     mod = Modifier(
         id=f"{modifier_type}_qa",
         name=f"{modifier_type}_qa",
@@ -230,8 +230,8 @@ class TestPipelineContract:
         propose_order_for_sku() must call build_demand_distribution.
         Shadow S2: generate_proposal bypasses this entirely.
         """
-        from src.workflows.order import propose_order_for_sku
-        from src.domain import demand_builder
+        from backend.src.workflows.order import propose_order_for_sku
+        from backend.src.domain import demand_builder
 
         history = _to_history(_load_csv_fixture("DS1_STABLE.csv"))
         sku_obj = _make_sku("SKU_STABLE")
@@ -265,8 +265,8 @@ class TestPipelineContract:
         apply_modifiers must be invoked even when no active modifiers.
         Shadow S4: generate_proposal gates on _any_modifier_enabled.
         """
-        from src.workflows.order import propose_order_for_sku
-        from src.domain import modifier_builder
+        from backend.src.workflows.order import propose_order_for_sku
+        from backend.src.domain import modifier_builder
 
         history = _to_history(_load_csv_fixture("DS1_STABLE.csv"))
         sku_obj = _make_sku("SKU_STABLE")
@@ -301,7 +301,7 @@ class TestPipelineContract:
         Shadow S1: generate_proposal CSL branch calls compute_order (old).
         """
         import src.replenishment_policy as rp
-        from src.workflows.order import propose_order_for_sku
+        from backend.src.workflows.order import propose_order_for_sku
 
         history = _to_history(_load_csv_fixture("DS1_STABLE.csv"))
         sku_obj = _make_sku("SKU_STABLE", target_csl=0.95)
@@ -346,7 +346,7 @@ class TestPipelineContract:
         OrderExplain returned by propose_order_for_sku must expose demand,
         position, and policy_mode – explainability contract.
         """
-        from src.workflows.order import propose_order_for_sku
+        from backend.src.workflows.order import propose_order_for_sku
 
         history = _to_history(_load_csv_fixture("DS1_STABLE.csv"))
         sku_obj = _make_sku("SKU_STABLE")
@@ -385,7 +385,7 @@ class TestCSLPolicyCoherence:
         """
         Raising alpha from 0.80 → 0.95 must not decrease reorder_point S.
         """
-        from src.workflows.order import propose_order_for_sku
+        from backend.src.workflows.order import propose_order_for_sku
 
         history = _to_history(_load_csv_fixture("DS2_VARIABLE.csv"))
         sku_obj_80 = _make_sku("SKU_VARIABLE", forecast_method="monte_carlo", target_csl=0.80)
@@ -413,7 +413,7 @@ class TestCSLPolicyCoherence:
         MC produces quantiles → reorder_point_method should be 'quantile'.
         Shadow S1 uses z_score fallback from sigma re-estimated via old compute_order.
         """
-        from src.workflows.order import propose_order_for_sku
+        from backend.src.workflows.order import propose_order_for_sku
 
         history = _to_history(_load_csv_fixture("DS2_VARIABLE.csv"))
         sku_obj = _make_sku("SKU_VARIABLE", forecast_method="monte_carlo", target_csl=0.95)
@@ -437,7 +437,7 @@ class TestCSLPolicyCoherence:
         """
         Two calls with identical seed must produce identical Q and S.
         """
-        from src.workflows.order import propose_order_for_sku
+        from backend.src.workflows.order import propose_order_for_sku
 
         history = _to_history(_load_csv_fixture("DS2_VARIABLE.csv"))
         sku_obj = _make_sku("SKU_VARIABLE", forecast_method="monte_carlo", target_csl=0.95)
@@ -469,7 +469,7 @@ class TestCSLPolicyCoherence:
         """
         DS2: MC seed=42, n=1000 must reproduce exact golden mu_P and sigma_P.
         """
-        from src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.demand_builder import build_demand_distribution
 
         history = _to_history(_load_csv_fixture("DS2_VARIABLE.csv"))
         mc_params = {
@@ -508,7 +508,7 @@ class TestIntermittentDemand:
         DS3 must be classified as intermittent (ADI=7.0, CV2=1.055 > 0.49).
         If this fails the fixture was corrupted or thresholds changed.
         """
-        from src.domain.intermittent_forecast import classify_intermittent
+        from backend.src.domain.intermittent_forecast import classify_intermittent
 
         rows = _load_csv_fixture("DS3_INTERMITTENT.csv")
         series = [float(r["qty_sold"]) for r in rows]
@@ -529,7 +529,7 @@ class TestIntermittentDemand:
         intermittent_auto on DS3 must NOT fall back to simple.
         Expected method: 'sba' (or 'croston'/'tsb' – but not '').
         """
-        from src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.demand_builder import build_demand_distribution
 
         history = _to_history(_load_csv_fixture("DS3_INTERMITTENT.csv"))
         mc_params = {
@@ -554,7 +554,7 @@ class TestIntermittentDemand:
 
     def test_C3_ds1_not_intermittent(self):
         """DS1 (constant 10/day) must NOT be classified as intermittent."""
-        from src.domain.intermittent_forecast import classify_intermittent
+        from backend.src.domain.intermittent_forecast import classify_intermittent
 
         rows = _load_csv_fixture("DS1_STABLE.csv")
         series = [float(r["qty_sold"]) for r in rows]
@@ -570,7 +570,7 @@ class TestIntermittentDemand:
         intermittent_auto mu_P must differ from simple mu_P on DS3.
         If equal, the intermittent code path is silently bypassed.
         """
-        from src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.demand_builder import build_demand_distribution
 
         history = _to_history(_load_csv_fixture("DS3_INTERMITTENT.csv"))
         mc_params = {
@@ -599,7 +599,7 @@ class TestIntermittentDemand:
         """
         DS3 intermittent_auto golden value: mu_P ≈ 17.49 (SBA on sparse series).
         """
-        from src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.demand_builder import build_demand_distribution
 
         history = _to_history(_load_csv_fixture("DS3_INTERMITTENT.csv"))
         mc_params = {
@@ -624,7 +624,7 @@ class TestIntermittentDemand:
         must route through _build_intermittent (not simple fallback).
         Verified by checking that explain.demand.intermittent_classification is True.
         """
-        from src.workflows.order import propose_order_for_sku
+        from backend.src.workflows.order import propose_order_for_sku
 
         history = _to_history(_load_csv_fixture("DS3_INTERMITTENT.csv"))
         # forecast_method="" on SKU → falls through to settings["reorder_engine"]["forecast_method"]
@@ -690,8 +690,8 @@ class TestModifiersEngine:
 
     def test_D1_stacking_precedence_order(self):
         """EVENT(1) → PROMO(2) → CANNIB(3): check mu trace is event→promo→cannib."""
-        from src.domain.demand_builder import build_demand_distribution
-        from src.domain.modifier_builder import apply_modifiers, _PREC_EVENT, _PREC_PROMO, _PREC_CANNIB
+        from backend.src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.modifier_builder import apply_modifiers, _PREC_EVENT, _PREC_PROMO, _PREC_CANNIB
 
         history = _to_history(_load_csv_fixture("DS4_MODIFIERS.csv"))
         dd = build_demand_distribution("simple", history, P, ASOF)
@@ -730,9 +730,9 @@ class TestModifiersEngine:
 
     def test_D2_sigma_upward_only(self):
         """Cannibalization downlift must leave sigma unchanged."""
-        from src.domain.demand_builder import build_demand_distribution
-        from src.domain.modifier_builder import apply_modifiers, _PREC_CANNIB
-        from src.domain.contracts import DemandDistribution
+        from backend.src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.modifier_builder import apply_modifiers, _PREC_CANNIB
+        from backend.src.domain.contracts import DemandDistribution
         from dataclasses import replace
 
         history = _to_history(_load_csv_fixture("DS4_MODIFIERS.csv"))
@@ -757,8 +757,8 @@ class TestModifiersEngine:
 
     def test_D3_passthrough_when_no_modifiers(self):
         """If list_modifiers returns [], base demand is returned unchanged."""
-        from src.domain.demand_builder import build_demand_distribution
-        from src.domain.modifier_builder import apply_modifiers
+        from backend.src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.modifier_builder import apply_modifiers
 
         history = _to_history(_load_csv_fixture("DS4_MODIFIERS.csv"))
         dd = build_demand_distribution("simple", history, P, ASOF)
@@ -773,8 +773,8 @@ class TestModifiersEngine:
         """
         Golden: 70 × 1.20 × 1.10 × 0.85 = 78.54 (≤ REL_TOL).
         """
-        from src.domain.demand_builder import build_demand_distribution
-        from src.domain.modifier_builder import apply_modifiers, _PREC_EVENT, _PREC_PROMO, _PREC_CANNIB
+        from backend.src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.modifier_builder import apply_modifiers, _PREC_EVENT, _PREC_PROMO, _PREC_CANNIB
 
         history = _to_history(_load_csv_fixture("DS4_MODIFIERS.csv"))
         dd = build_demand_distribution("simple", history, P, ASOF)
@@ -796,8 +796,8 @@ class TestModifiersEngine:
         Event×1.20 × Promo×1.10 on DS4 with sigma_P=0 must give exactly 92.40 mu.
         sigma stays 0 (no sigma when base is 0, only upward scaling applies).
         """
-        from src.domain.demand_builder import build_demand_distribution
-        from src.domain.modifier_builder import apply_modifiers, _PREC_EVENT, _PREC_PROMO
+        from backend.src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.modifier_builder import apply_modifiers, _PREC_EVENT, _PREC_PROMO
 
         history = _to_history(_load_csv_fixture("DS4_MODIFIERS.csv"))
         dd = build_demand_distribution("simple", history, P, ASOF)
@@ -834,7 +834,7 @@ class TestEndToEndIntegration:
         DS1 + legacy + zero stock → Q > 0 (need to order).
         mu_P from explain must match DS1 golden.
         """
-        from src.workflows.order import propose_order_for_sku
+        from backend.src.workflows.order import propose_order_for_sku
 
         history = _to_history(_load_csv_fixture("DS1_STABLE.csv"))
         sku_obj = _make_sku("SKU_STABLE", safety_stock=0)
@@ -863,7 +863,7 @@ class TestEndToEndIntegration:
         """
         DS2 + MC + CSL → Q ≥ 0 and explain has quantiles populated.
         """
-        from src.workflows.order import propose_order_for_sku
+        from backend.src.workflows.order import propose_order_for_sku
 
         history = _to_history(_load_csv_fixture("DS2_VARIABLE.csv"))
         sku_obj = _make_sku("SKU_VARIABLE", forecast_method="monte_carlo", target_csl=0.95)
@@ -891,7 +891,7 @@ class TestEndToEndIntegration:
         """
         DS3 + intermittent_auto + legacy → explain shows intermittent classification.
         """
-        from src.workflows.order import propose_order_for_sku
+        from backend.src.workflows.order import propose_order_for_sku
 
         history = _to_history(_load_csv_fixture("DS3_INTERMITTENT.csv"))
         # forecast_method="" on SKU → falls through to settings["reorder_engine"]["forecast_method"]
@@ -949,7 +949,7 @@ class TestEndToEndIntegration:
         """
         When on_hand >> mu_P (e.g., 1000 vs 70), Q must be 0.
         """
-        from src.workflows.order import propose_order_for_sku
+        from backend.src.workflows.order import propose_order_for_sku
 
         history = _to_history(_load_csv_fixture("DS1_STABLE.csv"))
         sku_obj = _make_sku("SKU_STABLE", safety_stock=0)
@@ -975,7 +975,7 @@ class TestEndToEndIntegration:
         OrderExplain.to_dict() must return a flat dict without raising.
         Regression: broken serialisation hides explainability failures.
         """
-        from src.workflows.order import propose_order_for_sku
+        from backend.src.workflows.order import propose_order_for_sku
 
         history = _to_history(_load_csv_fixture("DS1_STABLE.csv"))
         sku_obj = _make_sku("SKU_STABLE")
@@ -1003,8 +1003,8 @@ class TestEndToEndIntegration:
         When a modifier is injected, OrderExplain.modifiers must be non-empty
         and the trace must contain mu_before/mu_after for each applied modifier.
         """
-        from src.workflows.order import propose_order_for_sku
-        from src.domain.modifier_builder import _PREC_EVENT, _PREC_PROMO
+        from backend.src.workflows.order import propose_order_for_sku
+        from backend.src.domain.modifier_builder import _PREC_EVENT, _PREC_PROMO
 
         history = _to_history(_load_csv_fixture("DS4_MODIFIERS.csv"))
         sku_obj = _make_sku("SKU_MODIFIERS")
@@ -1076,7 +1076,7 @@ class TestShadowPaths:
         SHADOW S2 (informational): generate_proposal bypasses build_demand_distribution.
         We verify the function exists in demand_builder and is importable.
         """
-        from src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.demand_builder import build_demand_distribution
         assert callable(build_demand_distribution)
 
     def test_F3_shadow_S3_documented(self):
@@ -1086,7 +1086,7 @@ class TestShadowPaths:
         We verify the clean path (propose_order_for_sku) correctly routes to
         intermittent when method='intermittent_auto'.
         """
-        from src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.demand_builder import build_demand_distribution
         history = _to_history(_load_csv_fixture("DS3_INTERMITTENT.csv"))
         mc_params = {
             "min_nonzero_observations": 4,
@@ -1110,8 +1110,8 @@ class TestShadowPaths:
         We verify that apply_modifiers handles cannibalization correctly
         regardless of promo/event/holiday flags (tested via mock).
         """
-        from src.domain.demand_builder import build_demand_distribution
-        from src.domain.modifier_builder import apply_modifiers, _PREC_CANNIB
+        from backend.src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.modifier_builder import apply_modifiers, _PREC_CANNIB
 
         history = _to_history(_load_csv_fixture("DS4_MODIFIERS.csv"))
         dd = build_demand_distribution("simple", history, P, ASOF)

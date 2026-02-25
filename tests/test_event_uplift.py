@@ -12,14 +12,14 @@ Validates:
 
 import pytest
 from datetime import date, timedelta
-from src.domain.event_uplift import (
+from backend.src.domain.event_uplift import (
     apply_event_uplift_to_forecast,
     filter_similar_days,
     estimate_u_store_day,
     estimate_beta_i,
     EventUpliftExplain,
 )
-from src.domain.models import SKU, SalesRecord, EventUpliftRule
+from backend.src.domain.models import SKU, SalesRecord, EventUpliftRule
 
 
 class TestSimilarDaysFiltering:

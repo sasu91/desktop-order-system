@@ -11,9 +11,9 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from src.domain.models import SKU, SalesRecord, PromoWindow, Transaction, EventType, Stock
-from src.persistence.csv_layer import CSVLayer
-from src.workflows.order import OrderWorkflow
+from backend.src.domain.models import SKU, SalesRecord, PromoWindow, Transaction, EventType, Stock
+from backend.src.persistence.csv_layer import CSVLayer
+from backend.src.workflows.order import OrderWorkflow
 
 
 def test_order_proposal_has_cannibalization_fields():

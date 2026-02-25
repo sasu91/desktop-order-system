@@ -6,13 +6,13 @@ and can be integrated into OrderWorkflow without breaking changes.
 """
 import pytest
 from datetime import date as Date
-from src.domain.calendar import (
+from backend.src.domain.calendar import (
     Lane,
     next_receipt_date,
     protection_window,
     calculate_protection_period_days,
 )
-from src.domain.models import Transaction, EventType, SKU, Stock, OrderProposal
+from backend.src.domain.models import Transaction, EventType, SKU, Stock, OrderProposal
 
 
 class TestCalendarIntegration:

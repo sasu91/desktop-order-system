@@ -27,8 +27,8 @@ import sys
 # Add tools to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 
-from src.db import open_connection, close_connection, DB_PATH
-from src.repositories import SKURepository, LedgerRepository, OrdersRepository
+from backend.src.db import open_connection, close_connection, DB_PATH
+from backend.src.repositories import SKURepository, LedgerRepository, OrdersRepository
 from tools.profile_db import (
     profile_operation,
     explain_query,

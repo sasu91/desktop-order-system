@@ -16,9 +16,9 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from src.domain.models import EventType, Transaction, SalesRecord, SKU, PromoWindow, EventUpliftRule
-from src.persistence.csv_layer import CSVLayer
-from src.analytics.kpi import compute_pi80_coverage_kpi, compute_promo_event_forecast_kpi
+from backend.src.domain.models import EventType, Transaction, SalesRecord, SKU, PromoWindow, EventUpliftRule
+from backend.src.persistence.csv_layer import CSVLayer
+from backend.src.analytics.kpi import compute_pi80_coverage_kpi, compute_promo_event_forecast_kpi
 
 # ---------------------------------------------------------------------------
 # Constants

@@ -45,7 +45,7 @@ from typing import Optional
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.db import (
+from backend.src.db import (
     open_connection,
     get_database_stats,
     backup_database,

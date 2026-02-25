@@ -10,9 +10,9 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from src.domain.models import EventType
-from src.domain.migration import LegacyMigration
-from src.persistence.csv_layer import CSVLayer
+from backend.src.domain.models import EventType
+from backend.src.domain.migration import LegacyMigration
+from backend.src.persistence.csv_layer import CSVLayer
 
 
 @pytest.fixture
@@ -74,7 +74,7 @@ class TestLegacyMigration:
     
     def test_migrate_skip_if_ledger_already_populated(self, csv_layer, legacy_csv_file):
         """Skip migration if ledger already has events."""
-        from src.domain.models import Transaction
+        from backend.src.domain.models import Transaction
         
         # Pre-populate ledger
         csv_layer.write_transaction(
@@ -92,7 +92,7 @@ class TestLegacyMigration:
     
     def test_migrate_force_override_existing(self, csv_layer, legacy_csv_file):
         """Force migration even if ledger has events."""
-        from src.domain.models import Transaction
+        from backend.src.domain.models import Transaction
         
         # Pre-populate ledger
         csv_layer.write_transaction(

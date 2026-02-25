@@ -1,0 +1,550 @@
+"""
+Domain models for desktop-order-system.
+
+Pure data classes + value objects. No I/O, no side effects.
+Deterministic and fully testable.
+"""
+from dataclasses import dataclass, field
+from enum import Enum
+from datetime import date as Date
+from typing import Optional
+
+
+class EventType(Enum):
+    """Event types that impact stock ledger."""
+    SNAPSHOT = "SNAPSHOT"      # Base inventory reset: on_hand := qty
+    ORDER = "ORDER"            # Increase on_order: on_order += qty
+    RECEIPT = "RECEIPT"        # Receipt: on_order -= qty, on_hand += qty
+    SALE = "SALE"              # Sale: on_hand -= qty
+    WASTE = "WASTE"            # Waste: on_hand -= qty
+    ADJUST = "ADJUST"          # Absolute set: on_hand := qty (replaces stock like SNAPSHOT)
+    UNFULFILLED = "UNFULFILLED"  # Tracking only (no impact on stock)
+    SKU_EDIT = "SKU_EDIT"      # SKU metadata change (description/EAN) - no stock impact
+    EXPORT_LOG = "EXPORT_LOG"  # Export operation log - no stock impact
+    ASSORTMENT_IN = "ASSORTMENT_IN"    # SKU back in assortment - no stock impact, affects forecast
+    ASSORTMENT_OUT = "ASSORTMENT_OUT"  # SKU out of assortment - no stock impact, affects forecast
+
+
+class DemandVariability(Enum):
+    """Demand variability classification for SKU forecasting."""
+    STABLE = "STABLE"      # Predictable, consistent demand
+    LOW = "LOW"            # Low movement, sporadic
+    HIGH = "HIGH"          # High volatility, unpredictable spikes
+    SEASONAL = "SEASONAL"  # Seasonal patterns
+
+
+@dataclass(frozen=True)
+class SKU:
+    """Stock Keeping Unit (inventory item) - immutable."""
+    sku: str
+    description: str
+    ean: Optional[str] = None  # EAN/GTIN; can be empty or invalid
+    
+    # Order parameters
+    moq: int = 1                    # Minimum Order Quantity
+    pack_size: int = 1              # Pack size for order rounding (applied before MOQ)
+    lead_time_days: int = 7         # Delivery lead time in days
+    review_period: int = 7          # Review period in days (for forecast calculation)
+    safety_stock: int = 0           # Safety stock quantity
+    shelf_life_days: int = 0        # Shelf life in days (0 = no expiry/non-perishable)
+    
+    # Shelf life operational parameters (for reorder engine integration)
+    min_shelf_life_days: int = 0    # Minimum residual shelf life for sale (days, 0 = no constraint)
+    waste_penalty_mode: str = ""    # "soft", "hard", or "" (use global setting)
+    waste_penalty_factor: float = 0.0  # Soft penalty multiplier 0.0-1.0 (0 = use global)
+    waste_risk_threshold: float = 0.0  # Waste risk % threshold for penalty trigger (0-100, 0 = use global)
+    
+    max_stock: int = 999            # Maximum stock level
+    reorder_point: int = 10         # Reorder trigger point
+    demand_variability: DemandVariability = DemandVariability.STABLE
+    
+    # Hierarchical classification (for uplift pooling fallback)
+    category: str = ""              # Category code (e.g., "DAIRY", "BAKERY", "PRODUCE")
+    department: str = ""            # Department code (e.g., "FRESH", "DRY", "FROZEN")
+    
+    oos_boost_percent: float = 0.0  # OOS boost percentage (0-100, 0 = use global setting)
+    oos_detection_mode: str = ""  # OOS detection mode: "strict", "relaxed", or "" (use global)
+    oos_popup_preference: str = "ask"  # OOS popup behavior: "ask", "always_yes", "always_no"
+    
+    # Forecast method selection
+    forecast_method: str = ""  # "simple", "monte_carlo", or "" (use global default)
+    
+    # Monte Carlo override parameters (used only if forecast_method="monte_carlo")
+    mc_distribution: str = ""  # "empirical", "normal", "lognormal", "residuals", or "" (use global)
+    mc_n_simulations: int = 0  # Number of simulations (0 = use global)
+    mc_random_seed: int = 0  # Random seed (0 = use global)
+    mc_output_stat: str = ""  # "mean", "percentile", or "" (use global)
+    mc_output_percentile: int = 0  # Percentile value 50-99 (0 = use global)
+    mc_horizon_mode: str = ""  # "auto", "custom", or "" (use global)
+    mc_horizon_days: int = 0  # Custom horizon days (0 = use global)
+    
+    # Assortment status
+    in_assortment: bool = True  # True = in assortment (active), False = out of assortment (discontinued)
+    
+    # Service level override (0.0 = use global/cluster resolver)
+    target_csl: float = 0.0  # Target Cycle Service Level (0.0 = resolver, 0.01-0.9999 = override)
+    
+    # Expiry label: True = product has expiry date printed on label (manual entry at receiving)
+    # False = shelf life tracking is automatic (calculated from shelf_life_days) — no label to scan
+    has_expiry_label: bool = False
+    
+    def __post_init__(self):
+        if not self.sku or not self.sku.strip():
+            raise ValueError("SKU cannot be empty")
+        if not self.description or not self.description.strip():
+            raise ValueError("Description cannot be empty")
+        if self.moq < 1:
+            raise ValueError("MOQ must be >= 1")
+        if self.pack_size < 1:
+            raise ValueError("Pack size must be >= 1")
+        if self.lead_time_days < 0 or self.lead_time_days > 365:
+            raise ValueError("Lead time must be between 0 and 365 days")
+        if self.review_period < 0:
+            raise ValueError("Review period cannot be negative")
+        if self.safety_stock < 0:
+            raise ValueError("Safety stock cannot be negative")
+        if self.shelf_life_days < 0:
+            raise ValueError("Shelf life cannot be negative")
+        if self.min_shelf_life_days < 0:
+            raise ValueError("Min shelf life cannot be negative")
+        if self.min_shelf_life_days > self.shelf_life_days and self.shelf_life_days > 0:
+            raise ValueError("Min shelf life cannot exceed total shelf life")
+        if self.waste_penalty_mode not in ["", "soft", "hard"]:
+            raise ValueError("Waste penalty mode must be '', 'soft', or 'hard'")
+        if self.waste_penalty_factor < 0.0 or self.waste_penalty_factor > 1.0:
+            raise ValueError("Waste penalty factor must be 0.0-1.0")
+        if self.waste_risk_threshold < 0.0 or self.waste_risk_threshold > 100.0:
+            raise ValueError("Waste risk threshold must be 0.0-100.0")
+        if self.max_stock < 1:
+            raise ValueError("Max stock must be >= 1")
+        if self.reorder_point < 0:
+            raise ValueError("Reorder point cannot be negative")
+        if self.oos_boost_percent < 0 or self.oos_boost_percent > 100:
+            raise ValueError("OOS boost percent must be between 0 and 100")
+        if self.oos_detection_mode not in ["", "strict", "relaxed"]:
+            raise ValueError("OOS detection mode must be '', 'strict', or 'relaxed'")
+        if self.oos_popup_preference not in ["ask", "always_yes", "always_no"]:
+            raise ValueError("OOS popup preference must be 'ask', 'always_yes', or 'always_no'")
+        if self.forecast_method not in ["", "simple", "monte_carlo"]:
+            raise ValueError("Forecast method must be '', 'simple', or 'monte_carlo'")
+        if self.mc_distribution not in ["", "empirical", "normal", "lognormal", "residuals"]:
+            raise ValueError("MC distribution must be '', 'empirical', 'normal', 'lognormal', or 'residuals'")
+        if self.mc_n_simulations < 0:
+            raise ValueError("MC n_simulations cannot be negative")
+        if self.mc_output_stat not in ["", "mean", "percentile"]:
+            raise ValueError("MC output_stat must be '', 'mean', or 'percentile'")
+        if self.mc_output_percentile < 0 or self.mc_output_percentile > 99:
+            raise ValueError("MC output_percentile must be 0-99")
+        if self.mc_horizon_mode not in ["", "auto", "custom"]:
+            raise ValueError("MC horizon_mode must be '', 'auto', or 'custom'")
+        if self.mc_horizon_days < 0:
+            raise ValueError("MC horizon_days cannot be negative")
+        if self.target_csl < 0.0 or self.target_csl >= 1.0:
+            raise ValueError("target_csl must be 0.0 (use resolver) or in range (0, 1)")
+
+
+@dataclass(frozen=True)
+class Transaction:
+    """Ledger transaction event - immutable."""
+    date: Date          # Event date (YYYY-MM-DD)
+    sku: str            # Reference to SKU
+    event: EventType    # Event type
+    qty: int            # Signed quantity
+    receipt_date: Optional[Date] = None  # For ORDER/RECEIPT events
+    note: Optional[str] = None
+    
+    def __post_init__(self):
+        if self.event == EventType.SNAPSHOT and self.qty < 0:
+            raise ValueError("SNAPSHOT qty must be non-negative")
+
+
+@dataclass(frozen=True)
+class Lot:
+    """Inventory lot with expiry tracking - immutable."""
+    lot_id: str                      # Unique lot identifier (supplier lot or internal)
+    sku: str                         # Reference to SKU
+    expiry_date: Optional[Date]      # Expiry date (None = no expiry for this lot)
+    qty_on_hand: int                 # Current quantity in this lot
+    receipt_id: str                  # Reference to receiving_logs
+    receipt_date: Date               # Date when lot was received
+    
+    def __post_init__(self):
+        if not self.lot_id or not self.lot_id.strip():
+            raise ValueError("Lot ID cannot be empty")
+        if not self.sku or not self.sku.strip():
+            raise ValueError("SKU cannot be empty")
+        if self.qty_on_hand < 0:
+            raise ValueError("Lot quantity cannot be negative")
+        if self.expiry_date and self.expiry_date < self.receipt_date:
+            raise ValueError("Expiry date cannot be before receipt date")
+    
+    def is_expired(self, check_date: Date) -> bool:
+        """Check if lot is expired as of check_date."""
+        if self.expiry_date is None:
+            return False
+        return check_date > self.expiry_date
+    
+    def days_until_expiry(self, check_date: Date) -> Optional[int]:
+        """Days until expiry from check_date (None if no expiry)."""
+        if self.expiry_date is None:
+            return None
+        delta = (self.expiry_date - check_date).days
+        return delta
+
+
+@dataclass(frozen=True)
+class Stock:
+    """Calculated stock state for a SKU at a given AsOf date."""
+    sku: str
+    on_hand: int
+    on_order: int
+    unfulfilled_qty: int = 0  # Backorder/cancellazioni (reduce availability)
+    asof_date: Optional[Date] = None
+    
+    def __post_init__(self):
+        if self.on_hand < 0:
+            raise ValueError("on_hand cannot be negative")
+        if self.on_order < 0:
+            raise ValueError("on_order cannot be negative")
+        if self.unfulfilled_qty < 0:
+            raise ValueError("unfulfilled_qty cannot be negative")
+    
+    def available(self) -> int:
+        """Total available inventory (on_hand + on_order)."""
+        return self.on_hand + self.on_order
+    
+    def inventory_position(self) -> int:
+        """Inventory Position = on_hand + on_order - unfulfilled_qty."""
+        return max(0, self.on_hand + self.on_order - self.unfulfilled_qty)
+
+
+@dataclass(frozen=True)
+class AuditLog:
+    """Audit trail entry for tracking operations."""
+    timestamp: str      # ISO format with time: YYYY-MM-DD HH:MM:SS
+    operation: str      # SKU_EDIT, EXPORT, etc.
+    sku: Optional[str]  # Affected SKU (if applicable)
+    details: str        # Human-readable description
+    user: str = "system"  # User/operator (default: system)
+
+
+@dataclass(frozen=True)
+class SalesRecord:
+    """Daily sales record from sales.csv."""
+    date: Date
+    sku: str
+    qty_sold: int
+    promo_flag: int = 0  # 0 = no promo, 1 = promo day (binary flag)
+    
+    def __post_init__(self):
+        if self.qty_sold < 0:
+            raise ValueError("qty_sold cannot be negative")
+        if self.promo_flag not in [0, 1]:
+            raise ValueError("promo_flag must be 0 or 1")
+
+
+@dataclass(frozen=True)
+class PromoWindow:
+    """
+    Promo window for calendar planning.
+    
+    Represents a promotional period for a SKU with start/end dates (inclusive).
+    Does NOT include price, discount%, promo type, or visibility flags.
+    """
+    sku: str
+    start_date: Date
+    end_date: Date
+    store_id: Optional[str] = None  # Optional store identifier (for multi-store support)
+    promo_flag: int = 1  # Always 1 (promo active), included for consistency
+    
+    def __post_init__(self):
+        if not self.sku or not self.sku.strip():
+            raise ValueError("sku cannot be empty")
+        if self.start_date > self.end_date:
+            raise ValueError(f"start_date ({self.start_date}) cannot be after end_date ({self.end_date})")
+        if self.promo_flag != 1:
+            raise ValueError("promo_flag must be 1 for PromoWindow")
+    
+    def contains_date(self, check_date: Date) -> bool:
+        """Check if date falls within promo window (inclusive)."""
+        return self.start_date <= check_date <= self.end_date
+    
+    def overlaps_with(self, other: 'PromoWindow') -> bool:
+        """
+        Check if this promo window overlaps with another.
+        
+        Args:
+            other: Another PromoWindow for the same SKU
+        
+        Returns:
+            True if windows overlap (inclusive boundaries)
+        """
+        if self.sku != other.sku:
+            return False
+        if self.store_id != other.store_id:
+            return False  # Different stores, no overlap
+        
+        # Check overlap: NOT (A.end < B.start OR B.end < A.start)
+        return not (self.end_date < other.start_date or other.end_date < self.start_date)
+    
+    def duration_days(self) -> int:
+        """Return duration of promo window in days (inclusive)."""
+        return (self.end_date - self.start_date).days + 1
+
+
+@dataclass(frozen=True)
+class EventUpliftRule:
+    """
+    Event-driven uplift rule for delivery date demand adjustment.
+    
+    Represents a demand multiplier for specific delivery dates, with configurable scope
+    (ALL, SKU, DEPT, CATEGORY) to apply uplift to all SKUs or filtered subset.
+    """
+    delivery_date: Date  # Target delivery/receipt date for uplift application
+    reason: str          # Event reason: holiday, local_event, weather, payday, closure
+    strength: float      # Uplift strength: 0.0-1.0 (optional %, converted) or multiplicative factor hint
+    scope_type: str      # Scope: "ALL", "SKU", "DEPT", "CATEGORY"
+    scope_key: str       # Scope key: empty for ALL, SKU code/department/category code otherwise
+    notes: str = ""      # Free-text notes
+    
+    def __post_init__(self):
+        if not self.delivery_date:
+            raise ValueError("delivery_date cannot be empty")
+        if self.reason not in ["holiday", "local_event", "weather", "payday", "closure", ""]:
+            raise ValueError(f"reason must be one of: holiday, local_event, weather, payday, closure (got: {self.reason})")
+        if self.strength < 0.0 or self.strength > 100.0:
+            raise ValueError(f"strength must be in range [0.0, 100.0] (got: {self.strength})")
+        if self.scope_type not in ["ALL", "SKU", "DEPT", "CATEGORY"]:
+            raise ValueError(f"scope_type must be ALL, SKU, DEPT, or CATEGORY (got: {self.scope_type})")
+        if self.scope_type == "ALL" and self.scope_key.strip():
+            raise ValueError("scope_key must be empty for scope_type=ALL")
+        if self.scope_type in ["SKU", "DEPT", "CATEGORY"] and not self.scope_key.strip():
+            raise ValueError(f"scope_key required for scope_type={self.scope_type}")
+    
+    def applies_to_sku(self, sku_obj: 'SKU') -> bool:
+        """
+        Check if this uplift rule applies to given SKU based on scope.
+        
+        Args:
+            sku_obj: SKU object to check
+        
+        Returns:
+            True if rule applies to this SKU
+        """
+        if self.scope_type == "ALL":
+            return True
+        elif self.scope_type == "SKU":
+            return sku_obj.sku.strip().upper() == self.scope_key.strip().upper()
+        elif self.scope_type == "DEPT":
+            return sku_obj.department.strip().upper() == self.scope_key.strip().upper()
+        elif self.scope_type == "CATEGORY":
+            return sku_obj.category.strip().upper() == self.scope_key.strip().upper()
+        return False
+
+
+@dataclass
+class OrderProposal:
+    """Order proposal for a SKU."""
+    sku: str
+    description: str
+    current_on_hand: int
+    current_on_order: int
+    daily_sales_avg: float
+    proposed_qty: int
+    receipt_date: Optional[Date] = None
+    notes: Optional[str] = None
+    shelf_life_warning: bool = False  # True if proposed qty exceeds shelf life capacity
+    mc_comparison_qty: Optional[int] = None  # Monte Carlo forecast qty (informativo)
+    
+    # Monte Carlo calculation details
+    mc_method_used: str = ""  # "monte_carlo" se MC è il metodo principale, "" altrimenti
+    mc_distribution: str = ""  # empirical, normal, lognormal, residuals
+    mc_n_simulations: int = 0  # Numero simulazioni MC
+    mc_random_seed: int = 0  # Seed per riproducibilità
+    mc_output_stat: str = ""  # mean, percentile
+    mc_output_percentile: int = 0  # es. 90 per P90
+    mc_horizon_mode: str = ""  # auto (lead+review) o custom
+    mc_horizon_days: int = 0  # Orizzonte forecast MC (giorni)
+    mc_forecast_values_summary: str = ""  # Sintesi valori forecast (es. "min=5, max=25, avg=12")
+    
+    # Calculation details (for transparency in UI)
+    forecast_period_days: int = 0  # lead_time + review_period
+    forecast_qty: int = 0  # daily_sales_avg × forecast_period
+    lead_time_demand: int = 0  # daily_sales_avg × lead_time
+    safety_stock: int = 0
+    target_S: int = 0  # forecast + safety_stock
+    inventory_position: int = 0  # on_hand + on_order - unfulfilled_qty
+    unfulfilled_qty: int = 0  # Backorder/cancellazioni
+    proposed_qty_before_rounding: int = 0  # max(0, S - inventory_position)
+    pack_size: int = 1
+    moq: int = 1
+    max_stock: int = 999
+    shelf_life_days: int = 0
+    capped_by_max_stock: bool = False
+    capped_by_shelf_life: bool = False
+    projected_stock_at_receipt: int = 0  # Stock previsto alla data di ricevimento
+    oos_days_count: int = 0  # Giorni OOS nel periodo lookback
+    oos_boost_applied: bool = False  # True se è stato applicato uplift OOS
+    oos_boost_percent: float = 0.0  # Percentuale uplift applicata (es. 0.20 = 20%)
+    simulation_used: bool = False  # True se è stata usata simulazione intermittente
+    simulation_trigger_day: int = 0  # Giorno in cui IP scende sotto soglia (0 = oggi)
+    simulation_notes: str = ""  # Note sulla simulazione
+    
+    # Promo adjustment (forecast enrichment)
+    baseline_forecast_qty: int = 0  # Forecast baseline (senza promo)
+    promo_adjusted_forecast_qty: int = 0  # Forecast con uplift promo applicato
+    promo_adjustment_note: str = ""  # Spiegazione aggiustamento promo (es. "Uplift 1.25x attivo")
+    promo_uplift_factor_used: float = 1.0  # Uplift factor utilizzato (1.0 = nessun promo)
+    
+    # Event uplift (delivery-date-based demand driver)
+    event_uplift_active: bool = False  # True se event uplift attivo su delivery_date
+    event_uplift_factor: float = 1.0  # Fattore event applicato al forecast (m_i)
+    event_u_store_day: float = 1.0  # U_store_day: event shock globale stimato
+    event_beta_i: float = 1.0  # beta_i: sensibilità SKU all'evento
+    event_m_i: float = 1.0  # m_i = 1 + (U - 1) * beta (moltiplicatore finale)
+    event_reason: str = ""  # Reason dell'evento (es. "holiday", "weather")
+    event_delivery_date: Optional[Date] = None  # Delivery date dell'evento
+    event_quantile: float = 0.0  # Quantile usato per stima U (es. 0.70 = P70)
+    event_fallback_level: str = ""  # Livello fallback U ("global", "dept:XXX", "sku:YYY")
+    event_beta_fallback_level: str = ""  # Livello fallback beta_i
+    event_explain_short: str = ""  # Spiegazione breve (es. "Event +30% (holiday, P70, SKU-level)")
+    
+    # Shelf life integration (Fase 2)
+    usable_stock: int = 0  # Stock utilizzabile (shelf life >= min_shelf_life_days)
+    unusable_stock: int = 0  # Stock non utilizzabile (scaduto o shelf life insufficiente)
+    waste_risk_percent: float = 0.0  # % stock a rischio spreco (oggi)
+    waste_risk_forward_percent: float = 0.0  # % stock a rischio spreco al receipt_date (include ordine)
+    waste_risk_demand_adjusted_percent: float = 0.0  # % stock a rischio spreco al receipt (demand-adjusted)
+    expected_waste_qty: int = 0  # Quantità prevista di spreco (dopo demand consumption)
+    shelf_life_penalty_applied: bool = False  # True se penalty applicato
+    shelf_life_penalty_message: str = ""  # Messaggio penalty (es. "Reduced by 50%")
+    
+    # Promo prebuild (anticipatory ordering for upcoming promos)
+    promo_prebuild_enabled: bool = False  # True se prebuild attivato per questa proposta
+    promo_start_date: Optional[Date] = None  # Data inizio promo (se prebuild attivo)
+    target_open_qty: int = 0  # Target opening stock al promo start (forecast coverage + safety)
+    projected_stock_on_promo_start: int = 0  # Stock proiettato a promo start (senza prebuild)
+    prebuild_delta_qty: int = 0  # Delta grezzo (target - projected, prima vincoli)
+    prebuild_qty: int = 0  # Quantità prebuild finale (dopo pack/MOQ/max, parte di proposed_qty)
+    prebuild_coverage_days: int = 0  # Giorni forecast coverage usati per target
+    prebuild_distribution_note: str = ""  # Sintesi distribuzione (es. "Single order" o "Split 3 dates")
+    
+    # Post-promo guardrail (anti-overstock cooldown dopo fine promo)
+    post_promo_guardrail_applied: bool = False  # True se guardrail post-promo attivato
+    post_promo_window_days: int = 0  # Giorni finestra post-promo (receipt_date dentro window)
+    post_promo_factor_used: float = 1.0  # Fattore cooldown applicato (<=1.0, es. 0.8 = -20%)
+    post_promo_cap_applied: bool = False  # True se qty cap assoluto applicato
+    post_promo_dip_factor: float = 1.0  # Dip factor storico stimato (se use_historical_dip)
+    post_promo_alert: str = ""  # Alert rischio overstock (es. "Stock > max" o "Shelf-life risk")
+    
+    # Promo cannibalization (downlift when substitute in promo)
+    cannibalization_applied: bool = False  # True se downlift applicato (sku non promo, driver in promo)
+    cannibalization_driver_sku: str = ""  # SKU promo che causa la riduzione
+    cannibalization_downlift_factor: float = 1.0  # Factor applicato (≤1.0, es. 0.75 = -25%)
+    cannibalization_confidence: str = ""  # A/B/C (affidabilità stima)
+    cannibalization_note: str = ""  # Dettaglio riduzione o fallback reason
+    
+    # Explainability drivers (standard transparency)
+    target_csl: float = 0.0  # Alpha (target CSL) usato per safety stock
+    sigma_horizon: float = 0.0  # Deviazione standard domanda su horizon
+    reorder_point: int = 0  # Reorder point SKU
+    forecast_method: str = ""  # simple, monte_carlo, etc.
+    policy_mode: str = ""  # legacy, csl
+    equivalent_csl_legacy: float = 0.0  # Equivalente CSL per policy legacy (informativo)
+    constraints_applied_pack: bool = False  # True se arrotondamento pack applicato
+    constraints_applied_moq: bool = False  # True se MOQ constraint applicato
+    constraints_applied_max: bool = False  # True se max_stock cap applicato
+    constraint_details: str = ""  # Dettaglio testuale vincoli (es. "Pack: 12→24, MOQ: 10, Max: 500")
+    
+    # History tracking (for UI visibility)
+    history_valid_days: int = 0  # Giorni validi usati dal forecast (esclude OOS + out-of-assortment)
+    
+    # CSL-based policy (Target Service Level mode)
+    csl_policy_mode: str = ""  # "legacy" or "csl"
+    csl_alpha_target: float = 0.0  # Target service level (alpha from resolver)
+    csl_alpha_eff: float = 0.0  # Effective alpha after censored boost
+    csl_reorder_point: float = 0.0  # S (reorder point) from compute_order
+    csl_forecast_demand: float = 0.0  # μ_P (forecast demand over protection period)
+    csl_sigma_horizon: float = 0.0  # σ_P (demand uncertainty over protection period)
+    csl_z_score: float = 0.0  # z-score for target CSL
+    csl_lane: str = ""  # STANDARD, SATURDAY, or MONDAY
+    csl_n_censored: int = 0  # Number of censored periods detected
+
+
+@dataclass
+class OrderConfirmation:
+    """Confirmed order details."""
+    order_id: str
+    date: Date
+    sku: str
+    qty_ordered: int
+    receipt_date: Date
+    status: str = "PENDING"  # PENDING, RECEIVED, PARTIAL
+
+
+@dataclass
+class ReceivingLog:
+    """Receiving closure record."""
+    receipt_id: str
+    date: Date
+    sku: str
+    qty_received: int
+    receipt_date: Date
+
+
+# Helper function for auto-classification integration
+def auto_classify_variability(
+    sku: str,
+    sales_records: list,
+    settings: dict
+) -> DemandVariability:
+    """
+    Auto-classify demand variability for a SKU using adaptive thresholds.
+    
+    This is a convenience wrapper around auto_variability module that:
+    1. Loads settings parameters
+    2. Calls classification logic
+    3. Returns single SKU result
+    
+    Args:
+        sku: SKU identifier
+        sales_records: List of SalesRecord objects
+        settings: Settings dict from JSON
+    
+    Returns:
+        DemandVariability: Classified category
+    """
+    from .auto_variability import (
+        compute_sku_metrics,
+        compute_adaptive_thresholds,
+        classify_demand_variability,
+        classify_all_skus
+    )
+    
+    # Extract settings
+    auto_settings = settings.get("auto_variability", {})
+    enabled = auto_settings.get("enabled", {}).get("value", True)
+    
+    if not enabled:
+        # Return default if auto-classification disabled
+        fallback = auto_settings.get("fallback_category", {}).get("value", "LOW")
+        return DemandVariability[fallback]
+    
+    min_obs = auto_settings.get("min_observations", {}).get("value", 30)
+    stable_pct = auto_settings.get("stable_percentile", {}).get("value", 25)
+    high_pct = auto_settings.get("high_percentile", {}).get("value", 75)
+    seasonal_thresh = auto_settings.get("seasonal_threshold", {}).get("value", 0.3)
+    fallback = auto_settings.get("fallback_category", {}).get("value", "LOW")
+    
+    # Classify all SKUs to get adaptive thresholds
+    all_classifications = classify_all_skus(
+        sales_records=sales_records,
+        min_observations=min_obs,
+        stable_percentile=stable_pct,
+        high_percentile=high_pct,
+        seasonal_threshold=seasonal_thresh,
+        fallback_category=DemandVariability[fallback]
+    )
+    
+    # Return classification for requested SKU
+    return all_classifications.get(sku, DemandVariability[fallback])

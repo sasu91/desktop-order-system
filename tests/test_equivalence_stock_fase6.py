@@ -15,11 +15,11 @@ from pathlib import Path
 from datetime import date
 from typing import Dict
 
-from src.domain.ledger import StockCalculator
-from src.domain.models import Stock
-from src.persistence.storage_adapter import StorageAdapter
-from src.db import open_connection, initialize_database
-from src.migrate_csv_to_sqlite import MigrationOrchestrator
+from backend.src.domain.ledger import StockCalculator
+from backend.src.domain.models import Stock
+from backend.src.persistence.storage_adapter import StorageAdapter
+from backend.src.db import open_connection, initialize_database
+from backend.src.migrate_csv_to_sqlite import MigrationOrchestrator
 
 
 # Golden dataset path
@@ -53,7 +53,7 @@ def golden_sqlite_db(tmp_path, golden_csv_dir):
     conn = open_connection(db_path)
     
     # Apply schema migrations
-    from src.db import apply_migrations
+    from backend.src.db import apply_migrations
     apply_migrations(conn)
     
     # Migrate golden dataset
@@ -105,7 +105,7 @@ def test_stock_calculation_csv_vs_sqlite(golden_csv_dir, golden_sqlite_db, valid
     # And: Load golden dataset via SQLite backend
     sqlite_adapter = StorageAdapter(data_dir=golden_csv_dir, force_backend='sqlite')
     sqlite_adapter.conn = open_connection(golden_sqlite_db)  # Use pre-migrated DB
-    from src.repositories import RepositoryFactory
+    from backend.src.repositories import RepositoryFactory
     sqlite_adapter.repos = RepositoryFactory(sqlite_adapter.conn)
     sqlite_adapter.backend = 'sqlite'
     
@@ -287,7 +287,7 @@ def test_sku_data_equivalence(golden_csv_dir, golden_sqlite_db):
     # And: Load SKUs via SQLite backend
     sqlite_adapter = StorageAdapter(data_dir=golden_csv_dir, force_backend='sqlite')
     sqlite_adapter.conn = open_connection(golden_sqlite_db)
-    from src.repositories import RepositoryFactory
+    from backend.src.repositories import RepositoryFactory
     sqlite_adapter.repos = RepositoryFactory(sqlite_adapter.conn)
     sqlite_adapter.backend = 'sqlite'
     
@@ -341,7 +341,7 @@ def test_transaction_data_equivalence(golden_csv_dir, golden_sqlite_db):
     # And: Load transactions via SQLite backend
     sqlite_adapter = StorageAdapter(data_dir=golden_csv_dir, force_backend='sqlite')
     sqlite_adapter.conn = open_connection(golden_sqlite_db)
-    from src.repositories import RepositoryFactory
+    from backend.src.repositories import RepositoryFactory
     sqlite_adapter.repos = RepositoryFactory(sqlite_adapter.conn)
     sqlite_adapter.backend = 'sqlite'
     

@@ -17,8 +17,8 @@ from datetime import date
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.persistence.storage_adapter import StorageAdapter
-from src.domain.models import SKU, Transaction, EventType, SalesRecord, DemandVariability
+from backend.src.persistence.storage_adapter import StorageAdapter
+from backend.src.domain.models import SKU, Transaction, EventType, SalesRecord, DemandVariability
 
 
 @pytest.fixture

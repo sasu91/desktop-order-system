@@ -9,8 +9,8 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from src.domain.models import SKU, EventType, AuditLog
-from src.persistence.csv_layer import CSVLayer
+from backend.src.domain.models import SKU, EventType, AuditLog
+from backend.src.persistence.csv_layer import CSVLayer
 
 
 class TestAuditTrail:

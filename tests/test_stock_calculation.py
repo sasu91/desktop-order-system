@@ -6,8 +6,8 @@ Tests core ledger processing, AsOf logic, and deterministic ordering.
 import pytest
 from datetime import date
 
-from src.domain.models import Transaction, EventType, Stock, SalesRecord
-from src.domain.ledger import StockCalculator, validate_ean
+from backend.src.domain.models import Transaction, EventType, Stock, SalesRecord
+from backend.src.domain.ledger import StockCalculator, validate_ean
 
 
 class TestStockCalculatorBasic:

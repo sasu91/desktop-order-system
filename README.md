@@ -1,22 +1,200 @@
 # Desktop Order System
 
-A Windows desktop application (Python 3.12 + Tkinter) for managing stock and generating reorder proposals.
+Stock reordering management system — ledger-driven, multi-client architecture.
+
+> **Status**: desktop client operational · backend API (planned) · Android client (planned)
+
+---
 
 ## Architecture
 
-**Ledger-driven design**: All stock state is calculated from a transaction ledger (CSV), not stored.
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        backend/                             │
+│                                                             │
+│   REST API  (Python · FastAPI — planned)                    │
+│   ┌─────────────┐   ┌──────────────┐   ┌────────────────┐  │
+│   │  domain/    │   │ persistence/ │   │  workflows/    │  │
+│   │  models     │   │  SQLite      │   │  order         │  │
+│   │  ledger     │   │  CSV fallback│   │  receiving     │  │
+│   │  calendar   │   │              │   │  replenishment │  │
+│   └─────────────┘   └──────────────┘   └────────────────┘  │
+└────────────────────────────┬────────────────────────────────┘
+                             │  HTTP/JSON  (future)
+           ┌─────────────────┼─────────────────┐
+           │                 │                 │
+    ┌──────▼──────┐         N/A         ┌──────▼──────┐
+    │  desktop/   │                     │  android/   │
+    │             │                     │             │
+    │  Python 3.12│                     │  Kotlin +   │
+    │  Tkinter    │                     │  Jetpack    │
+    │  Windows    │                     │  Compose    │
+    │  (current)  │                     │  (planned)  │
+    └─────────────┘                     └─────────────┘
+```
 
-- **Domain Layer** (`src/domain/`): Pure business logic (models, stock calculation engine)
-- **Persistence Layer** (`src/persistence/`): CSV I/O with auto-create functionality
-- **Workflows** (`src/workflows/`): High-level operations (order, receiving, exceptions)
-- **GUI** (`src/gui/`): Tkinter desktop interface with multiple tabs
-- **Tests** (`tests/`): Comprehensive test suite for core logic
+**Ledger-driven design** — stock state is never stored; it is always *calculated*
+from a transaction ledger (`transactions.csv` / SQLite) as-of a given date.
 
-## Key Concepts
+### Layer responsibilities
 
-### Stock Calculation (AsOf Logic)
+| Layer | Path | Responsibility |
+|-------|------|----------------|
+| Domain | `src/domain/` | Pure business logic — no I/O, fully testable |
+| Persistence | `src/persistence/` | CSV auto-create + SQLite adapter (transparent routing) |
+| Workflows | `src/workflows/` | Order, receiving, replenishment, daily close |
+| GUI | `src/gui/` | Tkinter desktop UI (tabs: Stock, Orders, Receiving, Exceptions, …) |
+| Analytics | `src/analytics/` | KPI, scoring, service level, closed-loop |
+| Backend API | `backend/` | FastAPI REST — **planned** |
+| Android | `android/` | Kotlin mobile client — **planned** |
 
-Stock at a given date is calculated by applying all ledger events with `date < AsOf_date`:
+---
+
+## Prerequisites
+
+### Desktop client (current)
+
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| Python | 3.12 | 3.11 may work but untested |
+| OS | Windows 10/11 | Tkinter is the UI toolkit |
+| pip packages | see `requirements.txt` | install once |
+
+Optional visual features (graceful degradation if absent):
+
+- `matplotlib` — dashboard charts
+- `pillow` + `python-barcode` — barcode rendering in receipt view
+- `tkcalendar` — date-picker widget
+
+### Backend API (planned)
+
+| Requirement | Version |
+|-------------|---------|
+| Python | 3.12 |
+| FastAPI | ≥ 0.110 |
+| SQLite | 3.x (stdlib) |
+
+### Android client (planned)
+
+| Requirement | Version |
+|-------------|---------|
+| Android Studio | Hedgehog 2023.1+ |
+| Kotlin | 1.9+ |
+| Min SDK | API 26 (Android 8.0) |
+| Jetpack Compose | 1.6+ |
+
+---
+
+## Quick start
+
+### Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### Run desktop client
+
+```bash
+python main.py
+```
+
+All required data files (`data/*.csv`, `data/app.db`) are created automatically on
+first run. No manual setup needed.
+
+### Initialize / migrate database
+
+```bash
+# First-time SQLite init
+python src/db.py init
+
+# Apply pending schema migrations
+python src/db.py migrate
+
+# Verify integrity
+python src/db.py verify
+```
+
+### Start backend API  _(placeholder — not yet implemented)_
+
+```bash
+# cd backend/
+# uvicorn app.main:app --reload --port 8000
+```
+
+### Build Android APK  _(placeholder — not yet implemented)_
+
+```bash
+# cd android/
+# ./gradlew assembleDebug
+```
+
+### Run tests
+
+```bash
+# Full test suite
+python -m pytest tests/
+
+# With coverage
+python -m pytest tests/ --cov=src
+
+# Specific module
+python -m pytest tests/test_stock_calculation.py -v
+```
+
+### Build Windows executable
+
+```powershell
+# Onedir (recommended)
+pyinstaller DesktopOrderSystem.spec --clean --noconfirm
+
+# Single-file variant
+pyinstaller DesktopOrderSystem-onefile.spec --clean --noconfirm
+```
+
+---
+
+## Project structure
+
+```
+desktop-order-system/
+├── backend/                  # future REST API (FastAPI)
+├── desktop/                  # future: desktop client moved here
+├── android/                  # future Android client (Kotlin)
+├── docs/                     # runbooks, ADRs, operational guides
+│   └── runbook.md
+├── src/                      # current desktop application source
+│   ├── domain/               # models, ledger, calendar, holidays, …
+│   ├── persistence/          # csv_layer.py, storage_adapter.py
+│   ├── workflows/            # order, receiving, replenishment, …
+│   ├── gui/                  # Tkinter app, widgets, migration wizard
+│   ├── analytics/            # KPI, scoring, service level
+│   ├── utils/                # paths, logging, error formatting
+│   ├── db.py                 # SQLite connection + migration runner
+│   ├── repositories.py       # DAL — SQLite repositories
+│   ├── migrate_csv_to_sqlite.py
+│   ├── forecast.py
+│   ├── replenishment_policy.py
+│   └── uncertainty.py
+├── tests/                    # pytest suite (mirrors src/)
+├── tools/                    # CLI utilities (db_check, export, …)
+├── migrations/               # SQL migration files (001_initial…)
+├── data/                     # runtime data — auto-created, git-ignored
+├── main.py                   # application entry point
+├── config.py                 # storage backend, paths, constants
+├── requirements.txt
+├── pytest.ini
+├── DesktopOrderSystem.spec   # PyInstaller — onedir
+└── DesktopOrderSystem-onefile.spec
+```
+
+---
+
+## Key concepts
+
+### Stock calculation (AsOf logic)
+
+Stock is **never stored** — it is recalculated on demand:
 
 ```python
 from src.domain.ledger import StockCalculator
@@ -31,155 +209,43 @@ stock = StockCalculator.calculate_asof(
 # Returns: Stock(sku="SKU001", on_hand=100, on_order=50)
 ```
 
-### Ledger Events
+### Ledger event types
 
-- **SNAPSHOT**: Base inventory reset (on_hand := qty)
-- **ORDER**: Increase on_order (on_order += qty)
-- **RECEIPT**: Receipt closure (on_order -= qty, on_hand += qty)
-- **SALE**: Reduce on_hand (from sales.csv)
-- **WASTE**: Reduce on_hand
-- **ADJUST**: Absolute set (on_hand := qty)
-- **UNFULFILLED**: Tracking only (no stock impact)
+| Event | on_hand | on_order |
+|-------|---------|----------|
+| `SNAPSHOT` | := qty | — |
+| `ORDER` | — | += qty |
+| `RECEIPT` | += qty | -= qty |
+| `SALE` | -= qty | — |
+| `WASTE` | -= qty | — |
+| `ADJUST` | := qty | — |
+| `UNFULFILLED` | — | — (tracking only) |
 
-### CSV Files (Auto-Created on First Run)
+### Storage backend
 
-- `data/skus.csv`: SKU master data
-- `data/transactions.csv`: Ledger of all events (source of truth)
-- `data/sales.csv`: Daily sales records
-- `data/order_logs.csv`: Order confirmation history
-- `data/receiving_logs.csv`: Receiving closure history
+Configurable in `data/settings.json` (`storage_backend: "sqlite"` or `"csv"`).
+`StorageAdapter` routes transparently — callers never need to know which backend
+is active. SQLite is the default; CSV is the fallback.
 
-### Holiday & Closure Management
+### Holiday system
 
-**Effect-aware holiday system** blocking orders and/or receipts based on scope:
+Effect-aware closures in `data/holidays.json` — `no_order`, `no_receipt`, or `both`.
+`next_receipt_date()` skips affected days automatically.
+Full docs: [HOLIDAY_SYSTEM.md](HOLIDAY_SYSTEM.md)
 
-- **Italian public holidays** (12 total): automatic, including Easter calculation
-- **Custom closures**: configurable via `data/holidays.json`
-- **Granular effects**:
-  - `no_order`: blocks orders only (supplier closed, can still receive)
-  - `no_receipt`: blocks receipts only (inventory day, can still order)
-  - `both`: blocks both (national holidays)
+---
 
-Example `holidays.json`:
-```json
-{
-  "holidays": [
-    {
-      "name": "Chiusura estiva",
-      "scope": "store",
-      "effect": "both",
-      "type": "range",
-      "params": {"start": "2026-08-10", "end": "2026-08-20"}
-    },
-    {
-      "name": "Inventario magazzino",
-      "scope": "warehouse",
-      "effect": "no_receipt",
-      "type": "single",
-      "params": {"date": "2026-12-31"}
-    }
-  ]
-}
-```
+## Design decisions
 
-**Integration**: `next_receipt_date()` automatically skips holidays based on effect.
+1. **Ledger as single source of truth** — stock state is calculated, not stored
+2. **Idempotent operations** — receiving, exceptions use deterministic idempotency keys
+3. **No `datetime.now()` in domain logic** — date always passed as parameter
+4. **Transparent storage routing** — `StorageAdapter` wraps both CSV and SQLite backends
+5. **Frozen-aware paths** — `src/utils/paths.py` works both in dev and PyInstaller `.exe`
 
-📖 **Full documentation**: See [HOLIDAY_SYSTEM.md](HOLIDAY_SYSTEM.md)
+---
 
-## Setup & Running
+## Operations
 
-### Requirements
-
-- Python 3.12
-- Windows (Tkinter support)
-
-### Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### Run Tests
-
-```bash
-python -m pytest tests/
-```
-
-### Run GUI
-
-```bash
-python main.py
-```
-
-App auto-creates all required CSV files on first run.
-
-## Development Workflow
-
-### Core Testing
-
-```bash
-# Run all tests
-python -m pytest tests/
-
-# Run specific test file
-python -m pytest tests/test_stock_calculation.py -v
-
-# Run with coverage
-python -m pytest tests/ --cov=src
-```
-
-### Code Patterns
-
-- **No hardcoded dates in business logic**: Pass date as parameter
-- **Deterministic ordering**: Events on same day sorted by type priority
-- **Idempotent operations**: Receiving closure, exception recording use idempotency keys
-- **Graceful error handling**: Invalid EAN/CSV data → warning, not crash
-
-## Project Structure
-
-```
-desktop-order-system/
-├── src/
-│   ├── domain/
-│   │   ├── models.py          # SKU, Transaction, Stock
-│   │   └── ledger.py          # Stock calculation engine
-│   ├── persistence/
-│   │   └── csv_layer.py       # CSV I/O with auto-create
-│   ├── workflows/
-│   │   ├── order.py           # Order proposal & confirmation
-│   │   └── receiving.py       # Receiving closure & exceptions
-│   └── gui/
-│       └── app.py             # Tkinter main window
-├── tests/
-│   ├── test_stock_calculation.py
-│   ├── test_workflows.py
-│   └── test_persistence.py
-├── data/                      # CSV files (auto-created)
-├── main.py                    # Entry point
-├── config.py                  # Configuration
-├── requirements.txt           # Python dependencies
-└── pytest.ini                 # Pytest configuration
-```
-
-## Key Design Decisions
-
-1. **CSV-only storage**: No database, simple file-based persistence
-2. **Ledger as source of truth**: Stock state is calculated, not stored
-3. **Idempotent operations**: Multiple receipt closures with same ID don't duplicate events
-4. **Deterministic ordering**: Events sorted consistently; recalculating same date yields same result
-5. **No future-dated logic**: Date is always passed as parameter; no `datetime.now()` in domain logic
-
-## Testing Philosophy
-
-- **Domain logic**: Fully testable without I/O via pure functions
-- **Persistence**: Tested with temporary directories (no real file system pollution)
-- **Integration**: CSV layer + calculation tested together
-- **Regression**: Known scenarios (legacy migration, idempotent receiving) with fixed test data
-
-## Contributing
-
-- Isolate business logic from I/O
-- Use explicit dates; avoid `datetime.now()` in domain code
-- Validate early; fail fast with clear error messages
-- Write tests for new features (especially ledger-related changes)
-- Document ledger event impacts clearly
+See [docs/runbook.md](docs/runbook.md) for startup procedures, DB backup, and
+troubleshooting.

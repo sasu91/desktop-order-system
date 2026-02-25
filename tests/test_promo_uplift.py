@@ -12,7 +12,7 @@ Tests cover:
 """
 import pytest
 from datetime import date, timedelta
-from src.domain.promo_uplift import (
+from backend.src.domain.promo_uplift import (
     extract_promo_events,
     calculate_uplift_for_event,
     winsorized_mean,
@@ -22,7 +22,7 @@ from src.domain.promo_uplift import (
     UpliftEvent,
     UpliftReport,
 )
-from src.domain.models import SKU, SalesRecord, PromoWindow, Transaction, EventType
+from backend.src.domain.models import SKU, SalesRecord, PromoWindow, Transaction, EventType
 
 
 class TestExtractPromoEvents:

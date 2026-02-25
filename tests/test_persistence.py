@@ -9,8 +9,8 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from src.domain.models import SKU, Transaction, EventType, SalesRecord
-from src.persistence.csv_layer import CSVLayer
+from backend.src.domain.models import SKU, Transaction, EventType, SalesRecord
+from backend.src.persistence.csv_layer import CSVLayer
 
 
 @pytest.fixture
@@ -164,7 +164,7 @@ class TestSKUOperations:
             })
         
         # Read using csv_layer (should not crash, should default target_csl to 0.0)
-        from src.persistence.csv_layer import CSVLayer
+        from backend.src.persistence.csv_layer import CSVLayer
         csv_layer_legacy = CSVLayer(temp_data_dir)
         
         skus = csv_layer_legacy.read_skus()

@@ -29,7 +29,7 @@ import sys
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.db import (
+from backend.src.db import (
     initialize_database,
     open_connection,
     apply_migrations,
@@ -50,7 +50,7 @@ def temp_db(tmp_path):
     db_path = tmp_path / "test.db"
     
     # Initialize with schema
-    from src.db import DB_PATH, MIGRATIONS_DIR
+    from backend.src.db import DB_PATH, MIGRATIONS_DIR
     original_db_path = DB_PATH
     
     # Temporarily override DB_PATH

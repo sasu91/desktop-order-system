@@ -1,0 +1,9 @@
+# Desktop client dependencies
+# dos_backend (core domain + persistence + workflows)
+-e ../backend[api]
+
+# GUI / rendering
+Pillow>=10.0.0
+matplotlib>=3.5.0
+tkcalendar>=1.6.1
+python-barcode>=0.15.0

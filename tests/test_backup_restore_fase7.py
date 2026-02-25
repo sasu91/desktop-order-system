@@ -29,7 +29,7 @@ import sys
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.db import (
+from backend.src.db import (
     initialize_database,
     open_connection,
     backup_database,
@@ -417,7 +417,7 @@ def test_restore_creates_safety_backup(temp_db, temp_backup_dir, tmp_path):
     
     # Count backups before restore (safety backups go to data/backups/other/ since
     # reason "pre_restore" is categorised as "other")
-    from src.db import BACKUP_DIR
+    from backend.src.db import BACKUP_DIR
     other_dir = BACKUP_DIR / "other"
     other_dir.mkdir(parents=True, exist_ok=True)
     backups_before = len(list(other_dir.glob("*pre_restore*.db")))

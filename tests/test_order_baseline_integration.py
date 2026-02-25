@@ -12,9 +12,9 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from src.domain.models import SalesRecord, Transaction, EventType, SKU
-from src.persistence.csv_layer import CSVLayer
-from src.forecast import baseline_forecast, baseline_forecast_mc
+from backend.src.domain.models import SalesRecord, Transaction, EventType, SKU
+from backend.src.persistence.csv_layer import CSVLayer
+from backend.src.forecast import baseline_forecast, baseline_forecast_mc
 
 
 def test_baseline_order_integration():

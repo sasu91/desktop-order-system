@@ -28,7 +28,7 @@ import shutil
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.db import (
+from backend.src.db import (
     open_connection,
     close_connection,
     get_active_connections_count,

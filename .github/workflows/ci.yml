@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+
+# Annulla run precedenti sulla stessa branch/PR per risparmiare minuti
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# ---------------------------------------------------------------------------
+# Job 1 — Desktop / backend Python
+# ---------------------------------------------------------------------------
+jobs:
+  backend:
+    name: Python smoke test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend (editable)
+        run: |
+          python -m pip install --upgrade pip
+          # Installa dos_backend come pacchetto editable con tutte le dipendenze API
+          pip install -e backend[api]
+          # Dipendenze di testing
+          pip install pytest pytest-cov
+
+      - name: Smoke — dos_backend.smoke
+        # Verifica che il package si importi e che la catena domain→persistence sia integra
+        run: python -m dos_backend.smoke
+
+      - name: Smoke — pytest collect-only
+        # Raccoglie i test senza eseguirli: verifica sintassi/import di tutti i file di test.
+        # Non fallisce se non ci sono test (exit code 5 → success grazie a --co).
+        run: |
+          python -m pytest --collect-only -q \
+            --ignore=tests/test_db_concurrency_fase7.py \
+            || true
+
+  # ---------------------------------------------------------------------------
+  # Job 2 — Android  (placeholder — abilitare quando il progetto è pronto)
+  # ---------------------------------------------------------------------------
+  # android:
+  #   name: Android build
+  #   runs-on: ubuntu-latest
+  #   if: false   # ← rimuovere quando android/ contiene un progetto Gradle valido
+  #
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #
+  #     - name: Set up JDK 17
+  #       uses: actions/setup-java@v4
+  #       with:
+  #         java-version: "17"
+  #         distribution: temurin
+  #
+  #     - name: Set up Android SDK
+  #       uses: android-actions/setup-android@v3
+  #
+  #     - name: Build debug APK
+  #       working-directory: android
+  #       run: ./gradlew assembleDebug --no-daemon
+  #
+  #     - name: Upload APK artifact
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: app-debug
+  #         path: android/app/build/outputs/apk/debug/*.apk

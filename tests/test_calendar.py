@@ -10,7 +10,7 @@ Tests verify:
 """
 import pytest
 from datetime import date as Date, timedelta
-from src.domain.calendar import (
+from backend.src.domain.calendar import (
     Lane,
     CalendarConfig,
     is_order_day,
@@ -422,7 +422,7 @@ class TestHolidaySystem:
     
     def test_easter_2026_calculation(self):
         """Test Easter Sunday 2026 is calculated correctly."""
-        from src.domain.holidays import easter_sunday
+        from backend.src.domain.holidays import easter_sunday
         
         # Easter 2026 is April 5 (verified via external sources)
         easter = easter_sunday(2026)
@@ -431,7 +431,7 @@ class TestHolidaySystem:
     
     def test_easter_monday_2026(self):
         """Test Lunedì dell'Angelo (Easter Monday) 2026."""
-        from src.domain.holidays import easter_sunday
+        from backend.src.domain.holidays import easter_sunday
         
         easter = easter_sunday(2026)
         easter_monday = easter + timedelta(days=1)
@@ -441,7 +441,7 @@ class TestHolidaySystem:
     
     def test_italian_public_holidays_2026(self):
         """Test Italian public holidays for 2026."""
-        from src.domain.holidays import italian_public_holidays
+        from backend.src.domain.holidays import italian_public_holidays
         
         holidays = italian_public_holidays(2026)
         
@@ -468,7 +468,7 @@ class TestHolidaySystem:
         import tempfile
         import json
         from pathlib import Path
-        from src.domain.holidays import HolidayCalendar
+        from backend.src.domain.holidays import HolidayCalendar
         
         test_dir = tempfile.mkdtemp()
         config_path = Path(test_dir) / "holidays.json"
@@ -502,7 +502,7 @@ class TestHolidaySystem:
     
     def test_holiday_effect_no_order(self):
         """Test that no_order effect blocks orders but not receipts."""
-        from src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
+        from backend.src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
         
         rule = HolidayRule(
             name="Supplier Closure",
@@ -527,7 +527,7 @@ class TestHolidaySystem:
     
     def test_holiday_effect_no_receipt(self):
         """Test that no_receipt effect blocks receipts but not orders."""
-        from src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
+        from backend.src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
         
         rule = HolidayRule(
             name="Warehouse Inventory",
@@ -548,7 +548,7 @@ class TestHolidaySystem:
     
     def test_holiday_range(self):
         """Test range-type holiday (e.g., summer closure)."""
-        from src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
+        from backend.src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
         
         rule = HolidayRule(
             name="Summer Closure",
@@ -571,7 +571,7 @@ class TestHolidaySystem:
     
     def test_holiday_fixed_date_annual(self):
         """Test fixed-date holiday that recurs annually."""
-        from src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
+        from backend.src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
         
         rule = HolidayRule(
             name="Patron Saint",
@@ -593,7 +593,7 @@ class TestHolidaySystem:
     
     def test_calendar_integration_with_holidays(self):
         """Test CalendarConfig integration with HolidayCalendar."""
-        from src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
+        from backend.src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
         
         # Create holiday that blocks orders but not receipts
         rule = HolidayRule(
@@ -615,7 +615,7 @@ class TestHolidaySystem:
     
     def test_calendar_integration_both_effect(self):
         """Test that BOTH effect blocks both orders and receipts."""
-        from src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
+        from backend.src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
         
         # Natale with BOTH effect
         rule = HolidayRule(
@@ -636,7 +636,7 @@ class TestHolidaySystem:
     
     def test_italian_holidays_automatic(self):
         """Test that Italian public holidays are loaded automatically."""
-        from src.domain.holidays import HolidayCalendar
+        from backend.src.domain.holidays import HolidayCalendar
         from pathlib import Path
         
         # Load with non-existent config (should fallback to Italian holidays)
@@ -650,7 +650,7 @@ class TestHolidaySystem:
     
     def test_list_holidays_for_year(self):
         """Test listing all holidays for a specific year."""
-        from src.domain.holidays import HolidayCalendar
+        from backend.src.domain.holidays import HolidayCalendar
         from pathlib import Path
         
         cal = HolidayCalendar.from_config(Path("/nonexistent/holidays.json"))
@@ -676,7 +676,7 @@ class TestHolidaySystem:
     
     def test_create_calendar_with_holidays_helper(self):
         """Test helper function for creating calendar with holidays."""
-        from src.domain.calendar import create_calendar_with_holidays
+        from backend.src.domain.calendar import create_calendar_with_holidays
         import tempfile
         
         test_dir = tempfile.mkdtemp()

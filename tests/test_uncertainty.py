@@ -17,7 +17,7 @@ Date: February 2026
 
 import pytest
 from datetime import date, timedelta
-from src.uncertainty import (
+from backend.src.uncertainty import (
     robust_sigma,
     winsorized_sigma,
     sigma_over_horizon,
@@ -274,7 +274,7 @@ class TestCalculateForecastResiduals:
     
     def test_forecast_function_integration(self):
         """Integration with actual forecast module."""
-        from src.forecast import fit_forecast_model, predict
+        from backend.src.forecast import fit_forecast_model, predict
         
         # Generate synthetic data with DOW pattern
         history = []
@@ -311,7 +311,7 @@ class TestEstimateDemandUncertainty:
     
     def test_estimate_with_mad(self):
         """Full workflow: history → residuals → sigma."""
-        from src.forecast import fit_forecast_model, predict
+        from backend.src.forecast import fit_forecast_model, predict
         
         # Volatile demand
         history = [
@@ -332,7 +332,7 @@ class TestEstimateDemandUncertainty:
     
     def test_estimate_with_winsorized(self):
         """Test Winsorized method."""
-        from src.forecast import fit_forecast_model, predict
+        from backend.src.forecast import fit_forecast_model, predict
         
         history = [
             {"date": date(2024, 1, 1) + timedelta(days=i), "qty_sold": 10.0}
@@ -408,7 +408,7 @@ class TestCalculateSafetyStock:
     
     def test_full_workflow(self):
         """End-to-end: history → safety stock."""
-        from src.forecast import fit_forecast_model, predict
+        from backend.src.forecast import fit_forecast_model, predict
         
         # Generate stable demand
         history = [
@@ -447,7 +447,7 @@ class TestCalculateSafetyStock:
     
     def test_with_volatile_demand(self):
         """Volatile demand → higher safety stock."""
-        from src.forecast import fit_forecast_model, predict
+        from backend.src.forecast import fit_forecast_model, predict
         
         # Volatile: ±50% variation
         import random
@@ -471,7 +471,7 @@ class TestCalculateSafetyStock:
     
     def test_longer_horizon_increases_safety_stock(self):
         """Longer protection period → higher safety stock."""
-        from src.forecast import fit_forecast_model, predict
+        from backend.src.forecast import fit_forecast_model, predict
         
         # Use volatile demand to get non-zero sigma
         import random
@@ -506,7 +506,7 @@ class TestOutlierResistanceIntegration:
     
     def test_single_huge_outlier_in_history(self):
         """Single massive outlier should not explode safety stock."""
-        from src.forecast import fit_forecast_model, predict
+        from backend.src.forecast import fit_forecast_model, predict
         
         # Normal demand + 1 outlier
         history = [
@@ -531,7 +531,7 @@ class TestOutlierResistanceIntegration:
     
     def test_multiple_outliers_robustness(self):
         """Multiple outliers should still produce sensible safety stock."""
-        from src.forecast import fit_forecast_model, predict
+        from backend.src.forecast import fit_forecast_model, predict
         
         # 85 normal days + 5 outliers (≈6% contamination)
         history = [
@@ -565,7 +565,7 @@ class TestEdgeCases:
     
     def test_perfect_constant_demand(self):
         """Constant demand → zero uncertainty → zero safety stock."""
-        from src.forecast import fit_forecast_model, predict
+        from backend.src.forecast import fit_forecast_model, predict
         
         history = [
             {"date": date(2024, 1, 1) + timedelta(days=i), "qty_sold": 10.0}
@@ -586,7 +586,7 @@ class TestEdgeCases:
     
     def test_insufficient_data_graceful(self):
         """Too little data → returns zero (no crash)."""
-        from src.forecast import fit_forecast_model, predict
+        from backend.src.forecast import fit_forecast_model, predict
         
         # Only 10 days (need 8 weeks + 1 week)
         history = [

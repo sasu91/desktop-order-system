@@ -13,7 +13,7 @@ Date: February 2026
 
 import pytest
 from datetime import date, timedelta
-from src.replenishment_policy import (
+from backend.src.replenishment_policy import (
     compute_order,
     compute_order_batch,
     OrderConstraints,
@@ -23,7 +23,7 @@ from src.replenishment_policy import (
     _apply_cap,
     _calculate_inventory_position,
 )
-from src.domain.calendar import Lane
+from backend.src.domain.calendar import Lane
 
 
 # Test data: simple stable demand

@@ -26,14 +26,14 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from src.analytics.scoring import (
+from backend.src.analytics.scoring import (
     FeatureRow,
     SKUScoringResult,
     SCORING_VERSION,
     build_feature_row,
     score_all_skus,
 )
-from src.domain.models import SalesRecord, Transaction, SKU, EventType
+from backend.src.domain.models import SalesRecord, Transaction, SKU, EventType
 
 
 # ---------------------------------------------------------------------------

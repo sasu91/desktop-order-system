@@ -18,10 +18,10 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from src.domain.models import SKU, Transaction, EventType, Stock, SalesRecord, DemandVariability, Lot
-from src.persistence.csv_layer import CSVLayer
-from src.workflows.order import OrderWorkflow, calculate_daily_sales_average
-from src.domain.ledger import StockCalculator
+from backend.src.domain.models import SKU, Transaction, EventType, Stock, SalesRecord, DemandVariability, Lot
+from backend.src.persistence.csv_layer import CSVLayer
+from backend.src.workflows.order import OrderWorkflow, calculate_daily_sales_average
+from backend.src.domain.ledger import StockCalculator
 
 
 class TestEdgeCaseExpiredStock:

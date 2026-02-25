@@ -85,7 +85,7 @@ class TestIntermittentClassification:
 
     def test_stable_series_not_intermittent(self, stable_series):
         """Stable series should NOT be classified as intermittent."""
-        from src.domain.intermittent_forecast import classify_intermittent
+        from backend.src.domain.intermittent_forecast import classify_intermittent
 
         classification = classify_intermittent(
             series=stable_series,
@@ -100,7 +100,7 @@ class TestIntermittentClassification:
 
     def test_intermittent_series_classified_correctly(self, intermittent_series):
         """Intermittent series should be classified as intermittent."""
-        from src.domain.intermittent_forecast import classify_intermittent
+        from backend.src.domain.intermittent_forecast import classify_intermittent
 
         classification = classify_intermittent(
             series=intermittent_series,
@@ -117,7 +117,7 @@ class TestIntermittentClassification:
 
     def test_all_zeros_classified_intermittent(self, all_zeros_series):
         """All zeros → definitely intermittent (degenerate case)."""
-        from src.domain.intermittent_forecast import classify_intermittent
+        from backend.src.domain.intermittent_forecast import classify_intermittent
 
         classification = classify_intermittent(
             series=all_zeros_series,
@@ -131,7 +131,7 @@ class TestIntermittentClassification:
 
     def test_classification_respects_censoring(self, intermittent_series):
         """Censored days should be excluded from classification."""
-        from src.domain.intermittent_forecast import classify_intermittent
+        from backend.src.domain.intermittent_forecast import classify_intermittent
 
         # Mark first 10 days as censored
         exclude_indices = list(range(10))
@@ -156,7 +156,7 @@ class TestIntermittentFitting:
 
     def test_croston_fit_convergence(self, intermittent_series):
         """Croston should converge to reasonable p_t and z_t."""
-        from src.domain.intermittent_forecast import fit_croston
+        from backend.src.domain.intermittent_forecast import fit_croston
 
         model = fit_croston(series=intermittent_series, alpha=0.1)
 
@@ -169,7 +169,7 @@ class TestIntermittentFitting:
 
     def test_sba_fit_same_params_as_croston(self, intermittent_series):
         """SBA should have same p_t/z_t as Croston (bias correction in predict)."""
-        from src.domain.intermittent_forecast import fit_croston, fit_sba
+        from backend.src.domain.intermittent_forecast import fit_croston, fit_sba
 
         croston_model = fit_croston(series=intermittent_series, alpha=0.1)
         sba_model = fit_sba(series=intermittent_series, alpha=0.1)
@@ -181,7 +181,7 @@ class TestIntermittentFitting:
 
     def test_tsb_fit_includes_probability(self, intermittent_series):
         """TSB should produce b_t (probability of demand)."""
-        from src.domain.intermittent_forecast import fit_tsb
+        from backend.src.domain.intermittent_forecast import fit_tsb
 
         model = fit_tsb(series=intermittent_series, alpha_demand=0.1, alpha_probability=0.1)
 
@@ -192,7 +192,7 @@ class TestIntermittentFitting:
 
     def test_all_zeros_handle_gracefully(self, all_zeros_series):
         """All zeros should not crash, return model with zero forecast."""
-        from src.domain.intermittent_forecast import fit_croston, predict_daily
+        from backend.src.domain.intermittent_forecast import fit_croston, predict_daily
 
         model = fit_croston(series=all_zeros_series, alpha=0.1)
 
@@ -213,7 +213,7 @@ class TestIntermittentPrediction:
 
     def test_predict_daily_croston(self, intermittent_series):
         """Croston daily prediction = z_t / p_t."""
-        from src.domain.intermittent_forecast import fit_croston, predict_daily
+        from backend.src.domain.intermittent_forecast import fit_croston, predict_daily
 
         model = fit_croston(series=intermittent_series, alpha=0.1)
         daily_forecast = predict_daily(model)
@@ -223,7 +223,7 @@ class TestIntermittentPrediction:
 
     def test_predict_daily_sba_bias_correction(self, intermittent_series):
         """SBA daily prediction includes bias correction (1 - alpha/2)."""
-        from src.domain.intermittent_forecast import fit_sba, predict_daily
+        from backend.src.domain.intermittent_forecast import fit_sba, predict_daily
 
         model = fit_sba(series=intermittent_series, alpha=0.1)
         daily_forecast = predict_daily(model)
@@ -234,7 +234,7 @@ class TestIntermittentPrediction:
 
     def test_predict_daily_tsb(self, intermittent_series):
         """TSB daily prediction = b_t * z_t."""
-        from src.domain.intermittent_forecast import fit_tsb, predict_daily
+        from backend.src.domain.intermittent_forecast import fit_tsb, predict_daily
 
         model = fit_tsb(series=intermittent_series, alpha_demand=0.1, alpha_probability=0.1)
         daily_forecast = predict_daily(model)
@@ -244,7 +244,7 @@ class TestIntermittentPrediction:
 
     def test_predict_P_days(self, intermittent_series):
         """P-day prediction = daily_forecast * P."""
-        from src.domain.intermittent_forecast import fit_sba, predict_daily, predict_P_days
+        from backend.src.domain.intermittent_forecast import fit_sba, predict_daily, predict_P_days
 
         model = fit_sba(series=intermittent_series, alpha=0.1)
         daily_forecast = predict_daily(model)
@@ -265,7 +265,7 @@ class TestIntermittentBacktest:
 
     def test_backtest_method_runs_successfully(self, intermittent_series):
         """Backtest should run without error and produce metrics."""
-        from src.domain.intermittent_forecast import backtest_method
+        from backend.src.domain.intermittent_forecast import backtest_method
 
         result = backtest_method(
             series=intermittent_series,
@@ -280,7 +280,7 @@ class TestIntermittentBacktest:
 
     def test_select_best_method(self, intermittent_series):
         """select_best_method should return one of the candidates."""
-        from src.domain.intermittent_forecast import select_best_method
+        from backend.src.domain.intermittent_forecast import select_best_method
 
         best_method, results = select_best_method(
             series=intermittent_series,
@@ -297,7 +297,7 @@ class TestIntermittentBacktest:
 
     def test_obsolescence_series_prefers_tsb(self, obsolescence_series):
         """Obsolescence series should favor TSB (better for declining demand)."""
-        from src.domain.intermittent_forecast import select_best_method
+        from backend.src.domain.intermittent_forecast import select_best_method
 
         best_method, results = select_best_method(
             series=obsolescence_series,
@@ -329,7 +329,7 @@ class TestIntermittentIntegration:
 
     def test_demand_builder_croston(self, intermittent_series):
         """demand_builder with method='croston' should use Croston."""
-        from src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.demand_builder import build_demand_distribution
 
         history = self._make_history(intermittent_series)
         settings = {"alpha_default": 0.1}
@@ -349,7 +349,7 @@ class TestIntermittentIntegration:
 
     def test_demand_builder_sba(self, intermittent_series):
         """demand_builder with method='sba' should use SBA."""
-        from src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.demand_builder import build_demand_distribution
 
         history = self._make_history(intermittent_series)
         settings = {"alpha_default": 0.1}
@@ -368,7 +368,7 @@ class TestIntermittentIntegration:
 
     def test_demand_builder_tsb(self, intermittent_series):
         """demand_builder with method='tsb' should use TSB."""
-        from src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.demand_builder import build_demand_distribution
 
         history = self._make_history(intermittent_series)
         settings = {"alpha_default": 0.1}
@@ -387,7 +387,7 @@ class TestIntermittentIntegration:
 
     def test_demand_builder_intermittent_auto(self, intermittent_series):
         """demand_builder with method='intermittent_auto' should classify and select method."""
-        from src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.demand_builder import build_demand_distribution
 
         history = self._make_history(intermittent_series)
         settings = {
@@ -414,7 +414,7 @@ class TestIntermittentIntegration:
 
     def test_demand_builder_fallback_to_simple(self, stable_series):
         """intermittent_auto with stable series should fallback to simple."""
-        from src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.demand_builder import build_demand_distribution
 
         history = self._make_history(stable_series)
         settings = {
@@ -446,7 +446,7 @@ class TestRegressionStableSeries:
 
     def test_stable_series_with_simple_unchanged(self, stable_series):
         """Stable series with method='simple' should work as before."""
-        from src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.demand_builder import build_demand_distribution
 
         base_date = date(2025, 11, 1)
         history = [
@@ -477,7 +477,7 @@ class TestGoldenIntermittentSeries:
 
     def test_golden_frequent_zeros_sba_better_than_simple(self, intermittent_series):
         """Golden: SBA should outperform simple on intermittent series (by WMAPE or stable forecast)."""
-        from src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.demand_builder import build_demand_distribution
 
         base_date = date(2025, 11, 1)
         history = [
@@ -512,7 +512,7 @@ class TestGoldenIntermittentSeries:
 
     def test_golden_obsolescence_tsb_reduces_forecast(self, obsolescence_series):
         """Golden: TSB on obsolescence should produce declining forecast."""
-        from src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.demand_builder import build_demand_distribution
 
         base_date = date(2025, 11, 1)
         history = [
@@ -546,7 +546,7 @@ class TestIntermittentDeterminism:
 
     def test_croston_deterministic(self, intermittent_series):
         """Same series + alpha → identical Croston model."""
-        from src.domain.intermittent_forecast import fit_croston
+        from backend.src.domain.intermittent_forecast import fit_croston
 
         model1 = fit_croston(series=intermittent_series, alpha=0.1)
         model2 = fit_croston(series=intermittent_series, alpha=0.1)
@@ -557,7 +557,7 @@ class TestIntermittentDeterminism:
 
     def test_demand_builder_intermittent_deterministic(self, intermittent_series):
         """Same history + settings → identical demand distribution."""
-        from src.domain.demand_builder import build_demand_distribution
+        from backend.src.domain.demand_builder import build_demand_distribution
 
         base_date = date(2025, 11, 1)
         history = [

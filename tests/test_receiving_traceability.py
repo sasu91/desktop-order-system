@@ -14,10 +14,10 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from src.persistence.csv_layer import CSVLayer
-from src.workflows.receiving_v2 import ReceivingWorkflow
-from src.workflows.order import OrderWorkflow
-from src.domain.models import EventType, SKU, Stock, OrderProposal
+from backend.src.persistence.csv_layer import CSVLayer
+from backend.src.workflows.receiving_v2 import ReceivingWorkflow
+from backend.src.workflows.order import OrderWorkflow
+from backend.src.domain.models import EventType, SKU, Stock, OrderProposal
 
 
 @pytest.fixture

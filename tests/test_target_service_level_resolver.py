@@ -5,8 +5,8 @@ Verifies priority chain, clamping, perishability detection, variability mapping,
 """
 
 import pytest
-from src.analytics.target_resolver import TargetServiceLevelResolver, PERISHABLE_THRESHOLD_DAYS, MIN_CSL, MAX_CSL
-from src.domain.models import SKU, DemandVariability
+from backend.src.analytics.target_resolver import TargetServiceLevelResolver, PERISHABLE_THRESHOLD_DAYS, MIN_CSL, MAX_CSL
+from backend.src.domain.models import SKU, DemandVariability
 
 
 @pytest.fixture
