@@ -127,7 +127,7 @@ _BASE_EXCEPTION = {
 
 
 class TestPostExceptions:
-    """201 first write, 200 UUID replay, 409 legacy conflict."""
+    """201 first write, 200 UUID replay, no 409 when client_event_id absent."""
 
     def test_201_new_event(self, client: TestClient) -> None:
         """First submission → 201 Created, already_recorded=False."""
@@ -173,19 +173,38 @@ class TestPostExceptions:
         # Only one transaction must exist
         assert len(mem_storage._transactions) == 1
 
-    # -- Legacy idempotency (date + sku + event) --------------------------------
+    # -- No legacy idempotency (date + sku + event) --------------------------
 
-    def test_409_legacy_duplicate(self, client: TestClient) -> None:
-        """Same date+sku+event without client_event_id → second call 409 Conflict."""
-        # No client_event_id so legacy idempotency path is used
+    def test_201_allows_same_day_duplicate_without_client_event_id(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """Two identical events (same date+sku+event), no client_event_id → both 201."""
         payload = {k: v for k, v in _BASE_EXCEPTION.items() if k != "note"}
 
         r1 = client.post(f"{_V1}/exceptions", json=payload)
         assert r1.status_code == 201
 
         r2 = client.post(f"{_V1}/exceptions", json=payload)
-        assert r2.status_code == 409
-        assert r2.json()["error"]["code"] == "CONFLICT"
+        assert r2.status_code == 201
+        assert r2.json()["already_recorded"] is False
+
+        # Both transactions must be in the ledger
+        assert len(mem_storage._transactions) == 2
+
+    def test_201_allows_multiple_different_events_same_day(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """WASTE then ADJUST on same day+sku, no client_event_id → both 201."""
+        waste = {**_BASE_EXCEPTION, "event": "WASTE"}
+        adjust = {**_BASE_EXCEPTION, "event": "ADJUST"}
+
+        r1 = client.post(f"{_V1}/exceptions", json=waste)
+        assert r1.status_code == 201
+
+        r2 = client.post(f"{_V1}/exceptions", json=adjust)
+        assert r2.status_code == 201
+
+        assert len(mem_storage._transactions) == 2
 
     # -- Validation ------------------------------------------------------------
 

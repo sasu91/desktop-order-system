@@ -3,28 +3,25 @@ POST /exceptions — registra evento di eccezione nel ledger (WASTE, ADJUST, UNF
 
 Idempotency
 -----------
-Due livelli di protezione contro le scritture duplicate:
+Un solo livello di protezione contro le scritture duplicate:
 
-1. **client_event_id** (UUID opzionale nel payload)
+**client_event_id** (UUID opzionale nel payload)
    Consultato/registrato nella tabella ``api_idempotency_keys`` (SQLite).
    Se la stessa stringa arriva una seconda volta il server risponde 200 con
    ``already_recorded=true`` **senza toccare il ledger**.
 
-2. **date + sku + event** (legacy fallback, senza client_event_id)
-   Se la tripletta è già presente nel ledger → 409 Conflict.
-   Si applica anche quando client_event_id è presente ma la chiave non è
-   ancora nel registro (es. prima chiamata con un uuid già "usato" lato
-   ledger da una richiesta precedente senza uuid).
+Se ``client_event_id`` non è fornito, ogni richiesta viene accettata
+indipendentemente — più eventi WASTE/ADJUST/UNFULFILLED sullo stesso
+SKU nello stesso giorno sono legittimi (es. due scarti separati).
 
 Workflow
 --------
 1. Validate body (Pydantic + campo obbligatorio sku exists).
 2. Se client_event_id → lookup idempotency table.
 3. Se trovato → replay stored response con already_recorded=True (HTTP 200).
-4. Controlla date+sku+event nel ledger → ConflictError(409) se già presente.
-5. Scrive Transaction nel ledger via StorageAdapter.
-6. Se client_event_id → record nella tabella idempotency.
-7. Risponde 201 Created.
+4. Scrive Transaction nel ledger via StorageAdapter.
+5. Se client_event_id → record nella tabella idempotency.
+6. Risponde 201 Created.
 """
 from __future__ import annotations
 
@@ -36,7 +33,7 @@ from fastapi.responses import JSONResponse
 
 from ..api.auth import verify_token
 from ..api.deps import get_db, get_storage
-from ..api.errors import ConflictError, NotFoundError
+from ..api.errors import NotFoundError
 from ..api import idempotency
 from ..domain.models import EventType, Transaction
 from ..schemas import ExceptionRequest, ExceptionResponse
@@ -55,11 +52,6 @@ _EVENT_MAP: dict[str, EventType] = {
 }
 
 
-def _idempotency_key(event_date: date_type, sku: str, event: str) -> str:
-    """Legacy date+sku+event idempotency key (used for ledger duplicate check)."""
-    return f"{event_date.isoformat()}:{sku}:{event}"
-
-
 @router.post(
     "/exceptions",
     response_model=ExceptionResponse,
@@ -74,7 +66,6 @@ def _idempotency_key(event_date: date_type, sku: str, event: str) -> str:
         201: {"description": "Eccezione registrata con successo"},
         400: {"description": "Input non valido"},
         404: {"description": "SKU non trovato"},
-        409: {"description": "Eccezione già presente (date+sku+event)"},
     },
 )
 def create_exception(
@@ -98,8 +89,8 @@ def create_exception(
     risponde **200** con `already_recorded=true` — il ledger non viene
     toccato una seconda volta.
 
-    **Senza client_event_id**: la tripletta `date+sku+event` viene usata come
-    chiave di idempotenza legacy. Duplicato → **409 Conflict**.
+    **Senza client_event_id**: ogni chiamata viene accettata — non si usa
+    la tripletta ``date+sku+event`` come chiave legacy (niente 409).
     """
     # ------------------------------------------------------------------ #
     # 1. Ensure idempotency schema exists (no-op when migration 005 ran)  #
@@ -138,28 +129,9 @@ def create_exception(
     event_type: EventType = _EVENT_MAP[body.event]
 
     # ------------------------------------------------------------------ #
-    # 5. Legacy idempotency: date+sku+event already in ledger?            #
+    # 5. Build and write transaction                                      #
     # ------------------------------------------------------------------ #
-    idem_key = _idempotency_key(body.date, body.sku, body.event)
-    existing_txns = storage.read_transactions()
-    duplicate = any(
-        t.date == body.date and t.sku == body.sku and t.event == event_type
-        for t in existing_txns
-    )
-    if duplicate:
-        raise ConflictError(
-            f"Eccezione già registrata per la tripletta "
-            f"date={body.date} / sku='{body.sku}' / event={body.event}. "
-            f"Idempotency key: '{idem_key}'."
-        )
-
-    # ------------------------------------------------------------------ #
-    # 6. Build and write transaction                                      #
-    # ------------------------------------------------------------------ #
-    # Compose note: prefix with idempotency key so the ledger is self-describing.
-    full_note = f"{idem_key}"
-    if body.note:
-        full_note = f"{idem_key}; {body.note}"
+    full_note = body.note
 
     txn = Transaction(
         date=body.date,
@@ -179,7 +151,7 @@ def create_exception(
     )
 
     # ------------------------------------------------------------------ #
-    # 7. Assemble response                                                #
+    # 6. Assemble response                                                #
     # ------------------------------------------------------------------ #
     response_obj = ExceptionResponse(
         transaction_id=None,  # StorageAdapter.write_transaction() returns nothing
@@ -188,14 +160,14 @@ def create_exception(
         event=body.event,
         qty=body.qty,
         note=full_note,
-        idempotency_key=idem_key,
+        idempotency_key=client_event_id,
         already_recorded=False,
         client_event_id=client_event_id,
     )
     response_dict = response_obj.model_dump(mode="json")
 
     # ------------------------------------------------------------------ #
-    # 8. Record in idempotency table (only when client provided a uuid)   #
+    # 7. Record in idempotency table (only when client provided a uuid)   #
     # ------------------------------------------------------------------ #
     if client_event_id:
         idempotency.record(

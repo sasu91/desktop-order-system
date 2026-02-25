@@ -424,11 +424,12 @@ class StorageAdapter(CSVLayer):
     # ============================================================
     
     def read_transactions(self) -> List[Transaction]:
-        """Read all transactions"""
+        """Read all transactions (no row limit — returns the complete ledger)."""
         if self.is_sqlite_mode():
             assert self.repos is not None
             try:
-                txns_dict = self.repos.ledger().list_transactions(limit=10000)
+                # No limit: the full ledger is required for correct AsOf calculation.
+                txns_dict = self.repos.ledger().list_transactions()
                 return [self._dict_to_transaction(t) for t in txns_dict]
             except Exception as e:
                 self._sqlite_degrade(e)
@@ -436,7 +437,34 @@ class StorageAdapter(CSVLayer):
                 return self.csv_layer.read_transactions()
         else:
             return self.csv_layer.read_transactions()
-    
+
+    def read_transactions_for_sku_asof(
+        self,
+        sku: str,
+        asof: date,
+    ) -> List[Transaction]:
+        """Return only the transactions for *sku* with date < *asof*.
+
+        Pushes the SKU and date predicates into SQL (SQLite mode) so only the
+        relevant rows are loaded — no 10 000-row cap, no cross-SKU data.
+        Falls back to a Python-level filter over the full CSV in CSV mode.
+        Use this instead of read_transactions() whenever a single-SKU AsOf
+        calculation is needed (e.g. GET /stock/{sku}).
+        """
+        if self.is_sqlite_mode():
+            assert self.repos is not None
+            try:
+                txns_dict = self.repos.ledger().list_transactions_for_sku_asof(sku, asof)
+                return [self._dict_to_transaction(t) for t in txns_dict]
+            except Exception as e:
+                self._sqlite_degrade(e)
+                print(f"⚠ SQLite read_transactions_for_sku_asof failed, falling back to CSV: {e}")
+                all_txns = self.csv_layer.read_transactions()
+                return [t for t in all_txns if t.sku == sku and t.date < asof]
+        else:
+            all_txns = self.csv_layer.read_transactions()
+            return [t for t in all_txns if t.sku == sku and t.date < asof]
+
     def write_transaction(self, txn: Transaction):
         """Write single transaction"""
         if self.is_sqlite_mode():

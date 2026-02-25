@@ -391,53 +391,94 @@ class LedgerRepository:
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         event: Optional[str] = None,
-        limit: int = 10000
+        limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         List transactions with filters.
-        
+
         Args:
             sku: Filter by SKU
             date_from: Filter by date >= date_from (inclusive)
             date_to: Filter by date <= date_to (inclusive)
             event: Filter by event type
-            limit: Maximum rows to return
-        
+            limit: Maximum rows to return (None = no limit — returns all matching rows)
+
         Returns:
             List of transaction dictionaries (sorted by date ASC, transaction_id ASC)
         """
         cursor = self.conn.cursor()
-        
+
         where_clauses = []
         values = []
-        
+
         if sku:
             where_clauses.append("sku = ?")
             values.append(sku)
-        
+
         if date_from:
             where_clauses.append("date >= ?")
             values.append(date_from)
-        
+
         if date_to:
             where_clauses.append("date <= ?")
             values.append(date_to)
-        
+
         if event:
             where_clauses.append("event = ?")
             values.append(event)
-        
+
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-        
-        sql = f"""
-            SELECT * FROM transactions 
-            {where_sql}
-            ORDER BY date ASC, transaction_id ASC
-            LIMIT ?
-        """
-        values.append(limit)
-        
+
+        if limit is not None:
+            sql = f"""
+                SELECT * FROM transactions
+                {where_sql}
+                ORDER BY date ASC, transaction_id ASC
+                LIMIT ?
+            """
+            values.append(limit)
+        else:
+            sql = f"""
+                SELECT * FROM transactions
+                {where_sql}
+                ORDER BY date ASC, transaction_id ASC
+            """
+
         cursor.execute(sql, values)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def list_transactions_for_sku_asof(
+        self,
+        sku: str,
+        asof: date,
+    ) -> List[Dict[str, Any]]:
+        """
+        Return all transactions for a single SKU with date strictly before *asof*.
+
+        This is the purpose-built query for stock calculation: it pushes the
+        SKU and date filters into SQL so the DB returns only the rows that matter,
+        avoiding the 10 000-row LIMIT of the generic list_transactions() and avoiding
+        loading rows for other SKUs into Python.
+
+        Args:
+            sku:   SKU identifier (exact match, case-sensitive).
+            asof:  Reference date.  Only transactions with date < asof are returned.
+
+        Returns:
+            List of transaction dicts sorted by (date ASC, transaction_id ASC).
+            Never truncated — all matching rows are returned.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT *
+            FROM   transactions
+            WHERE  sku  = ?
+              AND  date < ?
+            ORDER BY date ASC, transaction_id ASC
+            """,
+            (sku, asof.isoformat()),
+        )
         return [dict(row) for row in cursor.fetchall()]
     
     def get_by_id(self, transaction_id: int) -> Optional[Dict[str, Any]]:

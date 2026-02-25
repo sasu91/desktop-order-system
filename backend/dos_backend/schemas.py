@@ -154,7 +154,7 @@ class ExceptionResponse(BaseModel):
     event: str
     qty: int
     note: str
-    idempotency_key: str
+    idempotency_key: Optional[str] = None  # populated only when client_event_id was provided
     already_recorded: bool = False
     client_event_id: Optional[str] = None
 
