@@ -93,10 +93,10 @@ echo ""
 # ---------------------------------------------------------------------------
 # 6. Avvio Uvicorn
 # ---------------------------------------------------------------------------
-echo "[run_backend] Avvio: python -m uvicorn dos_backend.main:app ..."
+echo "[run_backend] Avvio: python -m uvicorn dos_backend.api.main:app ..."
 echo ""
 
-exec python -m uvicorn dos_backend.main:app \
+exec python -m uvicorn dos_backend.api.main:app \
     --host "$DOS_API_HOST" \
     --port "$DOS_API_PORT" \
     --log-level "$(echo "$DOS_LOG_LEVEL" | tr '[:upper:]' '[:lower:]')"

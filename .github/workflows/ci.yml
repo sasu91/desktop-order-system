@@ -63,9 +63,15 @@ jobs:
         run: |
           python -m pytest tests/ -v --tb=short
 
+      - name: OpenAPI schema — verify docs/openapi.json is up to date
+        # Regenerates the schema from the live app and diffs it against the
+        # committed docs/openapi.json.  Fails with a unified diff if they differ.
+        # To fix: run `python tools/export_openapi.py` locally and commit the result.
+        run: python tools/export_openapi.py --check
+
       - name: Legacy test collection (non-blocking)
         # Raccoglie i vecchi test senza eseguirli: verifica sintassi/import.
-        # Non fallisce (|| true) perché molti usano ancora backend.src.* legacy.
+        # Non bloccante (|| true) per test radice che dipendono dal contesto desktop.
         run: |
           python -m pytest --collect-only -q \
             --ignore=tests/test_db_concurrency_fase7.py \

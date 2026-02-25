@@ -1,5 +1,5 @@
 """
-backend/src/schemas.py — Pydantic request/response models.
+backend/dos_backend/schemas.py — Pydantic request/response models.
 
 Mirrors the shapes documented in docs/api_contract.md.
 All models are placeholders; fields will be populated during implementation.
@@ -157,6 +157,61 @@ class ExceptionResponse(BaseModel):
     idempotency_key: Optional[str] = None  # populated only when client_event_id was provided
     already_recorded: bool = False
     client_event_id: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Daily-upsert exception
+# ---------------------------------------------------------------------------
+# Semantic contract:
+#   POST /exceptions         — appends a NEW transaction each call; quantity is
+#                              a discrete event (e.g. one spoilage incident);
+#                              multiple calls on the same day are intentional.
+#
+#   POST /exceptions/daily-upsert — maintains a SINGLE running total per
+#                              (sku, date, event).  Two modes:
+#
+#                 "replace"  Set the total to exactly `qty`.  Idempotent: if
+#                             the current total already equals `qty` the call
+#                             is a no-op (noop=true).  Useful for ERP imports
+#                             that send the end-of-day cumulative figure.
+#
+#                 "sum"      Append `qty` as an additional delta to the current
+#                             total.  Functionally equivalent to /exceptions but
+#                             the response includes the new running total so the
+#                             caller can verify the accumulation.
+# ---------------------------------------------------------------------------
+
+DailyUpsertMode = Literal["sum", "replace"]
+
+
+class DailyUpsertRequest(BaseModel):
+    date: date
+    sku: str
+    event: ExceptionEventType
+    qty: int = Field(..., ge=1, description="Units to set (replace) or add (sum).")
+    mode: DailyUpsertMode = Field(
+        "replace",
+        description=(
+            "\"replace\": set the daily total to exactly qty (idempotent). "
+            "\"sum\": append qty as an additional delta."
+        ),
+    )
+    note: str = Field("", max_length=500)
+
+
+class DailyUpsertResponse(BaseModel):
+    date: date
+    sku: str
+    event: str
+    mode: DailyUpsertMode
+    qty_delta: int = Field(
+        description="Units actually written to the ledger (0 if noop; negative if replace reduced the total).",
+    )
+    qty_total: int = Field(description="Final running total for (sku, date, event) after this call.")
+    note: str
+    noop: bool = Field(
+        description="True when replace mode is called with a qty that already matches the current total.",
+    )
 
 
 # ---------------------------------------------------------------------------

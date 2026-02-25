@@ -1,1 +1,1 @@
-# backend/src/routers — endpoint modules
+# backend/dos_backend/routers — endpoint modules

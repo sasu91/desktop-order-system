@@ -23,10 +23,25 @@ dev environments).  Once migration 005 runs the DDL is a no-op.
 
 Thread safety
 -------------
-``INSERT OR IGNORE`` means concurrent requests with the same key race to be the
-"winner" — the loser's INSERT is silently dropped.  Both callers will then read
-the stored response via ``lookup()``.  This is correct: exactly one transaction
-is written to the ledger; the other request returns the stored response.
+**Claim-first pattern** prevents TOCTOU races between ``lookup()`` and the
+ledger write:
+
+1. ``try_claim(conn, client_event_id, endpoint)``
+   Atomically inserts a *pending* placeholder row (status_code=0) via
+   ``INSERT OR IGNORE``.  Returns ``True`` if this caller won the race and
+   must process the request; ``False`` if another concurrent caller already
+   claimed the key.
+
+2. The *winner* processes the request (writes to the ledger) and then calls
+   ``finalize(conn, client_event_id, status_code, response_data)`` to update
+   the placeholder with the real response.
+
+3. The *loser* calls ``lookup_with_wait()`` which polls until the winner
+   finalises.  It then replays the stored response with
+   ``already_recorded=True``.
+
+This guarantees exactly one ledger write per ``client_event_id``, even under
+concurrent load (threads / gunicorn workers sharing the same SQLite file).
 
 Retention / TTL
 ---------------
@@ -39,6 +54,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -46,6 +62,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # DDL (also applied by migration 005 — this is a safe fallback for test envs)
 # ---------------------------------------------------------------------------
+
+# status_code=0 is the "in-progress" sentinel written by try_claim() before
+# processing starts.  finalize() replaces it with the real HTTP status code.
+_STATUS_PENDING: int = 0
 
 _ENSURE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS api_idempotency_keys (
@@ -96,11 +116,117 @@ def lookup(
         ).fetchone()
         if row is None:
             return None
+        if int(row[0]) == _STATUS_PENDING:
+            # Row is claimed but not yet finalised by the winning thread.
+            return None
         return int(row[0]), json.loads(row[1])
     except sqlite3.Error as exc:
         # Non-fatal: log and return None (caller will re-process and try to record).
         logger.warning("idempotency: lookup failed for %r — %s", client_event_id, exc)
         return None
+
+
+def try_claim(
+    conn: sqlite3.Connection,
+    client_event_id: str,
+    endpoint: str,
+) -> bool:
+    """
+    Atomically claim an idempotency slot before processing a request.
+
+    Inserts a pending placeholder row (``status_code=0``) via
+    ``INSERT OR IGNORE``.  The caller **must** call ``finalize()`` after
+    successfully writing to the ledger.
+
+    Returns:
+        ``True``  — this caller won the race; it owns the write.
+        ``False`` — another caller already claimed (or finalised) this key;
+                    the caller should call ``lookup_with_wait()`` and replay.
+    """
+    try:
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO api_idempotency_keys
+                (client_event_id, endpoint, status_code, response_json)
+            VALUES (?, ?, ?, '')
+            """,
+            (client_event_id, endpoint, _STATUS_PENDING),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+    except sqlite3.Error as exc:
+        logger.warning("idempotency: try_claim failed for %r — %s", client_event_id, exc)
+        # Fail open: treat as owning the slot to avoid silently dropping data.
+        return True
+
+
+def finalize(
+    conn: sqlite3.Connection,
+    client_event_id: str,
+    status_code: int,
+    response_data: dict,
+) -> None:
+    """
+    Replace the pending placeholder with the real response.
+
+    Must be called by the winner of ``try_claim()`` after the ledger write
+    succeeds.  Converts ``status_code=0`` (pending) to the actual HTTP status
+    and stores the serialised response for future replay.
+    """
+    try:
+        conn.execute(
+            """
+            UPDATE api_idempotency_keys
+               SET status_code = ?, response_json = ?
+             WHERE client_event_id = ?
+            """,
+            (status_code, json.dumps(response_data, default=str), client_event_id),
+        )
+        conn.commit()
+    except sqlite3.Error as exc:
+        logger.warning("idempotency: finalize failed for %r — %s", client_event_id, exc)
+
+
+def lookup_with_wait(
+    conn: sqlite3.Connection,
+    client_event_id: str,
+    max_retries: int = 10,
+    delay: float = 0.02,
+) -> Optional[tuple[int, dict]]:
+    """
+    Poll for a finalised idempotency record, retrying if still pending.
+
+    Called by the *loser* of ``try_claim()`` to wait for the winner to call
+    ``finalize()``.  Retries up to *max_retries* times with *delay* seconds
+    between each attempt.
+
+    Returns:
+        ``(status_code, response_dict)`` once finalised, or ``None`` on timeout.
+    """
+    for attempt in range(max_retries):
+        try:
+            row = conn.execute(
+                "SELECT status_code, response_json FROM api_idempotency_keys "
+                "WHERE client_event_id = ?",
+                (client_event_id,),
+            ).fetchone()
+            if row is not None and int(row[0]) != _STATUS_PENDING:
+                return int(row[0]), json.loads(row[1])
+        except sqlite3.Error as exc:
+            logger.warning(
+                "idempotency: lookup_with_wait error (attempt %d) for %r — %s",
+                attempt,
+                client_event_id,
+                exc,
+            )
+        if attempt < max_retries - 1:
+            time.sleep(delay)
+    logger.warning(
+        "idempotency: lookup_with_wait timed out after %d retries for %r",
+        max_retries,
+        client_event_id,
+    )
+    return None
 
 
 def record(
@@ -111,45 +237,17 @@ def record(
     response_data: dict,
 ) -> bool:
     """
-    Persist a processed idempotency key and its response.
+    Backward-compatible single-call claim + finalise.
 
-    Uses ``INSERT OR IGNORE`` to handle the race where two concurrent requests
-    carry the same ``client_event_id``: first INSERT wins, second is silently
-    dropped.  Both callers should then call ``lookup()`` to retrieve the stored
-    response.
-
-    Args:
-        conn:             SQLite connection (must support ``execute`` + ``commit``).
-        client_event_id:  UUID string supplied by the client.
-        endpoint:         Human-readable route label, e.g. ``"POST /exceptions"``.
-        status_code:      HTTP status code returned to the caller.
-        response_data:    Serialisable dict to replay on future duplicate requests.
+    Internally calls ``try_claim()`` + ``finalize()`` so callers that have not
+    yet been migrated to the claim-first pattern still get race-safe behaviour.
 
     Returns:
-        ``True`` if this call *wrote* the record (first occurrence).
-        ``False`` if the key already existed (race / duplicate).
+        ``True`` if this call wrote the record (first occurrence).
+        ``False`` if the key was already claimed by another request.
     """
-    try:
-        cursor = conn.execute(
-            """
-            INSERT OR IGNORE INTO api_idempotency_keys
-                (client_event_id, endpoint, status_code, response_json)
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                client_event_id,
-                endpoint,
-                status_code,
-                json.dumps(response_data, default=str),
-            ),
-        )
-        conn.commit()
-        return cursor.rowcount == 1
-    except sqlite3.Error as exc:
-        logger.warning(
-            "idempotency: record failed for %r on %s — %s",
-            client_event_id,
-            endpoint,
-            exc,
-        )
-        return False
+    claimed = try_claim(conn, client_event_id, endpoint)
+    if claimed:
+        finalize(conn, client_event_id, status_code, response_data)
+        return True
+    return False

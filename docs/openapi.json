@@ -1,0 +1,1299 @@
+{
+  "components": {
+    "schemas": {
+      "DailyUpsertRequest": {
+        "properties": {
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "event": {
+            "enum": [
+              "WASTE",
+              "ADJUST",
+              "UNFULFILLED"
+            ],
+            "title": "Event",
+            "type": "string"
+          },
+          "mode": {
+            "default": "replace",
+            "description": "\"replace\": set the daily total to exactly qty (idempotent). \"sum\": append qty as an additional delta.",
+            "enum": [
+              "sum",
+              "replace"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Note",
+            "type": "string"
+          },
+          "qty": {
+            "description": "Units to set (replace) or add (sum).",
+            "minimum": 1.0,
+            "title": "Qty",
+            "type": "integer"
+          },
+          "sku": {
+            "title": "Sku",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "sku",
+          "event",
+          "qty"
+        ],
+        "title": "DailyUpsertRequest",
+        "type": "object"
+      },
+      "DailyUpsertResponse": {
+        "properties": {
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "event": {
+            "title": "Event",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "sum",
+              "replace"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "noop": {
+            "description": "True when replace mode is called with a qty that already matches the current total.",
+            "title": "Noop",
+            "type": "boolean"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "qty_delta": {
+            "description": "Units actually written to the ledger (0 if noop; negative if replace reduced the total).",
+            "title": "Qty Delta",
+            "type": "integer"
+          },
+          "qty_total": {
+            "description": "Final running total for (sku, date, event) after this call.",
+            "title": "Qty Total",
+            "type": "integer"
+          },
+          "sku": {
+            "title": "Sku",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "sku",
+          "event",
+          "mode",
+          "qty_delta",
+          "qty_total",
+          "note",
+          "noop"
+        ],
+        "title": "DailyUpsertResponse",
+        "type": "object"
+      },
+      "ExceptionRequest": {
+        "properties": {
+          "client_event_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional UUID supplied by the client for idempotency. If the same client_event_id is received a second time the server replays the stored response with already_recorded=true without writing to the ledger again.",
+            "examples": [
+              "550e8400-e29b-41d4-a716-446655440000"
+            ],
+            "title": "Client Event Id"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "event": {
+            "enum": [
+              "WASTE",
+              "ADJUST",
+              "UNFULFILLED"
+            ],
+            "title": "Event",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Note",
+            "type": "string"
+          },
+          "qty": {
+            "minimum": 1.0,
+            "title": "Qty",
+            "type": "integer"
+          },
+          "sku": {
+            "title": "Sku",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "sku",
+          "event",
+          "qty"
+        ],
+        "title": "ExceptionRequest",
+        "type": "object"
+      },
+      "ExceptionResponse": {
+        "properties": {
+          "already_recorded": {
+            "default": false,
+            "title": "Already Recorded",
+            "type": "boolean"
+          },
+          "client_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Event Id"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "event": {
+            "title": "Event",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "qty": {
+            "title": "Qty",
+            "type": "integer"
+          },
+          "sku": {
+            "title": "Sku",
+            "type": "string"
+          },
+          "transaction_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transaction Id"
+          }
+        },
+        "required": [
+          "date",
+          "sku",
+          "event",
+          "qty",
+          "note"
+        ],
+        "title": "ExceptionResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthResponse": {
+        "properties": {
+          "db_path": {
+            "title": "Db Path",
+            "type": "string"
+          },
+          "db_reachable": {
+            "title": "Db Reachable",
+            "type": "boolean"
+          },
+          "dev_mode": {
+            "title": "Dev Mode",
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "degraded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "storage_backend": {
+            "title": "Storage Backend",
+            "type": "string"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "version",
+          "db_path",
+          "db_reachable",
+          "storage_backend",
+          "dev_mode",
+          "timestamp"
+        ],
+        "title": "HealthResponse",
+        "type": "object"
+      },
+      "ReceiptLine": {
+        "description": "Una riga di una ricezione merce.\n\nRisoluzione SKU (in ordine di precedenza):\n1. ``sku``  — codice SKU esatto (case-sensitive).\n2. ``ean``  — EAN-12/13; il server risolve l'EAN → SKU prima della validazione.\n3. Se entrambi mancano → errore 400 su quella riga.\nSe entrambi presenti, ``sku`` ha la precedenza; ``ean`` viene ignorato.",
+        "properties": {
+          "ean": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "EAN-12 o EAN-13. Alternativa a sku (lookup server-side).",
+            "title": "Ean"
+          },
+          "expiry_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Data di scadenza del lotto. Obbligatoria se lo SKU ha has_expiry_label=true (etichetta scadenza manuale).",
+            "title": "Expiry Date"
+          },
+          "note": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Note",
+            "type": "string"
+          },
+          "qty_received": {
+            "description": "Quantità ricevuta. 0 = nessun articolo ricevuto (riga accettata ma nessun evento RECEIPT scritto nel ledger).",
+            "minimum": 0.0,
+            "title": "Qty Received",
+            "type": "integer"
+          },
+          "sku": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Codice SKU (case-sensitive). Obbligatorio se ean non è fornito.",
+            "title": "Sku"
+          }
+        },
+        "required": [
+          "qty_received"
+        ],
+        "title": "ReceiptLine",
+        "type": "object"
+      },
+      "ReceiptLineResult": {
+        "properties": {
+          "ean": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ean"
+          },
+          "expiry_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expiry Date"
+          },
+          "line_index": {
+            "title": "Line Index",
+            "type": "integer"
+          },
+          "qty_received": {
+            "title": "Qty Received",
+            "type": "integer"
+          },
+          "sku": {
+            "title": "Sku",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "already_received",
+              "skipped"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "line_index",
+          "sku",
+          "qty_received",
+          "status"
+        ],
+        "title": "ReceiptLineResult",
+        "type": "object"
+      },
+      "ReceiptsCloseRequest": {
+        "properties": {
+          "client_receipt_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "UUID opzionale del client per idempotenza forte. Se la stessa stringa arriva una seconda volta il server risponde already_posted=true senza riscrivere il ledger.",
+            "examples": [
+              "550e8400-e29b-41d4-a716-446655440000"
+            ],
+            "title": "Client Receipt Id"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/ReceiptLine"
+            },
+            "minItems": 1,
+            "title": "Lines",
+            "type": "array"
+          },
+          "receipt_date": {
+            "format": "date",
+            "title": "Receipt Date",
+            "type": "string"
+          },
+          "receipt_id": {
+            "description": "Chiave di idempotenza legacy (date+supplier+ref). Se già presente nei receiving_logs → 200 already_posted.",
+            "maxLength": 100,
+            "title": "Receipt Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "receipt_date",
+          "lines"
+        ],
+        "title": "ReceiptsCloseRequest",
+        "type": "object"
+      },
+      "ReceiptsCloseResponse": {
+        "properties": {
+          "already_posted": {
+            "default": false,
+            "title": "Already Posted",
+            "type": "boolean"
+          },
+          "client_receipt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Receipt Id"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/ReceiptLineResult"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "receipt_date": {
+            "format": "date",
+            "title": "Receipt Date",
+            "type": "string"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "receipt_date",
+          "lines"
+        ],
+        "title": "ReceiptsCloseResponse",
+        "type": "object"
+      },
+      "SKUResponse": {
+        "properties": {
+          "category": {
+            "default": "",
+            "title": "Category",
+            "type": "string"
+          },
+          "department": {
+            "default": "",
+            "title": "Department",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "ean": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ean"
+          },
+          "ean_valid": {
+            "default": true,
+            "title": "Ean Valid",
+            "type": "boolean"
+          },
+          "in_assortment": {
+            "default": true,
+            "title": "In Assortment",
+            "type": "boolean"
+          },
+          "lead_time_days": {
+            "default": 7,
+            "title": "Lead Time Days",
+            "type": "integer"
+          },
+          "moq": {
+            "default": 1,
+            "title": "Moq",
+            "type": "integer"
+          },
+          "pack_size": {
+            "default": 1,
+            "title": "Pack Size",
+            "type": "integer"
+          },
+          "safety_stock": {
+            "default": 0,
+            "title": "Safety Stock",
+            "type": "integer"
+          },
+          "shelf_life_days": {
+            "default": 0,
+            "title": "Shelf Life Days",
+            "type": "integer"
+          },
+          "sku": {
+            "title": "Sku",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sku",
+          "description"
+        ],
+        "title": "SKUResponse",
+        "type": "object"
+      },
+      "StockDetailResponse": {
+        "properties": {
+          "asof": {
+            "format": "date",
+            "title": "Asof",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "last_event_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Event Date"
+          },
+          "mode": {
+            "default": "POINT_IN_TIME",
+            "enum": [
+              "POINT_IN_TIME",
+              "END_OF_DAY"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "on_hand": {
+            "title": "On Hand",
+            "type": "integer"
+          },
+          "on_order": {
+            "title": "On Order",
+            "type": "integer"
+          },
+          "recent_transactions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/TransactionSummary"
+            },
+            "title": "Recent Transactions",
+            "type": "array"
+          },
+          "sku": {
+            "title": "Sku",
+            "type": "string"
+          },
+          "unfulfilled_qty": {
+            "default": 0,
+            "title": "Unfulfilled Qty",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sku",
+          "description",
+          "on_hand",
+          "on_order",
+          "asof"
+        ],
+        "title": "StockDetailResponse",
+        "type": "object"
+      },
+      "StockItem": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "last_event_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Event Date"
+          },
+          "on_hand": {
+            "title": "On Hand",
+            "type": "integer"
+          },
+          "on_order": {
+            "title": "On Order",
+            "type": "integer"
+          },
+          "sku": {
+            "title": "Sku",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sku",
+          "description",
+          "on_hand",
+          "on_order"
+        ],
+        "title": "StockItem",
+        "type": "object"
+      },
+      "StockListResponse": {
+        "properties": {
+          "asof": {
+            "format": "date",
+            "title": "Asof",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/StockItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "asof",
+          "page",
+          "page_size",
+          "total",
+          "items"
+        ],
+        "title": "StockListResponse",
+        "type": "object"
+      },
+      "TransactionSummary": {
+        "properties": {
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "event": {
+            "title": "Event",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "qty": {
+            "title": "Qty",
+            "type": "integer"
+          },
+          "receipt_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Date"
+          },
+          "transaction_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transaction Id"
+          }
+        },
+        "required": [
+          "date",
+          "event",
+          "qty"
+        ],
+        "title": "TransactionSummary",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "REST backend for **desktop-order-system**: stock queries, EAN lookup, exception logging, and receipt closure.\n\nAll write endpoints require a `Bearer <DOS_API_TOKEN>` header.\nSee [`docs/api_contract.md`](https://github.com/sasu91/desktop-order-system/blob/main/docs/api_contract.md) for the full contract.",
+    "title": "desktop-order-system API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/exceptions": {
+      "post": {
+        "description": "Scrive un evento WASTE, ADJUST o UNFULFILLED nel ledger.\n\n**Idempotenza con client_event_id**\n\nInserisci nel payload un UUID univoco per ogni evento logico:\n\n```json\n{ \"date\": \"2026-02-25\", \"sku\": \"PRD-0042\", \"event\": \"WASTE\",\n  \"qty\": 3, \"client_event_id\": \"550e8400-e29b-41d4-a716-446655440000\" }\n```\n\nSe la stessa richiesta arriva due volte (es. retry di rete), il server\nrisponde **200** con `already_recorded=true` — il ledger non viene\ntoccato una seconda volta.\n\n**Senza client_event_id**: ogni chiamata viene accettata — non si usa\nla tripletta ``date+sku+event`` come chiave legacy (niente 409).",
+        "operationId": "create_exception_api_v1_exceptions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExceptionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExceptionResponse"
+                }
+              }
+            },
+            "description": "Già registrato — risposta replay (client_event_id duplicato)"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExceptionResponse"
+                }
+              }
+            },
+            "description": "Eccezione registrata con successo"
+          },
+          "400": {
+            "description": "Input non valido"
+          },
+          "404": {
+            "description": "SKU non trovato"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Registra eccezione (WASTE / ADJUST / UNFULFILLED)",
+        "tags": [
+          "exceptions"
+        ]
+      }
+    },
+    "/api/v1/exceptions/daily-upsert": {
+      "post": {
+        "description": "Mantieni un **unico totale giornaliero** per la tripletta `(sku, date, event)`.\n\n## Modalità\n\n| `mode`      | Semantica |\n|-------------|--------------------------------------------|\n| `\"replace\"` | Imposta il totale a esattamente `qty`. Idempotente: se il totale corrente è già `qty`, risponde `noop=true` senza toccare il ledger. |\n| `\"sum\"`     | Aggiunge `qty` come delta al totale corrente. Ritorna il nuovo totale. |\n\n## Differenza con `POST /exceptions`\n\n`POST /exceptions` **aggiunge sempre** una nuova riga al ledger;\ndue chiamate nella stessa giornata producono due eventi separati\n(corretto per scarti multipli, movimenti distinti, ecc.).\n\n`POST /exceptions/daily-upsert` è progettato per flussi che inviano il\n**totale cumulativo** della giornata (es. integrazione ERP, fine giornata\nPOS) dove duplicare le righe produrrebbe un doppio conteggio.",
+        "operationId": "daily_upsert_exception_api_v1_exceptions_daily_upsert_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DailyUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DailyUpsertResponse"
+                }
+              }
+            },
+            "description": "Upsert eseguito (o noop se totale già corretto)"
+          },
+          "400": {
+            "description": "Input non valido"
+          },
+          "404": {
+            "description": "SKU non trovato"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upsert totale giornaliero (WASTE / ADJUST / UNFULFILLED)",
+        "tags": [
+          "exceptions"
+        ]
+      }
+    },
+    "/api/v1/receipts/close": {
+      "post": {
+        "description": "Registra gli eventi RECEIPT nel ledger per ogni riga ricevuta.\n\n**Atomicità**: se anche una sola riga fallisce validazione, **nessuna**\nriga viene scritta e la risposta 400 elenca tutti gli errori con indice\nriga, campo e motivo.\n\n**Idempotenza**:\n- ``client_receipt_id`` (UUID) → lookup in ``api_idempotency_keys``.\n  Duplicato → 200 ``already_posted=true``, ledger invariato.\n- ``receipt_id`` (legacy) → lookup in receiving_logs.\n  Già presente → 200 ``already_posted=true``.\n\n**Risoluzione SKU**:\n- ``sku`` esplicito → ricerca diretta.\n- ``ean`` → validazione formato + lookup catalogo → sku.\n- Se lo SKU ha ``has_expiry_label=true`` → ``expiry_date`` obbligatoria.",
+        "operationId": "close_receipt_api_v1_receipts_close_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReceiptsCloseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptsCloseResponse"
+                }
+              }
+            },
+            "description": "Già processato (already_posted=true)."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptsCloseResponse"
+                }
+              }
+            },
+            "description": "Ricezione registrata con successo."
+          },
+          "400": {
+            "description": "Errori di validazione per riga — nessuna riga scritta."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Chiudi ricezione merce",
+        "tags": [
+          "receipts"
+        ]
+      }
+    },
+    "/api/v1/skus/by-ean/{ean}": {
+      "get": {
+        "description": "Cerca uno SKU tramite codice EAN-12 o EAN-13.\n\n- EAN non valido (caratteri non numerici o lunghezza diversa da 12/13 cifre) → **400**\n- EAN valido ma non presente nel catalogo → **404**\n- EAN valido e trovato, ma il valore nel DB ha formato irregolare → **200**\n  con `ean_valid: false` (dato legacy accettato senza crash)",
+        "operationId": "get_sku_by_ean_api_v1_skus_by_ean__ean__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ean",
+            "required": true,
+            "schema": {
+              "title": "Ean",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SKUResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cerca SKU per EAN",
+        "tags": [
+          "skus"
+        ]
+      }
+    },
+    "/api/v1/stock": {
+      "get": {
+        "description": "Restituisce lo stock calcolato ledger-AsOf per tutti gli SKU (o sottoinsieme).",
+        "operationId": "list_stock_api_v1_stock_get",
+        "parameters": [
+          {
+            "description": "Data di calcolo stock (default: oggi). Semantica: date < asof_date.",
+            "in": "query",
+            "name": "asof_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Data di calcolo stock (default: oggi). Semantica: date < asof_date.",
+              "title": "Asof Date"
+            }
+          },
+          {
+            "description": "POINT_IN_TIME (default) = eventi con date < asof_date. END_OF_DAY = eventi con date <= asof_date (internamente +1 giorno).",
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "default": "POINT_IN_TIME",
+              "description": "POINT_IN_TIME (default) = eventi con date < asof_date. END_OF_DAY = eventi con date <= asof_date (internamente +1 giorno).",
+              "enum": [
+                "POINT_IN_TIME",
+                "END_OF_DAY"
+              ],
+              "title": "Mode",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filtra su uno o più SKU",
+            "in": "query",
+            "name": "sku",
+            "required": false,
+            "schema": {
+              "default": [],
+              "description": "Filtra su uno o più SKU",
+              "items": {
+                "type": "string"
+              },
+              "title": "Sku",
+              "type": "array"
+            }
+          },
+          {
+            "in": "query",
+            "name": "in_assortment",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "In Assortment",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StockListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Stock AsOf per tutti gli SKU (paginato)",
+        "tags": [
+          "stock"
+        ]
+      }
+    },
+    "/api/v1/stock/{sku}": {
+      "get": {
+        "description": "Restituisce stock calcolato + ultime ``recent_n`` transazioni per un singolo SKU.\n\n**Semantica della data**\n\n| mode            | Condizione interna       | Significato                        |\n|-----------------|--------------------------|-------------------------------------|\n| POINT_IN_TIME   | date < asof_date         | Stock all'apertura di asof_date     |\n| END_OF_DAY      | date < asof_date + 1     | Stock alla chiusura di asof_date    |\n\n**Errori**\n\n- 404 se lo SKU non esiste nel database.",
+        "operationId": "get_stock_api_v1_stock__sku__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sku",
+            "required": true,
+            "schema": {
+              "title": "Sku",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Data di calcolo (default: oggi). Con mode=POINT_IN_TIME gli eventi di questa data vengono esclusi; con mode=END_OF_DAY vengono inclusi.",
+            "in": "query",
+            "name": "asof_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Data di calcolo (default: oggi). Con mode=POINT_IN_TIME gli eventi di questa data vengono esclusi; con mode=END_OF_DAY vengono inclusi.",
+              "title": "Asof Date"
+            }
+          },
+          {
+            "description": "POINT_IN_TIME (default): stock all'inizio di asof_date, cioè include tutti gli eventi con date < asof_date. END_OF_DAY: stock alla fine di asof_date, cioè include tutti gli eventi con date <= asof_date (internamente: asof_date + 1d).",
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "default": "POINT_IN_TIME",
+              "description": "POINT_IN_TIME (default): stock all'inizio di asof_date, cioè include tutti gli eventi con date < asof_date. END_OF_DAY: stock alla fine di asof_date, cioè include tutti gli eventi con date <= asof_date (internamente: asof_date + 1d).",
+              "enum": [
+                "POINT_IN_TIME",
+                "END_OF_DAY"
+              ],
+              "title": "Mode",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Numero di transazioni recenti da includere nella risposta (default 20).",
+            "in": "query",
+            "name": "recent_n",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Numero di transazioni recenti da includere nella risposta (default 20).",
+              "maximum": 200,
+              "minimum": 0,
+              "title": "Recent N",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StockDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Stock AsOf per singolo SKU + ultimi eventi",
+        "tags": [
+          "stock"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "description": "Returns service status and DB reachability.\n\nThis endpoint is **public** — no Bearer token required.\n\n- `status: \"ok\"` — DB reachable and schema initialised.\n- `status: \"degraded\"` — service is running but DB is not reachable or not\n  yet initialised (e.g. first boot before migration runs).\n- `dev_mode: true` — `DOS_API_TOKEN` is not set; all authenticated endpoints\n  are accessible without a token.  **Do not run in production.**",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Liveness / readiness check",
+        "tags": [
+          "health"
+        ]
+      }
+    }
+  }
+}

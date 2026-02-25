@@ -109,13 +109,13 @@ Write-Host ""
 # ---------------------------------------------------------------------------
 $UvicornArgs = @(
     "-m", "uvicorn",
-    "dos_backend.main:app",
+    "dos_backend.api.main:app",
     "--host", $env:DOS_API_HOST,
     "--port", $env:DOS_API_PORT,
     "--log-level", $env:DOS_LOG_LEVEL.ToLower()
 )
 
-Write-Host "[run_backend] Avvio: python $($UvicornArgs -join ' ')" -ForegroundColor Green
+Write-Host "[run_backend] Avvio: python -m uvicorn dos_backend.api.main:app" -ForegroundColor Green
 Write-Host ""
 
 python @UvicornArgs

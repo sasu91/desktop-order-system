@@ -1,5 +1,5 @@
 """
-backend/src/dependencies.py — FastAPI dependency-injection helpers.
+backend/dos_backend/dependencies.py — FastAPI dependency-injection helpers.
 
 Provides:
   - get_db()       : yields a read-only SQLite connection pointing at DOS_DB_PATH

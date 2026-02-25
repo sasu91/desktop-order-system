@@ -1,12 +1,12 @@
 """
 dos_backend.api — FastAPI application package.
 
-Quick start:
-    uvicorn dos_backend.api.app:app --reload
+Canonical entry-point:
+    uvicorn dos_backend.api.main:app --reload
 
-Or import the app directly (e.g., in tests):
+Re-exports the single module-level app instance for convenience:
     from dos_backend.api import app
 """
-from .app import app  # noqa: F401
+from .main import app  # noqa: F401
 
 __all__ = ["app"]

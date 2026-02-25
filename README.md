@@ -115,12 +115,25 @@ python src/db.py migrate
 python src/db.py verify
 ```
 
-### Start backend API  _(placeholder — not yet implemented)_
+### Start backend API
 
 ```bash
-# cd backend/
-# uvicorn app.main:app --reload --port 8000
+# Installa il package (una tantum)
+pip install -e backend[api]
+
+# Configura il percorso al database
+export DOS_DB_PATH=/path/to/app.db   # Linux/macOS
+# $env:DOS_DB_PATH = "C:\path\to\app.db"  # Windows PowerShell
+
+# Avvio via script helper (legge backend/.env automaticamente)
+bash tools/run_backend.sh
+.\tools\run_backend.ps1     # Windows
+
+# Oppure direttamente
+python -m uvicorn dos_backend.api.main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+API docs: <http://127.0.0.1:8000/api/docs>
 
 ### Build Android APK  _(placeholder — not yet implemented)_
 

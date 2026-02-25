@@ -140,6 +140,29 @@ def main() -> None:
             traceback.print_exc()
 
     # ------------------------------------------------------------------
+    # 6. FastAPI app creation (requires backend[api] extras)
+    # ------------------------------------------------------------------
+    _section("6. API layer (FastAPI)")
+    try:
+        import fastapi  # noqa: F401  — available only with backend[api]
+        from dos_backend.api.app import create_app
+
+        _api_app = create_app()
+        routes = [
+            r.path  # type: ignore[attr-defined]
+            for r in _api_app.routes
+            if hasattr(r, "path")
+        ]
+        print(f"  create_app()  OK — {len(routes)} route(s)")
+        print(f"  entry-point   dos_backend.api.main:app")
+    except ImportError:
+        print("  FastAPI not installed — skipping (install with: pip install -e backend[api])")
+    except Exception as exc:
+        errors.append(f"create_app: {exc}")
+        print(f"  create_app()  FAIL: {exc}")
+        traceback.print_exc()
+
+    # ------------------------------------------------------------------
     # Summary
     # ------------------------------------------------------------------
     _print_summary(errors)

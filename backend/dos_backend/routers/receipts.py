@@ -194,6 +194,9 @@ def close_receipt(
     # ---------------------------------------------------------------------- #
     client_receipt_id: str | None = (body.client_receipt_id or "").strip() or None
 
+    # Track whether this request owns the idempotency slot.
+    _claimed_slot: bool = False
+
     if client_receipt_id:
         stored = idempotency.lookup(db, client_receipt_id)
         if stored is not None:
@@ -205,6 +208,26 @@ def close_receipt(
                 _ENDPOINT_LABEL,
             )
             return JSONResponse(status_code=status.HTTP_200_OK, content=response_dict)
+
+        if idempotency.try_claim(db, client_receipt_id, _ENDPOINT_LABEL):
+            _claimed_slot = True
+        else:
+            stored = idempotency.lookup_with_wait(db, client_receipt_id)
+            if stored is not None:
+                stored[1]["already_posted"] = True
+                logger.info(
+                    "idempotency concurrent replay: client_receipt_id=%r endpoint=%s",
+                    client_receipt_id,
+                    _ENDPOINT_LABEL,
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK, content=stored[1]
+                )
+            _claimed_slot = True
+            logger.warning(
+                "idempotency: lookup_with_wait timed out for %r; processing as fresh",
+                client_receipt_id,
+            )
 
     # ---------------------------------------------------------------------- #
     # 3. Legacy idempotency: receipt_id already in receiving_logs?           #
@@ -351,11 +374,10 @@ def close_receipt(
     )
     response_dict = response_obj.model_dump(mode="json")
 
-    if client_receipt_id:
-        idempotency.record(
+    if _claimed_slot:
+        idempotency.finalize(
             conn=db,
-            client_event_id=client_receipt_id,
-            endpoint=_ENDPOINT_LABEL,
+            client_event_id=client_receipt_id,  # type: ignore[arg-type]
             status_code=status.HTTP_201_CREATED,
             response_data=response_dict,
         )

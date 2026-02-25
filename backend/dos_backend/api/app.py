@@ -1,13 +1,12 @@
 """
 dos_backend/api/app.py — FastAPI application factory.
 
-Entry points
-------------
-Canonical:
-    uvicorn dos_backend.api.app:app --reload
+This module only contains ``create_app()``; it never instantiates the app
+at import time.  The single module-level ``app`` instance lives in
+``dos_backend.api.main`` (the canonical entry-point).
 
-Legacy (still works — main.py delegates here):
-    uvicorn dos_backend.main:app
+Entry point:
+    uvicorn dos_backend.api.main:app --reload
 
 Test isolation:
     from dos_backend.api.app import create_app
@@ -136,8 +135,5 @@ def create_app() -> FastAPI:
     return app
 
 
-# ---------------------------------------------------------------------------
-# Module-level app instance
-# uvicorn dos_backend.api.app:app
-# ---------------------------------------------------------------------------
-app = create_app()
+# Module-level app is intentionally absent from this file.
+# See dos_backend.api.main for the single canonical app instance.

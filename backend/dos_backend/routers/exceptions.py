@@ -36,7 +36,12 @@ from ..api.deps import get_db, get_storage
 from ..api.errors import NotFoundError
 from ..api import idempotency
 from ..domain.models import EventType, Transaction
-from ..schemas import ExceptionRequest, ExceptionResponse
+from ..schemas import (
+    ExceptionRequest,
+    ExceptionResponse,
+    DailyUpsertRequest,
+    DailyUpsertResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +107,9 @@ def create_exception(
     # ------------------------------------------------------------------ #
     client_event_id: str | None = (body.client_event_id or "").strip() or None
 
+    # Track whether THIS request owns the idempotency slot and must finalize.
+    _claimed_slot: bool = False
+
     if client_event_id:
         stored = idempotency.lookup(db, client_event_id)
         if stored is not None:
@@ -114,6 +122,31 @@ def create_exception(
                 _ENDPOINT_LABEL,
             )
             return JSONResponse(status_code=status.HTTP_200_OK, content=response_dict)
+
+        # Atomically claim the idempotency slot BEFORE touching the ledger.
+        # This eliminates the TOCTOU race in the lookup → write window.
+        if idempotency.try_claim(db, client_event_id, _ENDPOINT_LABEL):
+            _claimed_slot = True
+        else:
+            # Lost the INSERT race — wait for the winner to finalize the row.
+            stored = idempotency.lookup_with_wait(db, client_event_id)
+            if stored is not None:
+                stored[1]["already_recorded"] = True
+                logger.info(
+                    "idempotency concurrent replay: client_event_id=%r endpoint=%s",
+                    client_event_id,
+                    _ENDPOINT_LABEL,
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK, content=stored[1]
+                )
+            # lookup_with_wait timed out (edge case): fall through and process
+            # as if we own the slot to avoid silently dropping the request.
+            _claimed_slot = True
+            logger.warning(
+                "idempotency: lookup_with_wait timed out for %r; processing as fresh",
+                client_event_id,
+            )
 
     # ------------------------------------------------------------------ #
     # 3. Validate SKU exists                                              #
@@ -169,14 +202,160 @@ def create_exception(
     # ------------------------------------------------------------------ #
     # 7. Record in idempotency table (only when client provided a uuid)   #
     # ------------------------------------------------------------------ #
-    if client_event_id:
-        idempotency.record(
+    if _claimed_slot:
+        idempotency.finalize(
             conn=db,
-            client_event_id=client_event_id,
-            endpoint=_ENDPOINT_LABEL,
+            client_event_id=client_event_id,  # type: ignore[arg-type]  # always str if _claimed_slot
             status_code=status.HTTP_201_CREATED,
             response_data=response_dict,
         )
 
     return JSONResponse(status_code=status.HTTP_201_CREATED, content=response_dict)
+
+
+# ===========================================================================
+# POST /exceptions/daily-upsert
+# ===========================================================================
+# Contrast with POST /exceptions:
+#
+#   /exceptions           — always APPENDs a new ledger event; two calls on the
+#                           same day both land in the ledger (intentional for
+#                           multiple spoilage events, spot adjustments, …).
+#
+#   /exceptions/daily-upsert — manages a SINGLE logical total per (sku, date,
+#                           event).  Modes:
+#
+#     "replace" (default) Idempotent: set total to exactly qty.
+#                         If current == qty → no-op (noop=true).
+#                         Otherwise replaces all existing rows for the
+#                         triplet with a single corrected row.
+#                         Designed for ERP/POS end-of-day imports.
+#
+#     "sum"               Appends a delta row, returns new running total.
+#                         Useful for incremental event streams that must not
+#                         lose individual write timestamps.
+#
+# This endpoint carries NO idempotency-key mechanism; "replace" mode is
+# inherently idempotent (same qty → noop), and "sum" mode is additive by
+# design so duplicate-detection would need business-level deduplication.
+# ===========================================================================
+
+_UPSERT_ENDPOINT_LABEL = "POST /exceptions/daily-upsert"
+
+
+@router.post(
+    "/exceptions/daily-upsert",
+    response_model=DailyUpsertResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Upsert totale giornaliero (WASTE / ADJUST / UNFULFILLED)",
+    dependencies=[Depends(verify_token)],
+    responses={
+        200: {"description": "Upsert eseguito (o noop se totale già corretto)"},
+        400: {"description": "Input non valido"},
+        404: {"description": "SKU non trovato"},
+    },
+)
+def daily_upsert_exception(
+    body: DailyUpsertRequest,
+    storage=Depends(get_storage),
+) -> JSONResponse:
+    """
+    Mantieni un **unico totale giornaliero** per la tripletta `(sku, date, event)`.
+
+    ## Modalità
+
+    | `mode`      | Semantica |
+    |-------------|--------------------------------------------|
+    | `"replace"` | Imposta il totale a esattamente `qty`. Idempotente: se il totale corrente è già `qty`, risponde `noop=true` senza toccare il ledger. |
+    | `"sum"`     | Aggiunge `qty` come delta al totale corrente. Ritorna il nuovo totale. |
+
+    ## Differenza con `POST /exceptions`
+
+    `POST /exceptions` **aggiunge sempre** una nuova riga al ledger;
+    due chiamate nella stessa giornata producono due eventi separati
+    (corretto per scarti multipli, movimenti distinti, ecc.).
+
+    `POST /exceptions/daily-upsert` è progettato per flussi che inviano il
+    **totale cumulativo** della giornata (es. integrazione ERP, fine giornata
+    POS) dove duplicare le righe produrrebbe un doppio conteggio.
+    """
+    # ------------------------------------------------------------------ #
+    # 1. Validate SKU                                                     #
+    # ------------------------------------------------------------------ #
+    all_skus = storage.read_skus()
+    if not any(s.sku == body.sku for s in all_skus):
+        raise NotFoundError(f"SKU '{body.sku}' non trovato nel database.")
+
+    # ------------------------------------------------------------------ #
+    # 2. Read current state for this triplet                              #
+    # ------------------------------------------------------------------ #
+    event_type: EventType = _EVENT_MAP[body.event]
+    all_txns = storage.read_transactions()
+
+    def _matches(t: Transaction) -> bool:
+        return t.sku == body.sku and t.date == body.date and t.event == event_type
+
+    current_qty: int = sum(t.qty for t in all_txns if _matches(t))
+
+    # ------------------------------------------------------------------ #
+    # 3. Apply mode logic                                                 #
+    # ------------------------------------------------------------------ #
+    note = body.note
+
+    if body.mode == "replace":
+        if current_qty == body.qty:
+            # Already at the requested total — no ledger write needed.
+            logger.info(
+                "daily-upsert noop: sku=%s date=%s event=%s qty=%d",
+                body.sku, body.date, body.event, body.qty,
+            )
+            resp = DailyUpsertResponse(
+                date=body.date, sku=body.sku, event=body.event,
+                mode="replace", qty_delta=0, qty_total=current_qty,
+                note=note, noop=True,
+            )
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=resp.model_dump(mode="json"),
+            )
+
+        # Build a new ledger list: keep all non-matching rows, add one corrected row.
+        non_matching = [t for t in all_txns if not _matches(t)]
+        new_txn = Transaction(
+            date=body.date, sku=body.sku, event=event_type,
+            qty=body.qty, note=note,
+        )
+        storage.overwrite_transactions(non_matching + [new_txn])
+        qty_delta = body.qty - current_qty
+        qty_total = body.qty
+        logger.info(
+            "daily-upsert replace: sku=%s date=%s event=%s old=%d new=%d delta=%+d",
+            body.sku, body.date, body.event, current_qty, body.qty, qty_delta,
+        )
+
+    else:  # sum
+        txn = Transaction(
+            date=body.date, sku=body.sku, event=event_type,
+            qty=body.qty, note=note,
+        )
+        storage.write_transaction(txn)
+        qty_delta = body.qty
+        qty_total = current_qty + body.qty
+        logger.info(
+            "daily-upsert sum: sku=%s date=%s event=%s delta=%d total=%d",
+            body.sku, body.date, body.event, qty_delta, qty_total,
+        )
+
+    # ------------------------------------------------------------------ #
+    # 4. Respond                                                          #
+    # ------------------------------------------------------------------ #
+    resp = DailyUpsertResponse(
+        date=body.date, sku=body.sku, event=body.event,
+        mode=body.mode, qty_delta=qty_delta, qty_total=qty_total,
+        note=note, noop=False,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=resp.model_dump(mode="json"),
+    )
 

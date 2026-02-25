@@ -3,7 +3,7 @@
 FastAPI REST backend che espone il database SQLite del desktop client via HTTP.  
 Pensato per essere consumato dal client Android e da futuri client web.
 
-> **Stato**: skeleton — struttura e contratto definiti, logica non ancora implementata.  
+> **Package installabile**: `pip install -e backend[api]` — tutti gli endpoint sono implementati.  
 > Vedi [docs/api_contract.md](../docs/api_contract.md) per la specifica completa degli endpoint.
 
 ---
@@ -51,25 +51,32 @@ python -m venv .venv
 source .venv/bin/activate      # Linux/macOS
 .venv\Scripts\Activate.ps1     # Windows PowerShell
 
-# 2. Installa le dipendenze
-pip install -r backend/requirements.txt
+# 2. Installa il package in modalità editabile (include tutte le dipendenze API)
+pip install -e backend[api]
 
 # 3. Configura le variabili d'ambiente
 cp backend/.env.example backend/.env
 # Modifica backend/.env: imposta DOS_DB_PATH, DOS_API_TOKEN, DOS_SECRET_KEY
 ```
 
+> `backend/requirements.txt` è mantenuto per compatibilità con ambienti
+> che non usano `pip install -e`. Dipende da `pyproject.toml` — non modificarlo
+> manualmente.
+
 ---
 
 ## Avvio
 
 ```bash
-# Via script helper (legge automaticamente backend/.env)
+# Via script helper (legge automaticamente backend/.env, gestisce venv)
 bash tools/run_backend.sh
 .\tools\run_backend.ps1          # Windows
 
 # Oppure direttamente con uvicorn
-uvicorn dos_backend.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn dos_backend.api.main:app --reload --host 127.0.0.1 --port 8000
+
+# Oppure come modulo Python (usa DOS_API_HOST / DOS_API_PORT / DOS_RELOAD)
+python -m dos_backend.api.main
 ```
 
 Documentazione interattiva disponibile su:  

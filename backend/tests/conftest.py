@@ -67,6 +67,10 @@ class _MemStorage:
     def write_receiving_log(self, **kwargs) -> None:  # noqa: ANN003
         self._recv_logs.append(dict(kwargs))
 
+    def overwrite_transactions(self, txns: list[Transaction]) -> None:
+        """Replace the entire transaction list (used by daily-upsert replace mode)."""
+        self._transactions = list(txns)
+
     # -- Lifecycle ------------------------------------------------------------
     def close(self) -> None:  # noqa: D401
         """No-op — nothing to close for in-memory storage."""

@@ -43,6 +43,7 @@ object AppModule {
                 prefs.getString(PREF_API_TOKEN, BuildConfig.DOS_API_TOKEN)
                     ?: BuildConfig.DOS_API_TOKEN
             },
+            debug = BuildConfig.DEBUG,
         )
     }
 

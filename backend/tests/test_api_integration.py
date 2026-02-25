@@ -14,9 +14,16 @@ Tests are grouped by endpoint:
 """
 from __future__ import annotations
 
+import sqlite3
+import threading
+
 import pytest
 from fastapi.testclient import TestClient
 
+from dos_backend.api.app import create_app
+from dos_backend.api.auth import verify_token
+from dos_backend.api.deps import get_db, get_storage
+from dos_backend.api import idempotency
 from .conftest import SEED_EAN_EXPIRY, SEED_EAN_PLAIN, EAN_UNKNOWN
 
 # Base URL prefix for all versioned endpoints
@@ -448,3 +455,325 @@ class TestPostReceiptsClose:
         client.post(f"{_V1}/receipts/close", json=_BASE_RECEIPT)
 
         assert len(mem_storage._transactions) == 1
+
+
+# ===========================================================================
+# Concurrency — POST /api/v1/exceptions with the same client_event_id
+# ===========================================================================
+
+
+def _make_client(
+    db_conn: sqlite3.Connection,
+    storage,
+) -> TestClient:
+    """
+    Create an isolated TestClient that shares *db_conn* and *storage* state.
+
+    Used to spin up two clients in different threads while keeping the
+    idempotency table and the in-memory ledger shared.
+    """
+    app = create_app()
+
+    def _no_auth() -> str:
+        return "__test__"
+
+    def _override_db():
+        yield db_conn
+
+    def _override_storage():
+        yield storage
+
+    app.dependency_overrides[verify_token] = _no_auth
+    app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides[get_storage] = _override_storage
+    # raise_server_exceptions=False so thread errors surface as non-2xx codes
+    # rather than propagating exceptions that would silently kill the thread.
+    return TestClient(app, raise_server_exceptions=False)
+
+
+class TestPostExceptionsConcurrency:
+    """
+    Verify that two simultaneous requests carrying the same client_event_id
+    result in exactly one ledger write (claim-first idempotency guarantee).
+
+    Each test spins up two threads, each with its own TestClient, synchronised
+    by a threading.Barrier so they hit the endpoint as close to simultaneously
+    as Python allows.
+    """
+
+    def test_one_write_other_replay(
+        self,
+        db_conn: sqlite3.Connection,
+        mem_storage,
+    ) -> None:
+        """Two concurrent requests, same client_event_id → one 201, one 200."""
+        payload = {**_BASE_EXCEPTION, "client_event_id": "uuid-concurrent-exc-1"}
+        results: list = []
+        errors: list = []
+        barrier = threading.Barrier(2)
+
+        def _send() -> None:
+            tc = _make_client(db_conn, mem_storage)
+            try:
+                with tc:
+                    barrier.wait()  # sync start: maximise race window
+                    r = tc.post(f"{_V1}/exceptions", json=payload)
+                    results.append(r)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_send) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+
+        assert not errors, f"Thread error(s): {errors}"
+        assert len(results) == 2
+        status_codes = sorted(r.status_code for r in results)
+        assert status_codes == [200, 201], (
+            f"Expected [200, 201], got {status_codes}. "
+            f"Bodies: {[r.json() for r in results]}"
+        )
+        # Critical: exactly ONE write in the ledger
+        assert len(mem_storage._transactions) == 1
+
+    def test_already_recorded_flag_assignment(
+        self,
+        db_conn: sqlite3.Connection,
+        mem_storage,
+    ) -> None:
+        """201 response has already_recorded=False; 200 replay has already_recorded=True."""
+        payload = {**_BASE_EXCEPTION, "client_event_id": "uuid-concurrent-exc-2"}
+        results: list = []
+        errors: list = []
+        barrier = threading.Barrier(2)
+
+        def _send() -> None:
+            tc = _make_client(db_conn, mem_storage)
+            try:
+                with tc:
+                    barrier.wait()
+                    r = tc.post(f"{_V1}/exceptions", json=payload)
+                    results.append(r)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_send) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+
+        assert not errors
+        assert len(results) == 2
+        by_status = {r.status_code: r.json() for r in results}
+        assert by_status[201]["already_recorded"] is False
+        assert by_status[200]["already_recorded"] is True
+
+    def test_sequential_replay_still_works(
+        self,
+        db_conn: sqlite3.Connection,
+        mem_storage,
+    ) -> None:
+        """Non-concurrent duplicate (serial retry) still returns 200 already_recorded."""
+        payload = {**_BASE_EXCEPTION, "client_event_id": "uuid-concurrent-exc-3"}
+        tc = _make_client(db_conn, mem_storage)
+        with tc:
+            r1 = tc.post(f"{_V1}/exceptions", json=payload)
+            r2 = tc.post(f"{_V1}/exceptions", json=payload)
+
+        assert r1.status_code == 201
+        assert r1.json()["already_recorded"] is False
+        assert r2.status_code == 200
+        assert r2.json()["already_recorded"] is True
+        assert len(mem_storage._transactions) == 1
+
+
+# ===========================================================================
+# POST /api/v1/exceptions/daily-upsert
+# ===========================================================================
+
+_BASE_UPSERT = {
+    "date": "2026-02-25",
+    "sku": "PRD-001",
+    "event": "WASTE",
+    "qty": 5,
+    "mode": "replace",
+}
+
+
+class TestPostExceptionsDailyUpsert:
+    """
+    POST /exceptions/daily-upsert — upsert del totale giornaliero (sku, date, event).
+
+    Contrasto con /exceptions standard:
+      /exceptions           → aggiunge SEMPRE una riga nuova (additive, no dedup).
+      /exceptions/daily-upsert → gestisce un unico totale per (sku, date, event):
+        mode="replace"  → idempotente: imposta il totale a qty (noop se già uguale).
+        mode="sum"      → accumulativo: aggiunge qty come delta, ritorna il nuovo totale.
+    """
+
+    # -- replace mode --------------------------------------------------------
+
+    def test_200_replace_fresh_entry(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """No prior rows → writes one row; qty_total and qty_delta both equal qty."""
+        r = client.post(f"{_V1}/exceptions/daily-upsert", json=_BASE_UPSERT)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["qty_total"] == 5
+        assert body["qty_delta"] == 5
+        assert body["noop"] is False
+        assert len(mem_storage._transactions) == 1
+
+    def test_200_replace_increases_qty(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """Existing total=3, replace with 8 → delta=+5, one row in ledger."""
+        client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "qty": 3})
+        r = client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "qty": 8})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["qty_total"] == 8
+        assert body["qty_delta"] == 5
+        assert body["noop"] is False
+        # Replace: original row removed, one corrected row written
+        assert len(mem_storage._transactions) == 1
+
+    def test_200_replace_decreases_qty(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """Existing total=10, replace with 3 → negative delta, total=3."""
+        client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "qty": 10})
+        r = client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "qty": 3})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["qty_total"] == 3
+        assert body["qty_delta"] == -7
+        assert len(mem_storage._transactions) == 1
+
+    def test_200_replace_noop_when_qty_matches(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """Same qty sent twice in replace mode → second call is a no-op."""
+        client.post(f"{_V1}/exceptions/daily-upsert", json=_BASE_UPSERT)
+        r = client.post(f"{_V1}/exceptions/daily-upsert", json=_BASE_UPSERT)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["noop"] is True
+        assert body["qty_delta"] == 0
+        assert body["qty_total"] == 5
+        # Ledger must not have grown
+        assert len(mem_storage._transactions) == 1
+
+    def test_200_replace_isolated_by_sku(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """Replace for PRD-001 must not touch the PRD-NOEAN row."""
+        client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "sku": "PRD-001", "qty": 10})
+        r = client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "sku": "PRD-NOEAN", "qty": 4})
+        assert r.status_code == 200
+        sku_set = {t.sku for t in mem_storage._transactions}
+        assert sku_set == {"PRD-001", "PRD-NOEAN"}
+        # PRD-001 row must still be 10
+        prd001_qty = sum(t.qty for t in mem_storage._transactions if t.sku == "PRD-001")
+        assert prd001_qty == 10
+
+    def test_200_replace_isolated_by_event(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """Replace WASTE must not touch an ADJUST row on the same day."""
+        client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "event": "WASTE", "qty": 7})
+        client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "event": "ADJUST", "qty": 2})
+        r = client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "event": "WASTE", "qty": 3})
+        assert r.status_code == 200
+        waste_qty = sum(t.qty for t in mem_storage._transactions if t.event.value == "WASTE")
+        adjust_qty = sum(t.qty for t in mem_storage._transactions if t.event.value == "ADJUST")
+        assert waste_qty == 3
+        assert adjust_qty == 2
+
+    # -- sum mode ------------------------------------------------------------
+
+    def test_200_sum_fresh_entry(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """No prior rows → sum appends delta; total equals the delta."""
+        r = client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "mode": "sum"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["qty_total"] == 5
+        assert body["qty_delta"] == 5
+        assert body["noop"] is False
+        assert len(mem_storage._transactions) == 1
+
+    def test_200_sum_accumulates_across_calls(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """Two sum calls: 5 then 3 → total=8, two separate rows in ledger."""
+        client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "mode": "sum", "qty": 5})
+        r = client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "mode": "sum", "qty": 3})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["qty_total"] == 8
+        assert body["qty_delta"] == 3
+        # Sum mode preserves individual rows (audit trail)
+        assert len(mem_storage._transactions) == 2
+
+    def test_200_sum_totals_independent_by_event(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """WASTE and ADJUST totals are tracked independently in sum mode."""
+        client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "mode": "sum", "event": "WASTE", "qty": 5})
+        client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "mode": "sum", "event": "ADJUST", "qty": 2})
+        r = client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "mode": "sum", "event": "WASTE", "qty": 3})
+        assert r.status_code == 200
+        assert r.json()["qty_total"] == 8  # WASTE only: 5 + 3
+
+    # -- standard /exceptions not affected -----------------------------------
+
+    def test_standard_exceptions_unaffected_by_upsert(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """Upsert rows and standard /exceptions rows coexist in the ledger."""
+        # Write via daily-upsert (replace, total=5)
+        client.post(f"{_V1}/exceptions/daily-upsert", json=_BASE_UPSERT)
+        # Write two discrete events via standard endpoint (total additional = 6)
+        client.post(f"{_V1}/exceptions", json={**_BASE_EXCEPTION, "qty": 2})
+        client.post(f"{_V1}/exceptions", json={**_BASE_EXCEPTION, "qty": 4})
+        # Ledger has three rows (one from upsert, two from standard)
+        assert len(mem_storage._transactions) == 3
+        grand_total = sum(t.qty for t in mem_storage._transactions)
+        assert grand_total == 5 + 2 + 4  # 11
+
+    # -- validation ----------------------------------------------------------
+
+    def test_404_unknown_sku(self, client: TestClient) -> None:
+        r = client.post(
+            f"{_V1}/exceptions/daily-upsert",
+            json={**_BASE_UPSERT, "sku": "GHOST"},
+        )
+        assert r.status_code == 404
+
+    def test_422_invalid_event(self, client: TestClient) -> None:
+        r = client.post(
+            f"{_V1}/exceptions/daily-upsert",
+            json={**_BASE_UPSERT, "event": "SUPEREVENT"},
+        )
+        assert r.status_code == 422
+
+    def test_422_invalid_mode(self, client: TestClient) -> None:
+        r = client.post(
+            f"{_V1}/exceptions/daily-upsert",
+            json={**_BASE_UPSERT, "mode": "INVALID"},
+        )
+        assert r.status_code == 422
+
+    def test_422_qty_zero(self, client: TestClient) -> None:
+        """qty must be >= 1."""
+        r = client.post(
+            f"{_V1}/exceptions/daily-upsert",
+            json={**_BASE_UPSERT, "qty": 0},
+        )
+        assert r.status_code == 422

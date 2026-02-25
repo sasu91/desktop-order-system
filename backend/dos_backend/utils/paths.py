@@ -32,7 +32,7 @@ def _get_base_dir() -> Path:
 
     - frozen (PyInstaller onedir): directory that contains the .exe file
       (sys.executable = <install_dir>/DesktopOrderSystem.exe)
-    - dev / IDE: project root  (three levels up from backend/src/utils/paths.py)
+    - dev / IDE: project root  (four levels up from backend/dos_backend/utils/paths.py)
     """
     if getattr(sys, "frozen", False):
         # PyInstaller sets sys.executable = full path to the .exe
