@@ -4179,8 +4179,8 @@ class DesktopOrderApp:
                 continue
             status = log.get("status", "PENDING")
             
-            # Only show PENDING orders
-            if status != "PENDING":
+            # Show PENDING and PARTIAL orders (PARTIAL = partially received, still has qty residua)
+            if status not in ("PENDING", "PARTIAL"):
                 continue
             
             order_id = log.get("order_id")
@@ -4197,10 +4197,10 @@ class DesktopOrderApp:
             pack_size = getattr(sku_obj, "pack_size", 1) if sku_obj else 1
             
             colli_ordinati = qty_ordered // pack_size
-            # Pre-fill "Colli Ricevuti" with the full ordered quantity so the user
-            # only needs to reduce it if partial; this also pre-populates the edits
-            # dict so Confirm works without requiring an explicit click per row.
-            colli_ricevuti_prefill = colli_ordinati
+            # For PARTIAL orders pre-fill with remaining (pending) qty; for PENDING pre-fill
+            # with full ordered qty so the user only needs to reduce if partial.
+            colli_residui = qty_pending // pack_size
+            colli_ricevuti_prefill = colli_residui if status == "PARTIAL" else colli_ordinati
 
             item_id = self.pending_treeview.insert(
                 "",
@@ -4212,14 +4212,14 @@ class DesktopOrderApp:
                     pack_size,
                     colli_ordinati,
                     colli_ricevuti_prefill,
-                    0,  # Colli Sospesi = 0 because we pre-assume full receipt
+                    0,  # Colli Sospesi = 0 because we pre-assume full receipt of remainder
                     receipt_date_str,
                     "",  # Scadenza — empty until user edits
                 ),
-                tags=("complete",),
+                tags=("partial" if status == "PARTIAL" else "complete",),
             )
-            # Pre-populate edits dict with full ordered quantity (pezzi)
-            self.pending_qty_edits[item_id] = colli_ordinati * pack_size
+            # Pre-populate edits dict with remaining (pending) quantity in pezzi
+            self.pending_qty_edits[item_id] = colli_ricevuti_prefill * pack_size
 
         # Store all item IDs so _filter_pending_orders can re-attach on filter change
         self._all_pending_item_ids = list(self.pending_treeview.get_children())
