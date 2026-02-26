@@ -26,7 +26,6 @@ Workflow
 from __future__ import annotations
 
 import logging
-from datetime import date as date_type
 
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
