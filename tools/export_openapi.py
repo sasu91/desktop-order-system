@@ -60,6 +60,10 @@ def _build_schema() -> str:
         sys.path.insert(0, backend_dir)
 
     # Import inside the function so sys.path manipulation takes effect first.
+    # Import create_app from the sub-module directly (not via the package
+    # __init__) to get a clean, isolated app instance.  dos_backend/api/__init__.py
+    # uses a lazy __getattr__ for ``app`` precisely to prevent the server singleton
+    # from being created as a side-effect of this import.
     from dos_backend.api.app import create_app  # noqa: PLC0415
 
     app = create_app()

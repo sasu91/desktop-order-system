@@ -80,7 +80,7 @@ class ConflictError(DosApiError):
 
 class UnprocessableError(DosApiError):
     """Business-rule validation failure (separate from Pydantic schema errors)."""
-    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
     code = "VALIDATION_ERROR"
 
 
@@ -154,7 +154,7 @@ async def _handle_validation_error(
         for err in exc.errors()
     ]
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content=_make_body("VALIDATION_ERROR", "Request validation failed.", details),
     )
 
