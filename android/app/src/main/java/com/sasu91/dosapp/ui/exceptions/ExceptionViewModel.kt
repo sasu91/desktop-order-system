@@ -12,7 +12,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.LocalDate
-import java.util.UUID
 import javax.inject.Inject
 
 /** Event types accepted by POST /exceptions */
@@ -94,7 +93,7 @@ class ExceptionViewModel @Inject constructor(
                 event          = s.event,
                 qty            = qtyInt!!,
                 note           = s.note.trim(),
-                clientEventId  = UUID.randomUUID().toString(),
+                // clientEventId intentionally omitted — ExceptionRepository always mints a UUID.
             )
 
             when (val result = repo.postException(request)) {

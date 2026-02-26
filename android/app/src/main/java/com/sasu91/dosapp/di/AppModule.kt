@@ -8,6 +8,8 @@ import com.sasu91.dosapp.BuildConfig
 import com.sasu91.dosapp.data.api.DosApiService
 import com.sasu91.dosapp.data.api.RetrofitClient
 import com.sasu91.dosapp.data.db.DosDatabase
+import com.sasu91.dosapp.data.db.dao.DraftReceiptDao
+import com.sasu91.dosapp.data.db.dao.PendingExceptionDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -51,9 +53,16 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): DosDatabase =
         Room.databaseBuilder(ctx, DosDatabase::class.java, "dos_offline.db")
-            .fallbackToDestructiveMigration()
+            .addMigrations(DosDatabase.MIGRATION_1_2)   // explicit DDL migrations
+            .fallbackToDestructiveMigration()            // safety net for dev builds
             .build()
 
     @Provides
     fun providePendingRequestDao(db: DosDatabase) = db.pendingRequestDao()
+
+    @Provides
+    fun provideDraftReceiptDao(db: DosDatabase): DraftReceiptDao = db.draftReceiptDao()
+
+    @Provides
+    fun providePendingExceptionDao(db: DosDatabase): PendingExceptionDao = db.pendingExceptionDao()
 }

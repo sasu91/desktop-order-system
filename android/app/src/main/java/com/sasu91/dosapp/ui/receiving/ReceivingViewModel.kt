@@ -118,10 +118,11 @@ class ReceivingViewModel @Inject constructor(
                 )
             }
             val request = ReceiptsCloseRequestDto(
+                // receipt_id: human-readable key (date prefix + UUID fragment)
+                receiptId        = "${s.receiptDate}_${s.clientReceiptId.take(8)}",
                 receiptDate      = s.receiptDate,
-                supplierName     = s.supplierName.trim().takeIf { it.isNotBlank() },
                 lines            = requestLines,
-                clientReceiptId  = s.clientReceiptId,
+                clientReceiptId  = s.clientReceiptId,  // full UUID4 — strong idempotency key
             )
 
             when (val result = repo.closeReceipt(request)) {

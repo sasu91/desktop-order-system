@@ -13,8 +13,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.sasu91.dosapp.data.db.entity.PendingRequestEntity
-import com.sasu91.dosapp.data.db.entity.RequestStatus
+import com.sasu91.dosapp.ui.queue.QueueItem
+import com.sasu91.dosapp.ui.queue.QueueStatus
 
 /**
  * Offline queue screen.
@@ -58,11 +58,11 @@ fun OfflineQueueScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(state.items, key = { it.id }) { entity ->
+                items(state.items, key = { it.id }) { item ->
                     QueueItemCard(
-                        entity  = entity,
-                        isBusy  = entity.id in state.busyIds,
-                        onRetry = { viewModel.retry(entity) },
+                        item    = item,
+                        isBusy  = item.id in state.busyIds,
+                        onRetry = { viewModel.retry(item) },
                     )
                 }
             }
@@ -72,14 +72,14 @@ fun OfflineQueueScreen(
 
 @Composable
 private fun QueueItemCard(
-    entity: PendingRequestEntity,
+    item: QueueItem,
     isBusy: Boolean,
     onRetry: () -> Unit,
 ) {
-    val containerColor = when (entity.status) {
-        RequestStatus.FAILED  -> MaterialTheme.colorScheme.errorContainer
-        RequestStatus.SENT    -> MaterialTheme.colorScheme.surfaceVariant
-        else                  -> MaterialTheme.colorScheme.surface
+    val containerColor = when (item.status) {
+        QueueStatus.FAILED -> MaterialTheme.colorScheme.errorContainer
+        QueueStatus.SENT   -> MaterialTheme.colorScheme.surfaceVariant
+        else               -> MaterialTheme.colorScheme.surface
     }
 
     Card(
@@ -97,34 +97,34 @@ private fun QueueItemCard(
                     // Type chip
                     SuggestionChip(
                         onClick  = {},
-                        label    = { Text(entity.type.name, style = MaterialTheme.typography.labelSmall) },
+                        label    = { Text(item.type.name, style = MaterialTheme.typography.labelSmall) },
                     )
                     // Status chip
                     SuggestionChip(
                         onClick  = {},
-                        label    = { Text(entity.status.name, style = MaterialTheme.typography.labelSmall) },
+                        label    = { Text(item.status.name, style = MaterialTheme.typography.labelSmall) },
                     )
                 }
 
                 // Human-readable summary
                 Text(
-                    entity.summary,
+                    item.summary,
                     style   = MaterialTheme.typography.bodyMedium,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
 
-                if (entity.retryCount > 0) {
+                if (item.retryCount > 0) {
                     Text(
-                        "Tentativi: ${entity.retryCount}",
+                        "Tentativi: ${item.retryCount}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
                 }
 
-                if (entity.lastError != null) {
+                if (item.lastError != null) {
                     Text(
-                        entity.lastError,
+                        item.lastError,
                         style   = MaterialTheme.typography.labelSmall,
                         color   = MaterialTheme.colorScheme.error,
                         maxLines = 2,
@@ -136,7 +136,7 @@ private fun QueueItemCard(
             Spacer(Modifier.width(8.dp))
 
             // Retry button (hidden for SENT items)
-            if (entity.status != RequestStatus.SENT) {
+            if (item.status != QueueStatus.SENT) {
                 if (isBusy) {
                     CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
                 } else {
