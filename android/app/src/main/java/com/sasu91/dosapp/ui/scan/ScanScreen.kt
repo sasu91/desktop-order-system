@@ -1,8 +1,3 @@
-@file:OptIn(
-    com.google.accompanist.permissions.ExperimentalPermissionsApi::class,
-    androidx.compose.material3.ExperimentalMaterial3Api::class,
-)
-
 package com.sasu91.dosapp.ui.scan
 
 import android.content.Intent

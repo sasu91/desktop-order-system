@@ -1,5 +1,3 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-
 package com.sasu91.dosapp.ui.exceptions
 
 import androidx.compose.foundation.layout.*
