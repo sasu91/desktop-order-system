@@ -8,6 +8,7 @@ import com.sasu91.dosapp.BuildConfig
 import com.sasu91.dosapp.data.api.AuthInterceptor
 import com.sasu91.dosapp.data.api.DosApiService
 import com.sasu91.dosapp.data.api.RetrofitClient
+import com.sasu91.dosapp.data.api.TokenProvider
 import com.sasu91.dosapp.data.db.DosDatabase
 import com.sasu91.dosapp.data.db.dao.DraftReceiptDao
 import com.sasu91.dosapp.data.db.dao.PendingExceptionDao
@@ -72,10 +73,10 @@ object AppModule {
     @Provides
     @Singleton
     fun provideAuthInterceptor(prefs: SharedPreferences): AuthInterceptor =
-        AuthInterceptor {
+        AuthInterceptor(TokenProvider {
             prefs.getString(PREF_API_TOKEN, BuildConfig.DOS_API_TOKEN)
                 ?: BuildConfig.DOS_API_TOKEN
-        }
+        })
 
     /**
      * Full BODY logging in debug builds; one-line BASIC logging in release.
