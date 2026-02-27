@@ -1,8 +1,8 @@
 [versions]
 agp                  = "8.7.3"
 kotlin               = "2.0.0"
-ksp                  = "2.0.0-1.0.21"
-hilt                 = "2.51.1"
+ksp                  = "2.0.0-1.0.24"
+hilt                 = "2.54"
 hilt-navigation      = "1.2.0"
 compose-bom          = "2024.05.00"
 navigation-compose   = "2.7.7"
