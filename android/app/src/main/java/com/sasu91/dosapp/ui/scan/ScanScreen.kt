@@ -1,3 +1,8 @@
+@file:OptIn(
+    com.google.accompanist.permissions.ExperimentalPermissionsApi::class,
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+)
+
 package com.sasu91.dosapp.ui.scan
 
 import android.content.Intent
@@ -46,7 +51,6 @@ import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun ScanScreen(
     onNavigateToExceptions: (String) -> Unit = {},

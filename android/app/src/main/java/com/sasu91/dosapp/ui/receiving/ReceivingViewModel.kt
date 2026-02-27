@@ -114,7 +114,7 @@ class ReceivingViewModel @Inject constructor(
                     ean          = line.ean.trim().takeIf { it.isNotBlank() },
                     qtyReceived  = line.qtyReceived,
                     expiryDate   = line.expiryDate.trim().takeIf { it.isNotBlank() },
-                    note         = line.note.trim().takeIf { it.isNotBlank() },
+                    note         = line.note.trim(),
                 )
             }
             val request = ReceiptsCloseRequestDto(

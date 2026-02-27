@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package com.sasu91.dosapp.ui.receiving
 
 import androidx.compose.foundation.layout.*
