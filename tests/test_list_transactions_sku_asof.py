@@ -23,6 +23,7 @@ Assertions
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Generator
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -52,7 +53,7 @@ EPOCH = date(2020, 1, 1)       # first transaction date (all dates < ASOF)
 
 
 @pytest.fixture(scope="module")
-def conn() -> sqlite3.Connection:  # type: ignore[misc]
+def conn() -> Generator[sqlite3.Connection, None, None]:
     """
     In-memory SQLite database populated with 20 000 transactions across 20 SKUs.
     Module scope: created once, reused by all tests in this module.

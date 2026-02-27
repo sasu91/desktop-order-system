@@ -54,6 +54,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 import time
 from typing import Optional
 
@@ -67,17 +68,27 @@ logger = logging.getLogger(__name__)
 # processing starts.  finalize() replaces it with the real HTTP status code.
 _STATUS_PENDING: int = 0
 
-_ENSURE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS api_idempotency_keys (
-    client_event_id TEXT    NOT NULL PRIMARY KEY,
-    endpoint        TEXT    NOT NULL,
-    created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    status_code     INTEGER NOT NULL DEFAULT 201,
-    response_json   TEXT    NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_idempotency_created_at
-    ON api_idempotency_keys (created_at);
-"""
+# ---------------------------------------------------------------------------
+# Per-connection threading.RLock
+#
+# sqlite3.Connection is NOT thread-safe: two threads calling .execute() on the
+# same connection object simultaneously trigger SQLITE_MISUSE / "cannot start a
+# transaction within a transaction" errors.  We maintain a WeakKeyDictionary
+# that maps each connection to an RLock so all idempotency operations on the
+# same connection are serialised at the Python level.
+# ---------------------------------------------------------------------------
+
+_conn_locks: dict[int, threading.RLock] = {}
+_conn_locks_mutex = threading.Lock()
+
+
+def _get_lock(conn: sqlite3.Connection) -> threading.RLock:
+    """Return the RLock associated with *conn*, creating one if needed."""
+    conn_id = id(conn)
+    with _conn_locks_mutex:
+        if conn_id not in _conn_locks:
+            _conn_locks[conn_id] = threading.RLock()
+        return _conn_locks[conn_id]
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
@@ -85,13 +96,37 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     Ensure the idempotency table exists.
 
     Safe to call repeatedly (CREATE TABLE IF NOT EXISTS).  Called once per
-    request by the router via ``get_idempotency_db()``.
+    request by the router.  Uses individual ``execute()`` calls (never
+    ``executescript()``) so it is safe to call from multiple threads sharing
+    the same connection, provided the per-connection RLock is held.
     """
-    try:
-        conn.executescript(_ENSURE_TABLE_SQL)
-        conn.commit()
-    except sqlite3.Error as exc:
-        logger.warning("idempotency: ensure_schema failed — %s", exc)
+    with _get_lock(conn):
+        try:
+            # WAL mode + busy timeout improve concurrent access on a shared
+            # SQLite file (no-ops on :memory: / already-set connections).
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS api_idempotency_keys (
+                    client_event_id TEXT    NOT NULL PRIMARY KEY,
+                    endpoint        TEXT    NOT NULL,
+                    created_at      TEXT    NOT NULL
+                                    DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                    status_code     INTEGER NOT NULL DEFAULT 201,
+                    response_json   TEXT    NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_idempotency_created_at
+                    ON api_idempotency_keys (created_at)
+                """
+            )
+            conn.commit()
+        except sqlite3.Error as exc:
+            logger.warning("idempotency: ensure_schema failed — %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -108,22 +143,23 @@ def lookup(
     Returns:
         ``(status_code, response_dict)`` if the key exists, else ``None``.
     """
-    try:
-        row = conn.execute(
-            "SELECT status_code, response_json FROM api_idempotency_keys "
-            "WHERE client_event_id = ?",
-            (client_event_id,),
-        ).fetchone()
-        if row is None:
+    with _get_lock(conn):
+        try:
+            row = conn.execute(
+                "SELECT status_code, response_json FROM api_idempotency_keys "
+                "WHERE client_event_id = ?",
+                (client_event_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            if int(row[0]) == _STATUS_PENDING:
+                # Row is claimed but not yet finalised by the winning thread.
+                return None
+            return int(row[0]), json.loads(row[1])
+        except sqlite3.Error as exc:
+            # Non-fatal: log and return None (caller will re-process and try to record).
+            logger.warning("idempotency: lookup failed for %r — %s", client_event_id, exc)
             return None
-        if int(row[0]) == _STATUS_PENDING:
-            # Row is claimed but not yet finalised by the winning thread.
-            return None
-        return int(row[0]), json.loads(row[1])
-    except sqlite3.Error as exc:
-        # Non-fatal: log and return None (caller will re-process and try to record).
-        logger.warning("idempotency: lookup failed for %r — %s", client_event_id, exc)
-        return None
 
 
 def try_claim(
@@ -144,16 +180,17 @@ def try_claim(
                     the caller should call ``lookup_with_wait()`` and replay.
     """
     try:
-        cursor = conn.execute(
-            """
-            INSERT OR IGNORE INTO api_idempotency_keys
-                (client_event_id, endpoint, status_code, response_json)
-            VALUES (?, ?, ?, '')
-            """,
-            (client_event_id, endpoint, _STATUS_PENDING),
-        )
-        conn.commit()
-        return cursor.rowcount == 1
+        with _get_lock(conn):
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO api_idempotency_keys
+                    (client_event_id, endpoint, status_code, response_json)
+                VALUES (?, ?, ?, '')
+                """,
+                (client_event_id, endpoint, _STATUS_PENDING),
+            )
+            conn.commit()
+            return cursor.rowcount == 1
     except sqlite3.Error as exc:
         logger.warning("idempotency: try_claim failed for %r — %s", client_event_id, exc)
         # Fail open: treat as owning the slot to avoid silently dropping data.
@@ -173,18 +210,19 @@ def finalize(
     succeeds.  Converts ``status_code=0`` (pending) to the actual HTTP status
     and stores the serialised response for future replay.
     """
-    try:
-        conn.execute(
-            """
-            UPDATE api_idempotency_keys
-               SET status_code = ?, response_json = ?
-             WHERE client_event_id = ?
-            """,
-            (status_code, json.dumps(response_data, default=str), client_event_id),
-        )
-        conn.commit()
-    except sqlite3.Error as exc:
-        logger.warning("idempotency: finalize failed for %r — %s", client_event_id, exc)
+    with _get_lock(conn):
+        try:
+            conn.execute(
+                """
+                UPDATE api_idempotency_keys
+                   SET status_code = ?, response_json = ?
+                 WHERE client_event_id = ?
+                """,
+                (status_code, json.dumps(response_data, default=str), client_event_id),
+            )
+            conn.commit()
+        except sqlite3.Error as exc:
+            logger.warning("idempotency: finalize failed for %r — %s", client_event_id, exc)
 
 
 def lookup_with_wait(
@@ -203,22 +241,26 @@ def lookup_with_wait(
     Returns:
         ``(status_code, response_dict)`` once finalised, or ``None`` on timeout.
     """
+    lock = _get_lock(conn)
     for attempt in range(max_retries):
-        try:
-            row = conn.execute(
-                "SELECT status_code, response_json FROM api_idempotency_keys "
-                "WHERE client_event_id = ?",
-                (client_event_id,),
-            ).fetchone()
-            if row is not None and int(row[0]) != _STATUS_PENDING:
-                return int(row[0]), json.loads(row[1])
-        except sqlite3.Error as exc:
-            logger.warning(
-                "idempotency: lookup_with_wait error (attempt %d) for %r — %s",
-                attempt,
-                client_event_id,
-                exc,
-            )
+        # Acquire the lock briefly for each poll so the winner thread can
+        # call finalize() while the loser sleeps between attempts.
+        with lock:
+            try:
+                row = conn.execute(
+                    "SELECT status_code, response_json FROM api_idempotency_keys "
+                    "WHERE client_event_id = ?",
+                    (client_event_id,),
+                ).fetchone()
+                if row is not None and int(row[0]) != _STATUS_PENDING:
+                    return int(row[0]), json.loads(row[1])
+            except sqlite3.Error as exc:
+                logger.warning(
+                    "idempotency: lookup_with_wait error (attempt %d) for %r — %s",
+                    attempt,
+                    client_event_id,
+                    exc,
+                )
         if attempt < max_retries - 1:
             time.sleep(delay)
     logger.warning(
