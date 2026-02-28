@@ -9393,6 +9393,7 @@ class DesktopOrderApp:
         self._build_closed_loop_settings_tab()
         self._build_holidays_settings_tab()
         self._build_promo_cannibalization_settings_tab()
+        self._build_android_settings_tab()
         
         # Buttons
         button_frame = ttk.Frame(main_frame)
@@ -11061,7 +11062,199 @@ class DesktopOrderApp:
         # Write settings
         self.csv_layer.write_settings(settings)
         messagebox.showinfo("Salvato", "Impostazioni cannibalizzazione salvate.")
-    
+
+    # ── Android / Mobile API ──────────────────────────────────────────────────
+
+    def _build_android_settings_tab(self):
+        """Build Android/Mobile API connectivity sub-tab inside settings notebook."""
+        tab_frame = ttk.Frame(self.settings_notebook, padding=10)
+        self.settings_notebook.add(tab_frame, text="📱 Android")
+
+        ttk.Label(
+            tab_frame,
+            text="Connettività App Android",
+            font=("Helvetica", 14, "bold"),
+        ).pack(anchor="w", pady=(0, 5))
+
+        ttk.Label(
+            tab_frame,
+            text=(
+                "Configura l'URL del backend e il token API usati dall'app companion Android. "
+                "Salva le impostazioni qui, poi nell'app mobile vai in Impostazioni e inserisci "
+                "gli stessi valori (o usa un riavvio dell'app dopo aver aggiornato local.properties)."
+            ),
+            font=("Helvetica", 9),
+            foreground="gray",
+            wraplength=650,
+        ).pack(anchor="w", pady=(0, 15))
+
+        # ── Connection parameters ──────────────────────────────────────────
+        conn_frame = ttk.LabelFrame(tab_frame, text="Parametri di Connessione", padding=15)
+        conn_frame.pack(fill="x", pady=(0, 15))
+
+        # Base URL
+        url_row = ttk.Frame(conn_frame)
+        url_row.pack(fill="x", pady=(0, 8))
+        ttk.Label(url_row, text="URL Backend:", width=14, anchor="w").pack(side="left")
+        self.android_base_url_var = tk.StringVar()
+        self.android_base_url_var.trace_add("write", lambda *_: self._mark_settings_modified())
+        ttk.Entry(url_row, textvariable=self.android_base_url_var, width=48).pack(side="left", padx=(5, 10))
+        ttk.Label(
+            url_row, text="es. http://192.168.1.10:8000",
+            foreground="gray", font=("Helvetica", 8),
+        ).pack(side="left")
+
+        # API Token
+        token_row = ttk.Frame(conn_frame)
+        token_row.pack(fill="x", pady=(0, 4))
+        ttk.Label(token_row, text="API Token:", width=14, anchor="w").pack(side="left")
+        self.android_api_token_var = tk.StringVar()
+        self.android_api_token_var.trace_add("write", lambda *_: self._mark_settings_modified())
+        self._android_token_entry = ttk.Entry(
+            token_row, textvariable=self.android_api_token_var, width=48, show="\u2022"
+        )
+        self._android_token_entry.pack(side="left", padx=(5, 10))
+        self._android_token_visible = False
+
+        def _toggle_token():
+            self._android_token_visible = not self._android_token_visible
+            self._android_token_entry.config(show="" if self._android_token_visible else "\u2022")
+            _toggle_btn.config(text="\U0001f648 Nascondi" if self._android_token_visible else "\U0001f441 Mostra")
+
+        _toggle_btn = ttk.Button(token_row, text="\U0001f441 Mostra", command=_toggle_token, width=10)
+        _toggle_btn.pack(side="left")
+
+        ttk.Label(
+            conn_frame,
+            text="\u2139\ufe0e  Token salvato in chiaro in settings.json (MVP \u2014 proteggere il file in produzione).",
+            font=("Helvetica", 8),
+            foreground="gray",
+        ).pack(anchor="w", pady=(6, 0))
+
+        # ── Test result feedback ───────────────────────────────────────────
+        self._android_test_result_var = tk.StringVar(value="")
+        self._android_test_result_label = ttk.Label(
+            tab_frame,
+            textvariable=self._android_test_result_var,
+            font=("Helvetica", 9),
+            wraplength=650,
+        )
+        self._android_test_result_label.pack(anchor="w", pady=(0, 10))
+
+        # ── Action buttons ─────────────────────────────────────────────────
+        btn_frame = ttk.Frame(tab_frame)
+        btn_frame.pack(anchor="w")
+        ttk.Button(
+            btn_frame, text="\U0001f4be Salva sezione",
+            command=self._save_android_settings,
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            btn_frame, text="\U0001f50c Test connessione",
+            command=self._test_android_connection,
+        ).pack(side="left")
+
+    def _refresh_android_settings(self):
+        """Load android connectivity settings from storage into UI fields."""
+        try:
+            settings = self.csv_layer.read_settings()
+            android = settings.get("android", {})
+            if hasattr(self, "android_base_url_var"):
+                self.android_base_url_var.set(
+                    android.get("base_url", {}).get("value", "http://10.0.2.2:8000")
+                )
+            if hasattr(self, "android_api_token_var"):
+                self.android_api_token_var.set(
+                    android.get("api_token", {}).get("value", "")
+                )
+        except Exception:
+            pass
+
+    def _save_android_settings(self):
+        """Save android connectivity settings to settings.json."""
+        try:
+            base_url = self.android_base_url_var.get().strip()
+            api_token = self.android_api_token_var.get().strip()
+
+            if not base_url:
+                messagebox.showwarning("Validazione", "L'URL backend non pu\u00f2 essere vuoto.")
+                return
+
+            settings = self.csv_layer.read_settings()
+            if "android" not in settings:
+                settings["android"] = {}
+            settings["android"]["base_url"] = {
+                "value": base_url,
+                "description": "URL base del backend API",
+            }
+            settings["android"]["api_token"] = {
+                "value": api_token,
+                "description": "Token di autenticazione API Bearer",
+            }
+            self.csv_layer.write_settings(settings)
+
+            if hasattr(self, "_android_test_result_var"):
+                self._android_test_result_var.set("")
+
+            messagebox.showinfo("Salvato", "Impostazioni Android salvate correttamente.")
+            self.csv_layer.log_audit(
+                operation="ANDROID_SETTINGS_UPDATE",
+                details=f"Android base_url aggiornato: {base_url}",
+                sku=None,
+            )
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile salvare impostazioni Android: {e}")
+
+    def _test_android_connection(self):
+        """Test HTTP connectivity to the backend via GET /health (no auth). Non-blocking."""
+        import urllib.request
+        import urllib.error
+        import json as _json
+        import threading
+
+        base_url = self.android_base_url_var.get().strip().rstrip("/")
+        if not base_url:
+            messagebox.showwarning(
+                "Validazione", "Inserisci un URL backend prima di testare la connessione."
+            )
+            return
+
+        health_url = f"{base_url}/health"
+        self._android_test_result_var.set("\u23f3 Test in corso\u2026")
+        self._android_test_result_label.config(foreground="gray")
+
+        def _run():
+            try:
+                req = urllib.request.Request(
+                    health_url, headers={"Accept": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    body = _json.loads(resp.read().decode())
+                status = body.get("status", "?")
+                version = body.get("version", "?")
+                if status == "ok":
+                    msg = f"\u2705  Connesso \u00b7 status={status} \u00b7 versione={version}"
+                    color = "green"
+                else:
+                    msg = f"\u26a0\ufe0f  Raggiunto ma degradato \u00b7 status={status} \u00b7 versione={version}"
+                    color = "orange"
+            except urllib.error.HTTPError as e:
+                msg = f"\u274c  Errore HTTP {e.code}: {e.reason}"
+                color = "red"
+            except urllib.error.URLError as e:
+                msg = f"\u274c  Impossibile raggiungere il server \u00b7 {e.reason}"
+                color = "red"
+            except Exception as e:
+                msg = f"\u274c  Errore: {e}"
+                color = "red"
+
+            def _update():
+                self._android_test_result_var.set(msg)
+                self._android_test_result_label.config(foreground=color)
+
+            self.after(0, _update)
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def _refresh_settings_tab(self):
         """Refresh settings tab with current values."""
         try:
@@ -11160,6 +11353,9 @@ class DesktopOrderApp:
                 for weekday, var in self.order_days_vars.items():
                     var.set(weekday in active_days)
             
+            # Load android connectivity settings
+            self._refresh_android_settings()
+
             # Reset modified flag after loading
             self.settings_modified = False
         

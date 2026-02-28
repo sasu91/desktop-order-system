@@ -2057,7 +2057,17 @@ class CSVLayer:
                     "value": [0, 1, 2, 3, 4],
                     "description": "Valid order weekdays (0=Mon ... 6=Sun)"
                 }
-            }
+            },
+            "android": {
+                "base_url": {
+                    "value": "http://10.0.2.2:8000",
+                    "description": "URL base del backend API (es. http://192.168.1.10:8000 per device fisico LAN)",
+                },
+                "api_token": {
+                    "value": "",
+                    "description": "Token di autenticazione API Bearer (salvato in chiaro — solo MVP)",
+                },
+            },
         }
         
         if not settings_file.exists():
