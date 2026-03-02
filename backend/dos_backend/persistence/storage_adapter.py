@@ -41,6 +41,17 @@ except ImportError as e:
     SQLITE_AVAILABLE = False
     print(f"⚠ SQLite backend not available: {e}")
 
+# ---------------------------------------------------------------------------
+# Per-process startup guard
+# ---------------------------------------------------------------------------
+# automatic_backup_on_startup() + apply_migrations() must run ONCE at process
+# startup, not on every HTTP request.  StorageAdapter is instantiated per-
+# request by FastAPI's DI (get_storage dependency), so without this guard the
+# backup copies the SQLite file on every EAN scan, causing 20-second timeouts.
+import threading as _threading
+_sqlite_startup_done: bool = False
+_sqlite_startup_lock: _threading.Lock = _threading.Lock()
+
 
 class StorageAdapter(CSVLayer):
     """
@@ -103,10 +114,19 @@ class StorageAdapter(CSVLayer):
                 self.backend = 'csv'
             else:
                 try:
-                    # Backup before migrations so the pre-migration state is always recoverable
-                    automatic_backup_on_startup(max_backups=10)
+                    global _sqlite_startup_done
+                    # Backup + migration run ONCE per process via a module-level
+                    # flag.  Running them on every request caused ~20 s timeouts
+                    # on EAN scans (file-copy on each HTTP call).
+                    if not _sqlite_startup_done:
+                        with _sqlite_startup_lock:
+                            if not _sqlite_startup_done:  # double-checked locking
+                                automatic_backup_on_startup(max_backups=10)
+                                _conn_tmp = open_connection(DATABASE_PATH)
+                                apply_migrations(_conn_tmp)
+                                _conn_tmp.close()
+                                _sqlite_startup_done = True
                     self.conn = open_connection(DATABASE_PATH)
-                    apply_migrations(self.conn)  # apply any pending schema migrations
                     self.repos = RepositoryFactory(self.conn)
                 except Exception as e:
                     print(f"⚠ SQLite init failed, falling back to CSV: {e}")
