@@ -152,7 +152,11 @@ class DesktopOrderApp:
             on_failed=self._on_backend_failed,
             tk_root=root,
         )
-        self.backend_manager.start()
+        # Defer start() until after root.mainloop() is entered.
+        # Calling start() directly here means the health-poller thread may call
+        # root.after() before the Tk event loop has started, which raises
+        # RuntimeError: main thread is not in main loop.
+        root.after(200, self.backend_manager.start)
 
         # Intercept window close to gracefully stop the backend
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
