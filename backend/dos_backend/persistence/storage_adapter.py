@@ -52,6 +52,22 @@ import threading as _threading
 _sqlite_startup_done: bool = False
 _sqlite_startup_lock: _threading.Lock = _threading.Lock()
 
+# Cache result of is_sqlite_available() to avoid reopening the DB on every
+# HTTP request (it opens a connection just to check a schema_version table).
+_sqlite_available_cache: Optional[bool] = None
+_sqlite_available_lock: _threading.Lock = _threading.Lock()
+
+
+def _cached_sqlite_available() -> bool:
+    """Return is_sqlite_available(), caching the True result for the process lifetime."""
+    global _sqlite_available_cache
+    if _sqlite_available_cache is True:
+        return True
+    with _sqlite_available_lock:
+        if _sqlite_available_cache is None:
+            _sqlite_available_cache = is_sqlite_available()
+        return bool(_sqlite_available_cache)
+
 
 class StorageAdapter(CSVLayer):
     """
@@ -109,7 +125,7 @@ class StorageAdapter(CSVLayer):
             if not SQLITE_AVAILABLE:
                 print("⚠ SQLite modules not available, falling back to CSV")
                 self.backend = 'csv'
-            elif not is_sqlite_available():
+            elif not _cached_sqlite_available():
                 print("⚠ SQLite database not initialized, falling back to CSV")
                 self.backend = 'csv'
             else:
