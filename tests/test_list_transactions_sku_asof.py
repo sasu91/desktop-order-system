@@ -113,7 +113,7 @@ def conn() -> Generator[sqlite3.Connection, None, None]:
 
     ledger_repo.append_batch(batch)
 
-    yield db
+    yield  
     db.close()
 
 

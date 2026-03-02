@@ -76,6 +76,7 @@ fun ScanScreen(
                     ScanOverlay(
                         uiState = uiState,
                         onResumeScan = viewModel::resumeScanning,
+                        onDismissPairing = viewModel::dismissPairing,
                         onNavigateToExceptions = onNavigateToExceptions,
                         modifier = Modifier.align(Alignment.BottomCenter),
                     )
@@ -184,7 +185,7 @@ private class BarcodeImageAnalyser(
 
     private val scanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder()
-            .setBarcodeFormats(Barcode.FORMAT_EAN_13, Barcode.FORMAT_EAN_8, Barcode.FORMAT_CODE_128)
+            .setBarcodeFormats(Barcode.FORMAT_EAN_13, Barcode.FORMAT_EAN_8, Barcode.FORMAT_CODE_128, Barcode.FORMAT_QR_CODE)
             .build()
     )
 
@@ -217,6 +218,7 @@ private class BarcodeImageAnalyser(
 private fun ScanOverlay(
     uiState: ScanUiState,
     onResumeScan: () -> Unit,
+    onDismissPairing: () -> Unit,
     onNavigateToExceptions: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -237,6 +239,10 @@ private fun ScanOverlay(
                     Spacer(Modifier.width(8.dp))
                     Text("Ricerca in corso…")
                 }
+            }
+            // ── QR pairing ──────────────────────────────────────────────────
+            uiState.pairedUrl != null -> {
+                PairingSuccessCard(pairedUrl = uiState.pairedUrl, onDismiss = onDismissPairing)
             }
             uiState.error != null -> {
                 Text(uiState.error, color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
@@ -271,6 +277,36 @@ private fun ScanOverlay(
             else -> {
                 Text("Inquadra un codice EAN", style = MaterialTheme.typography.bodyMedium)
             }
+        }
+    }
+}
+
+@Composable
+private fun PairingSuccessCard(pairedUrl: String, onDismiss: () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "✅ Pairing completato!",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+            Text(
+                text = "URL salvato:\n$pairedUrl",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+            Text(
+                text = "Riavvia l'app per connettere al nuovo backend.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+            Button(onClick = onDismiss) { Text("OK — continua a scansionare") }
         }
     }
 }

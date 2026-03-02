@@ -42,6 +42,15 @@ except ImportError:
     BARCODE_AVAILABLE = False
     print("Warning: python-barcode or Pillow not installed. Barcode rendering disabled.")
 
+try:
+    import qrcode  # type: ignore[import-untyped]
+    from PIL import Image as _PilImage  # already imported above if BARCODE_AVAILABLE
+    QRCODE_AVAILABLE = True
+except ImportError:
+    QRCODE_AVAILABLE = False
+
+from ..backend_manager import BackendManager, get_lan_ip
+
 from ..persistence.storage_adapter import StorageAdapter
 from ..domain.ledger import StockCalculator, validate_ean
 from ..domain.models import SKU, EventType, OrderProposal, Stock, Transaction, PromoWindow
@@ -136,6 +145,18 @@ class DesktopOrderApp:
         # Load saved tab order from settings
         self.tab_order = self._load_tab_order()
         
+        # ── Backend auto-start ──────────────────────────────────────────
+        self.backend_manager = BackendManager(
+            port=8000,
+            on_ready=self._on_backend_ready,
+            on_failed=self._on_backend_failed,
+            tk_root=root,
+        )
+        self.backend_manager.start()
+
+        # Intercept window close to gracefully stop the backend
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
         # Create GUI
         self._create_widgets()
         self._refresh_all()
@@ -168,7 +189,7 @@ class DesktopOrderApp:
         export_menu.add_command(label="🔍 Order Explain (Audit Trail)", command=self._export_order_explain)
         
         file_menu.add_separator()
-        file_menu.add_command(label="Esci", command=self.root.quit)
+        file_menu.add_command(label="Esci", command=self._on_close)
         
         # Tab notebook
         self.notebook = ttk.Notebook(self.root)
@@ -11068,7 +11089,7 @@ class DesktopOrderApp:
     def _build_android_settings_tab(self):
         """Build Android/Mobile API connectivity sub-tab inside settings notebook."""
         tab_frame = ttk.Frame(self.settings_notebook, padding=10)
-        self.settings_notebook.add(tab_frame, text="📱 Android")
+        self.settings_notebook.add(tab_frame, text="\U0001f4f1 Android")
 
         ttk.Label(
             tab_frame,
@@ -11079,9 +11100,9 @@ class DesktopOrderApp:
         ttk.Label(
             tab_frame,
             text=(
-                "Configura l'URL del backend e il token API usati dall'app companion Android. "
-                "Salva le impostazioni qui, poi nell'app mobile vai in Impostazioni e inserisci "
-                "gli stessi valori (o usa un riavvio dell'app dopo aver aggiornato local.properties)."
+                "Il backend si avvia automaticamente con il desktop. "
+                "Scansiona il QR code con l'app Android per configurare l'URL in automatico, "
+                "poi riavvia l'app mobile."
             ),
             font=("Helvetica", 9),
             foreground="gray",
@@ -11151,7 +11172,136 @@ class DesktopOrderApp:
         ttk.Button(
             btn_frame, text="\U0001f50c Test connessione",
             command=self._test_android_connection,
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            btn_frame, text="\U0001f504 Aggiorna QR",
+            command=self._refresh_qr_image,
         ).pack(side="left")
+
+        # ── QR Code pairing ────────────────────────────────────────────────
+        qr_frame = ttk.LabelFrame(tab_frame, text="QR Pairing — scansiona con l'app Android", padding=10)
+        qr_frame.pack(fill="x", pady=(15, 0))
+
+        qr_inner = ttk.Frame(qr_frame)
+        qr_inner.pack(anchor="w")
+
+        self._qr_image_label = ttk.Label(qr_inner)
+        self._qr_image_label.pack(side="left", padx=(0, 20))
+
+        qr_info_frame = ttk.Frame(qr_inner)
+        qr_info_frame.pack(side="left", anchor="n")
+
+        self._qr_url_var = tk.StringVar(value="")
+        ttk.Label(
+            qr_info_frame, text="URL di connessione:",
+            font=("Helvetica", 9, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(
+            qr_info_frame,
+            textvariable=self._qr_url_var,
+            font=("Helvetica", 9),
+            foreground="#0066cc",
+        ).pack(anchor="w", pady=(2, 10))
+        ttk.Label(
+            qr_info_frame,
+            text=(
+                "1. Apri l'app Android \u2192 tab Scansiona\n"
+                "2. Punta la fotocamera sul QR code\n"
+                "3. L'URL viene salvato automaticamente\n"
+                "4. Riavvia l'app Android per applicare"
+            ),
+            font=("Helvetica", 9),
+            foreground="gray",
+            justify="left",
+        ).pack(anchor="w")
+
+        if not QRCODE_AVAILABLE:
+            ttk.Label(
+                qr_info_frame,
+                text="\u26a0\ufe0e  qrcode non installato. Esegui: pip install qrcode[pil]",
+                font=("Helvetica", 9),
+                foreground="orange",
+            ).pack(anchor="w", pady=(10, 0))
+
+        # Populate QR on build (delayed so widget is ready)
+        self.root.after(200, self._refresh_qr_image)
+
+    def _generate_qr_tk_image(self, url: str, size: int = 200):
+        """Generate a QR code for *url* and return a Tkinter PhotoImage (or None)."""
+        if not QRCODE_AVAILABLE:
+            return None
+        try:
+            import qrcode.constants as _qrc  # type: ignore[import-untyped]
+            from PIL import Image as PilImage, ImageTk as PilImageTk
+            qr = qrcode.QRCode(
+                version=None,
+                error_correction=_qrc.ERROR_CORRECT_M,
+                box_size=6,
+                border=2,
+            )
+            qr.add_data(url)
+            qr.make(fit=True)
+            raw = qr.make_image(fill_color="black", back_color="white")
+            img: PilImage.Image = raw.convert("RGB")  # type: ignore[assignment]
+            img = img.resize((size, size), PilImage.Resampling.NEAREST)
+            return PilImageTk.PhotoImage(img)
+        except Exception as exc:
+            logger.warning(f"QR generation failed: {exc}")
+            return None
+
+    def _refresh_qr_image(self):
+        """Re-generate the QR code from the current LAN IP and update the widget."""
+        if not hasattr(self, "_qr_image_label"):
+            return
+        pairing_url = self.backend_manager.pairing_url if hasattr(self, "backend_manager") else (
+            f"dos://pair?base_url=http://{get_lan_ip()}:8000"
+        )
+        # Update URL field to show LAN address
+        lan_url = self.backend_manager.lan_base_url if hasattr(self, "backend_manager") else (
+            f"http://{get_lan_ip()}:8000"
+        )
+        if hasattr(self, "_qr_url_var"):
+            self._qr_url_var.set(pairing_url)
+        if hasattr(self, "android_base_url_var"):
+            current = self.android_base_url_var.get().strip()
+            if not current or current == "http://10.0.2.2:8000":
+                self.android_base_url_var.set(lan_url)
+        photo = self._generate_qr_tk_image(pairing_url)
+        if photo is not None:
+            self._qr_image_label.config(image=photo, text="")
+            self._qr_image_label.image = photo  # type: ignore[attr-defined]  # keep reference
+        else:
+            self._qr_image_label.config(
+                image="",
+                text="[QR non disponibile\nInstalla qrcode[pil]]",
+                font=("Helvetica", 9),
+                foreground="gray",
+            )
+
+    def _on_backend_ready(self, base_url: str) -> None:
+        """Called (on the Tk thread) when the backend process is healthy."""
+        logger.info(f"Backend pronto su {base_url}")
+        if hasattr(self, "_android_test_result_var"):
+            self._android_test_result_var.set(f"\u2705  Backend avviato: {base_url}")
+            self._android_test_result_label.config(foreground="green")
+        # Refresh QR in case IP changed
+        if hasattr(self, "_qr_image_label"):
+            self._refresh_qr_image()
+
+    def _on_backend_failed(self, reason: str) -> None:
+        """Called (on the Tk thread) when the backend fails to start."""
+        logger.warning(f"Backend start failed: {reason}")
+        if hasattr(self, "_android_test_result_var"):
+            self._android_test_result_var.set(f"\u26a0\ufe0e  Backend non avviato: {reason}")
+            self._android_test_result_label.config(foreground="orange")
+
+    def _on_close(self) -> None:
+        """Gracefully stop the backend subprocess before closing the window."""
+        try:
+            self.backend_manager.stop()
+        except Exception as exc:
+            logger.warning(f"Error stopping backend on close: {exc}")
+        self.root.destroy()
 
     def _refresh_android_settings(self):
         """Load android connectivity settings from storage into UI fields."""
@@ -11251,7 +11401,7 @@ class DesktopOrderApp:
                 self._android_test_result_var.set(msg)
                 self._android_test_result_label.config(foreground=color)
 
-            self.after(0, _update)
+            self.root.after(0, _update)
 
         threading.Thread(target=_run, daemon=True).start()
 
