@@ -3,6 +3,7 @@ package com.sasu91.dosapp.data.repository
 import com.sasu91.dosapp.data.api.DosApiService
 import com.sasu91.dosapp.data.api.dto.SkuDto
 import com.sasu91.dosapp.data.api.dto.StockDetailDto
+import android.util.Log
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -42,7 +43,9 @@ internal suspend fun <T> safeCall(block: suspend () -> ApiResult<T>): ApiResult<
     try {
         block()
     } catch (e: IOException) {
+        Log.e("ScanRepository", "Network IO error: ${e.javaClass.simpleName}: ${e.message}", e)
         ApiResult.NetworkError(e.message ?: "Network error")
     } catch (e: Exception) {
-        ApiResult.NetworkError(e.message ?: "Unexpected error")
+        Log.e("ScanRepository", "Unexpected error: ${e.javaClass.simpleName}: ${e.message}", e)
+        ApiResult.NetworkError("${e.javaClass.simpleName}: ${e.message}")
     }

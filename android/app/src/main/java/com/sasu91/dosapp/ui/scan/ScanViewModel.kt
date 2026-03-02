@@ -2,6 +2,7 @@ package com.sasu91.dosapp.ui.scan
 
 import android.content.SharedPreferences
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sasu91.dosapp.data.api.dto.SkuDto
@@ -18,6 +19,7 @@ import javax.inject.Inject
 private const val PAIRING_SCHEME = "dos://pair"
 /** SharedPreferences key for the backend base URL (same as AppModule.PREF_BASE_URL). */
 private const val PREF_BASE_URL = "base_url"
+private const val TAG = "ScanViewModel"
 
 data class ScanUiState(
     val isLoading: Boolean = false,
@@ -81,7 +83,7 @@ class ScanViewModel @Inject constructor(
                             it.copy(isLoading = false, error = "Stock: ${stockResult.message}")
                         }
                         is ApiResult.NetworkError -> _state.update {
-                            it.copy(isLoading = false, error = "Offline · stock non disponibile")
+                            it.copy(isLoading = false, error = "Offline · stock: ${stockResult.message}")
                         }
                     }
                 }
@@ -89,7 +91,7 @@ class ScanViewModel @Inject constructor(
                     it.copy(isLoading = false, error = "${skuResult.code}: ${skuResult.message}")
                 }
                 is ApiResult.NetworkError -> _state.update {
-                    it.copy(isLoading = false, error = "Offline · verifica connessione")
+                    it.copy(isLoading = false, error = "Offline · ${skuResult.message}")
                 }
             }
         }
@@ -112,7 +114,11 @@ class ScanViewModel @Inject constructor(
             _state.update { it.copy(error = "QR di pairing non contiene base_url", paused = true) }
             return
         }
-        prefs.edit().putString(PREF_BASE_URL, baseUrl).apply()
+        // commit() is synchronous: guarantees the URL is on disk before the user
+        // kills the app to trigger the restart. apply() is async and risks data loss
+        // if the process is killed immediately after the pairing card is dismissed.
+        val saved = prefs.edit().putString(PREF_BASE_URL, baseUrl).commit()
+        Log.i(TAG, "QR pairing: saved=$saved url=$baseUrl")
         _state.update {
             it.copy(
                 isLoading = false,
