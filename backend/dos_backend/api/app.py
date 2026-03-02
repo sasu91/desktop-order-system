@@ -18,10 +18,31 @@ import logging
 import os
 from importlib.metadata import PackageNotFoundError, version
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 from .errors import register_handlers
 from ..routers import health, skus, stock, exceptions, receipts
+
+
+# ---------------------------------------------------------------------------
+# Keep-alive guard middleware
+# ---------------------------------------------------------------------------
+class _ConnectionCloseMiddleware(BaseHTTPMiddleware):
+    """Force ``Connection: close`` on every response.
+
+    OkHttp (and other HTTP/1.1 clients) will close the socket immediately
+    after reading each response instead of returning it to the keep-alive
+    pool.  This prevents the ``SocketException: Socket closed`` / timeout
+    that occurs when OkHttp reuses a pooled connection that uvicorn has
+    already closed due to the keep-alive idle timeout.
+    """
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+        response.headers["Connection"] = "close"
+        return response
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +134,13 @@ def create_app() -> FastAPI:
         redoc_url="/api/redoc",
         openapi_url="/api/openapi.json",
     )
+
+    # ------------------------------------------------------------------
+    # Middleware
+    # ------------------------------------------------------------------
+    # Force Connection: close so mobile clients never reuse a stale socket.
+    # Must be added BEFORE routers so it wraps all responses.
+    app.add_middleware(_ConnectionCloseMiddleware)
 
     # ------------------------------------------------------------------
     # Exception handlers — wrap everything in ErrorEnvelope
