@@ -205,11 +205,11 @@ def create_app() -> FastAPI:
     )
 
     # ------------------------------------------------------------------
-    # Middleware — pure ASGI, no BaseHTTPMiddleware
+    # Middleware — Connection: close rimosso; il keep-alive è gestito
+    # tramite timeout_keep_alive=5 (uvicorn) + ConnectionPool idle=3 s
+    # (OkHttp).  Il pool OkHttp scade a 3 s, prima che uvicorn chiuda
+    # la connessione a 5 s → zero connessioni stale, zero middleware.
     # ------------------------------------------------------------------
-    # Force Connection: close header; client discards socket after each
-    # response, preventing stale-connection retries on the next scan.
-    app.add_middleware(_ConnectionCloseMiddleware)
 
     # ------------------------------------------------------------------
     # Exception handlers — wrap everything in ErrorEnvelope

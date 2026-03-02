@@ -45,5 +45,5 @@ if __name__ == "__main__":
         port=port,
         log_level=log_level,
         reload=reload,
-        timeout_keep_alive=30,   # keep connections alive 30 s; OkHttp pool=20 s → never stale
+        timeout_keep_alive=5,    # OkHttp pool idle=3 s → scade prima; mai connessioni stale
     )

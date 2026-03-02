@@ -115,7 +115,7 @@ object AppModule {
         .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
         // Retire idle connections at 20 s — server (uvicorn) keeps them for 30 s.
-        .connectionPool(ConnectionPool(5, 20L, TimeUnit.SECONDS))
+        .connectionPool(ConnectionPool(5, 3L, TimeUnit.SECONDS))   // 3 s < uvicorn 5 s → mai stale
         .retryOnConnectionFailure(true)
         .build()
 

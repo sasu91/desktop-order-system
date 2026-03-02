@@ -162,8 +162,7 @@ class BackendManager:
                 cwd=str(self.backend_dir),
                 env=env,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
+                stderr=subprocess.DEVNULL,  # PIPE senza lettore → deadlock quando il buffer si riempie
             )
         except Exception as exc:
             logger.error(f"BackendManager: impossibile avviare il processo: {exc}")
