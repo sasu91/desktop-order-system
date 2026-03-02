@@ -14,35 +14,103 @@ Test isolation:
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import logging
 import os
+from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version
+from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from fastapi import FastAPI
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .errors import register_handlers
 from ..routers import health, skus, stock, exceptions, receipts
 
 
 # ---------------------------------------------------------------------------
-# Keep-alive guard middleware
+# Keep-alive guard — pure ASGI middleware (no BaseHTTPMiddleware)
 # ---------------------------------------------------------------------------
-class _ConnectionCloseMiddleware(BaseHTTPMiddleware):
-    """Force ``Connection: close`` on every response.
+class _ConnectionCloseMiddleware:
+    """Force ``Connection: close`` on every HTTP response.
 
-    OkHttp (and other HTTP/1.1 clients) will close the socket immediately
-    after reading each response instead of returning it to the keep-alive
-    pool.  This prevents the ``SocketException: Socket closed`` / timeout
-    that occurs when OkHttp reuses a pooled connection that uvicorn has
-    already closed due to the keep-alive idle timeout.
+    Implemented as a raw ASGI middleware to avoid the well-known Starlette
+    ``BaseHTTPMiddleware`` bug: when the client closes the TCP connection
+    (because of *this very header*), the BaseHTTPMiddleware background task
+    tries to send on a dead socket, raises an asyncio error, and leaves the
+    uvicorn worker in a broken state where it ignores all future requests.
+
+    This pure-ASGI version intercepts only the ``http.response.start`` ASGI
+    message and injects the header without creating any extra tasks.
     """
 
-    async def dispatch(self, request: Request, call_next) -> Response:
-        response = await call_next(request)
-        response.headers["Connection"] = "close"
-        return response
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def _inject_close(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                # Strip any existing Connection header then add ours.
+                headers = [
+                    (k, v)
+                    for k, v in message.get("headers", [])
+                    if k.lower() != b"connection"
+                ]
+                headers.append((b"connection", b"close"))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, _inject_close)
+
+
+# ---------------------------------------------------------------------------
+# SQLite startup — runs ONCE at server start via lifespan
+# ---------------------------------------------------------------------------
+def _run_sqlite_startup() -> None:
+    """Backup + migrate DB; called on a thread-pool thread at lifespan startup.
+
+    Running this before uvicorn starts accepting requests means:
+    - The first HTTP request never has to wait for I/O-heavy operations.
+    - No per-request locking/deadlock risk.
+    - The per-request guard in StorageAdapter acts only as a safety net.
+    """
+    _log = logging.getLogger("dos_backend.startup")
+    try:
+        from ..config import get_storage_backend, DATABASE_PATH, is_sqlite_available
+        if get_storage_backend() != "sqlite" or not is_sqlite_available():
+            return
+
+        from ..db import open_connection, apply_migrations, automatic_backup_on_startup
+        from ..persistence import storage_adapter as _sa
+
+        with _sa._sqlite_startup_lock:
+            if _sa._sqlite_startup_done:
+                return  # already done (shouldn't happen in lifespan, but safe)
+            _log.info("SQLite startup: backup + migration…")
+            automatic_backup_on_startup(max_backups=10)
+            conn = open_connection(DATABASE_PATH)
+            apply_migrations(conn)
+            conn.close()
+            _sa._sqlite_startup_done = True
+            _log.info("SQLite startup complete.")
+    except Exception as exc:
+        _log.warning("SQLite startup task failed (degraded mode): %s", exc)
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
+    """Run heavy startup work before accepting requests, clean up on shutdown."""
+    loop = asyncio.get_running_loop()
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="dos-startup"
+    ) as pool:
+        await loop.run_in_executor(pool, _run_sqlite_startup)
+    yield  # server is live here
 
 
 # ---------------------------------------------------------------------------
@@ -133,13 +201,14 @@ def create_app() -> FastAPI:
         docs_url="/api/docs",
         redoc_url="/api/redoc",
         openapi_url="/api/openapi.json",
+        lifespan=_lifespan,
     )
 
     # ------------------------------------------------------------------
-    # Middleware
+    # Middleware — pure ASGI, no BaseHTTPMiddleware
     # ------------------------------------------------------------------
-    # Force Connection: close so mobile clients never reuse a stale socket.
-    # Must be added BEFORE routers so it wraps all responses.
+    # Force Connection: close header; client discards socket after each
+    # response, preventing stale-connection retries on the next scan.
     app.add_middleware(_ConnectionCloseMiddleware)
 
     # ------------------------------------------------------------------
