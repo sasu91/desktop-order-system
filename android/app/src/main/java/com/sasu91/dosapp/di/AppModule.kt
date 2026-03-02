@@ -18,6 +18,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
@@ -108,6 +109,10 @@ object AppModule {
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
+        // Retire idle connections at 20 s — server (uvicorn) keeps them for 30 s.
+        // This prevents OkHttp reusing a stale connection that the server already
+        // closed, which would cause SocketTimeoutException / Socket closed.
+        .connectionPool(ConnectionPool(5, 20L, TimeUnit.SECONDS))
         .retryOnConnectionFailure(true)
         .build()
 
