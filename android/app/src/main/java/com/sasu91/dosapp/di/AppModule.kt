@@ -6,6 +6,7 @@ import androidx.room.Room
 import com.google.gson.Gson
 import com.sasu91.dosapp.BuildConfig
 import com.sasu91.dosapp.data.api.AuthInterceptor
+import com.sasu91.dosapp.data.api.BaseUrlInterceptor
 import com.sasu91.dosapp.data.api.DosApiService
 import com.sasu91.dosapp.data.api.RetrofitClient
 import com.sasu91.dosapp.data.api.TokenProvider
@@ -101,41 +102,39 @@ object AppModule {
     @Provides
     @Singleton
     fun provideOkHttpClient(
+        prefs: SharedPreferences,
         auth: AuthInterceptor,
         logging: HttpLoggingInterceptor,
     ): OkHttpClient = OkHttpClient.Builder()
-        .addInterceptor(auth)               // auth applied before network logging
+        // 1. Rewrite host:port from SharedPreferences on every call — no restart needed
+        .addInterceptor(BaseUrlInterceptor(prefs, PREF_BASE_URL))
+        // 2. Attach Bearer token (read from prefs at call time)
+        .addInterceptor(auth)
         .addNetworkInterceptor(logging)     // logs the post-redirect URL
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
         // Retire idle connections at 20 s — server (uvicorn) keeps them for 30 s.
-        // This prevents OkHttp reusing a stale connection that the server already
-        // closed, which would cause SocketTimeoutException / Socket closed.
         .connectionPool(ConnectionPool(5, 20L, TimeUnit.SECONDS))
         .retryOnConnectionFailure(true)
         .build()
 
     /**
-     * Base URL is resolved once at startup from [SharedPreferences].
-     * Changing the URL in Settings requires an app restart — known limitation.
+     * Retrofit uses a placeholder base URL; [BaseUrlInterceptor] rewrites
+     * host:port on every call using the value stored in SharedPreferences.
+     * Changing the URL in Settings takes effect on the next request — no
+     * app restart required.
      */
     @Provides
     @Singleton
     fun provideRetrofit(
-        prefs: SharedPreferences,
         okHttp: OkHttpClient,
         gson: Gson,
-    ): Retrofit {
-        val raw = prefs.getString(PREF_BASE_URL, BuildConfig.DOS_BASE_URL)
-            ?: BuildConfig.DOS_BASE_URL
-        val baseUrl = raw.trimEnd('/') + "/"    // Retrofit requires trailing slash
-        return Retrofit.Builder()
-            .baseUrl(baseUrl)
-            .client(okHttp)
-            .addConverterFactory(GsonConverterFactory.create(gson))
-            .build()
-    }
+    ): Retrofit = Retrofit.Builder()
+        .baseUrl("http://localhost/")   // placeholder — BaseUrlInterceptor handles routing
+        .client(okHttp)
+        .addConverterFactory(GsonConverterFactory.create(gson))
+        .build()
 
     @Provides
     @Singleton
