@@ -74,8 +74,12 @@ object AppModule {
     @Singleton
     fun provideAuthInterceptor(prefs: SharedPreferences): AuthInterceptor =
         AuthInterceptor(TokenProvider {
-            prefs.getString(PREF_API_TOKEN, BuildConfig.DOS_API_TOKEN)
-                ?: BuildConfig.DOS_API_TOKEN
+            // Prefer the token saved by the user in Settings/SharedPreferences.
+            // Fall back to the build-time constant only when it is non-blank;
+            // an empty fallback means "dev mode — send no Authorization header"
+            // so the backend accepts the request unconditionally.
+            val saved = prefs.getString(PREF_API_TOKEN, "") ?: ""
+            saved.ifBlank { BuildConfig.DOS_API_TOKEN }
         })
 
     /**

@@ -97,18 +97,19 @@ def _validate(credentials: HTTPAuthorizationCredentials) -> str:
 # ---------------------------------------------------------------------------
 
 def verify_token(
-    credentials: HTTPAuthorizationCredentials = Depends(_bearer_required),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_optional),
 ) -> str:
     """
     FastAPI dependency — validates the required Bearer token.
 
     In *dev mode* (``DOS_API_TOKEN`` unset) any request is accepted; no
-    ``Authorization`` header is even required thanks to the dev-mode
-    shortcut in ``_validate``.
+    ``Authorization`` header is required.  Using ``_bearer_optional`` here
+    prevents FastAPI from raising 403 before the function body runs when the
+    client (e.g. Android app with no token configured) omits the header.
 
     In *production mode* the ``Authorization: Bearer <token>`` header is
-    mandatory (enforced by ``_bearer_required``) and the token must match
-    ``DOS_API_TOKEN`` exactly.
+    mandatory and the token must match ``DOS_API_TOKEN`` exactly;
+    missing or wrong header → HTTP 401.
 
     Use as a router-level or endpoint-level dependency::
 
@@ -119,6 +120,13 @@ def verify_token(
     if is_dev_mode():
         _emit_dev_warning()
         return _DEV_SENTINEL
+    # Production mode: header is required
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token mancante. Inviare: Authorization: Bearer <DOS_API_TOKEN>",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return _validate(credentials)
 
 
