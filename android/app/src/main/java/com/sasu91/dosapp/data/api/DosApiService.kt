@@ -103,4 +103,26 @@ interface DosApiService {
     suspend fun closeReceipt(
         @Body body: ReceiptsCloseRequestDto,
     ): Response<ReceiptsCloseResponseDto>
+
+    // -----------------------------------------------------------------------
+    // POST /api/v1/eod/close
+    // -----------------------------------------------------------------------
+    /**
+     * Submit an End-of-Day batch close for multiple SKUs.
+     *
+     * Each SKU entry can carry up to four optional numeric fields:
+     * [EodEntryDto.onHand], [EodEntryDto.wasteQty], [EodEntryDto.adjustQty],
+     * [EodEntryDto.unfulfilledQty]. The server maps them to the appropriate
+     * ledger events (ADJUST / WASTE / UNFULFILLED).
+     *
+     * HTTP 201 = first write. HTTP 200 = replay;
+     * [EodCloseResponseDto.alreadyPosted] = true, ledger unchanged.
+     *
+     * [EodCloseRequestDto.clientEodId] is required and used as the sole
+     * idempotency key — always supply a fresh UUID per submission.
+     */
+    @POST("api/v1/eod/close")
+    suspend fun closeEod(
+        @Body body: EodCloseRequestDto,
+    ): Response<EodCloseResponseDto>
 }

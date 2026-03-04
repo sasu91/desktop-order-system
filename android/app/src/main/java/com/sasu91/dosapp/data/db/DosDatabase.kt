@@ -4,9 +4,11 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.sasu91.dosapp.data.db.dao.DraftEodDao
 import com.sasu91.dosapp.data.db.dao.DraftReceiptDao
 import com.sasu91.dosapp.data.db.dao.PendingExceptionDao
 import com.sasu91.dosapp.data.db.dao.PendingRequestDao
+import com.sasu91.dosapp.data.db.entity.DraftEodEntity
 import com.sasu91.dosapp.data.db.entity.DraftReceiptEntity
 import com.sasu91.dosapp.data.db.entity.PendingExceptionEntity
 import com.sasu91.dosapp.data.db.entity.PendingRequestEntity
@@ -34,8 +36,9 @@ import com.sasu91.dosapp.data.db.entity.PendingRequestEntity
         PendingRequestEntity::class,
         DraftReceiptEntity::class,
         PendingExceptionEntity::class,
+        DraftEodEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class DosDatabase : RoomDatabase() {
@@ -50,7 +53,8 @@ abstract class DosDatabase : RoomDatabase() {
 
     /** Outbox for exception events (WASTE / ADJUST / UNFULFILLED). */
     abstract fun pendingExceptionDao(): PendingExceptionDao
-
+    /** Typed outbox for End-of-Day batch close operations. */
+    abstract fun draftEodDao(): DraftEodDao
     // ── Migrations ────────────────────────────────────────────────────────────
 
     companion object {
@@ -85,6 +89,26 @@ abstract class DosDatabase : RoomDatabase() {
                         `retry_count`       INTEGER NOT NULL DEFAULT 0,
                         `last_error`        TEXT,
                         PRIMARY KEY(`client_event_id`)
+                    )
+                """.trimIndent())
+            }
+        }
+
+        /**
+         * Migration 2 → 3: create `draft_eod` table for EOD batch close drafts.
+         */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `draft_eod` (
+                        `client_eod_id`  TEXT    NOT NULL,
+                        `date`           TEXT    NOT NULL DEFAULT '',
+                        `entries_json`   TEXT    NOT NULL DEFAULT '[]',
+                        `status`         TEXT    NOT NULL DEFAULT 'PENDING',
+                        `created_at`     INTEGER NOT NULL DEFAULT 0,
+                        `retry_count`    INTEGER NOT NULL DEFAULT 0,
+                        `last_error`     TEXT,
+                        PRIMARY KEY(`client_eod_id`)
                     )
                 """.trimIndent())
             }

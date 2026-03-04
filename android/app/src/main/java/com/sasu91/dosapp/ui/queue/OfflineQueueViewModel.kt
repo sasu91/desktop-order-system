@@ -2,8 +2,10 @@ package com.sasu91.dosapp.ui.queue
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.sasu91.dosapp.data.db.entity.DraftEodEntity
 import com.sasu91.dosapp.data.db.entity.DraftReceiptEntity
 import com.sasu91.dosapp.data.db.entity.PendingExceptionEntity
+import com.sasu91.dosapp.data.repository.EodRepository
 import com.sasu91.dosapp.data.repository.ExceptionRepository
 import com.sasu91.dosapp.data.repository.ReceivingRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -20,7 +22,7 @@ import javax.inject.Inject
 // ---------------------------------------------------------------------------
 
 enum class QueueStatus { PENDING, FAILED, SENT }
-enum class QueueType   { EXCEPTION, RECEIPT }
+enum class QueueType   { EXCEPTION, RECEIPT, EOD }
 
 /**
  * Flattened row shown in the offline-queue screen.
@@ -66,6 +68,20 @@ private fun DraftReceiptEntity.toQueueItem() = QueueItem(
     summary    = "DDT · $date · $documentId".trimEnd(' ', '·', ' '),
 )
 
+private fun DraftEodEntity.toQueueItem() = QueueItem(
+    id         = clientEodId,
+    type       = QueueType.EOD,
+    status     = when (status) {
+        DraftEodEntity.Status.SENT   -> QueueStatus.SENT
+        DraftEodEntity.Status.FAILED -> QueueStatus.FAILED
+        else                         -> QueueStatus.PENDING
+    },
+    createdAt  = createdAt,
+    retryCount = retryCount,
+    lastError  = lastError,
+    summary    = "EOD · $date",
+)
+
 // ---------------------------------------------------------------------------
 // ViewModel
 // ---------------------------------------------------------------------------
@@ -79,6 +95,7 @@ data class QueueUiState(
 class OfflineQueueViewModel @Inject constructor(
     private val exceptionRepo: ExceptionRepository,
     private val receivingRepo: ReceivingRepository,
+    private val eodRepo: EodRepository,
 ) : ViewModel() {
 
     private val _busyIds = MutableStateFlow<Set<String>>(emptySet())
@@ -90,11 +107,13 @@ class OfflineQueueViewModel @Inject constructor(
     val uiState: StateFlow<QueueUiState> = combine(
         exceptionRepo.observeAll(),
         receivingRepo.observeAll(),
+        eodRepo.observeAll(),
         _busyIds,
-    ) { exceptions, receipts, busy ->
+    ) { exceptions, receipts, eods, busy ->
         val merged = buildList {
             exceptions.forEach { add(it.toQueueItem()) }
             receipts.forEach   { add(it.toQueueItem()) }
+            eods.forEach       { add(it.toQueueItem()) }
         }.sortedByDescending { it.createdAt }
         QueueUiState(items = merged, busyIds = busy)
     }.stateIn(
@@ -103,11 +122,12 @@ class OfflineQueueViewModel @Inject constructor(
         initialValue = QueueUiState(),
     )
 
-    /** Total unsent count across both tables — drives the navigation badge. */
+    /** Total unsent count across all tables — drives the navigation badge. */
     val pendingCount: StateFlow<Int> = combine(
         exceptionRepo.observePendingCount(),
         receivingRepo.observePendingCount(),
-    ) { exCount, rcCount -> exCount + rcCount }
+        eodRepo.observePendingCount(),
+    ) { exCount, rcCount, eodCount -> exCount + rcCount + eodCount }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     // -----------------------------------------------------------------------
@@ -120,16 +140,18 @@ class OfflineQueueViewModel @Inject constructor(
             when (item.type) {
                 QueueType.EXCEPTION -> exceptionRepo.retry(item.id)
                 QueueType.RECEIPT   -> receivingRepo.retry(item.id)
+                QueueType.EOD       -> eodRepo.retry(item.id)
             }
             _busyIds.value = _busyIds.value - item.id
         }
     }
 
-    /** Purge SENT rows from both tables. */
+    /** Purge SENT rows from all tables. */
     fun deleteSent() {
         viewModelScope.launch {
             exceptionRepo.deleteSent()
             receivingRepo.deleteSent()
+            eodRepo.deleteSent()
         }
     }
 }

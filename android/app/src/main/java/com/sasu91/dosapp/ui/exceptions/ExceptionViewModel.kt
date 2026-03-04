@@ -77,9 +77,12 @@ class ExceptionViewModel @Inject constructor(
             _state.update { it.copy(skuError = "SKU obbligatorio") }
             hasError = true
         }
-        val qtyInt = s.qty.trim().toIntOrNull()
-        if (qtyInt == null || qtyInt < 1) {
-            _state.update { it.copy(qtyError = "Deve essere un intero ≥ 1") }
+        // qty input: colli (decimal) for ADJUST/UNFULFILLED, pezzi (integer) for WASTE
+        // Accept both '.' and ',' as decimal separator
+        val qtyVal = s.qty.trim().replace(",", ".").toDoubleOrNull()
+        if (qtyVal == null || qtyVal <= 0) {
+            val hint = if (s.event == "WASTE") "pz interi" else "colli"
+            _state.update { it.copy(qtyError = "Deve essere > 0 ($hint)") }
             hasError = true
         }
         if (hasError) return
@@ -91,7 +94,7 @@ class ExceptionViewModel @Inject constructor(
                 date           = s.date,
                 sku            = s.sku.trim(),
                 event          = s.event,
-                qty            = qtyInt!!,
+                qty            = qtyVal!!,
                 note           = s.note.trim(),
                 // clientEventId intentionally omitted — ExceptionRepository always mints a UUID.
             )

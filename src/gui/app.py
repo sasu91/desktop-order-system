@@ -54,6 +54,7 @@ from ..backend_manager import BackendManager, get_lan_ip
 from ..persistence.storage_adapter import StorageAdapter
 from ..domain.ledger import StockCalculator, validate_ean
 from ..domain.models import SKU, EventType, OrderProposal, Stock, Transaction, PromoWindow
+from ..domain.validation import colli_to_pezzi, format_pezzi_colli
 from ..domain.promo_uplift import estimate_uplift, UpliftReport
 from ..workflows.order import OrderWorkflow, calculate_daily_sales_average
 from ..workflows.receiving import ExceptionWorkflow
@@ -7601,9 +7602,12 @@ class DesktopOrderApp:
             stock = stocks[sku_id]
             sku_obj = skus_by_id.get(sku_id)
             description = sku_obj.description if sku_obj else "N/A"
+            pack_size = (sku_obj.pack_size if sku_obj and sku_obj.pack_size else 1)
             
-            # Get EOD stock value if edited
-            eod_value = self.eod_stock_edits.get(sku_id, "")
+            # Get EOD stock value if edited (stored as int pezzi)
+            eod_value = ""
+            if sku_id in self.eod_stock_edits:
+                eod_value = format_pezzi_colli(self.eod_stock_edits[sku_id], pack_size)
             
             item_id = self.stock_treeview.insert(
                 "",
@@ -7611,9 +7615,9 @@ class DesktopOrderApp:
                 values=(
                     stock.sku,
                     description,
-                    stock.on_hand,
-                    stock.on_order,
-                    stock.available(),
+                    format_pezzi_colli(stock.on_hand, pack_size),
+                    format_pezzi_colli(stock.on_order, pack_size),
+                    format_pezzi_colli(stock.available(), pack_size),
                     eod_value,
                 ),
             )
@@ -7736,21 +7740,35 @@ class DesktopOrderApp:
         item_id = selection[0]
         item = self.stock_treeview.item(item_id)
         sku = item["values"][0]
-        on_hand = item["values"][2]
+        on_hand_display = item["values"][2]  # formatted string e.g. "15 pz (1.5 colli)"
         
-        # Show dialog to edit EOD stock
-        new_eod_stock = simpledialog.askinteger(
+        # Look up pack_size for this SKU
+        skus_by_id = {s.sku: s for s in self.csv_layer.read_skus()}
+        sku_obj = skus_by_id.get(sku)
+        pack_size = (sku_obj.pack_size if sku_obj and sku_obj.pack_size else 1)
+        
+        # Compute initial colli value from currently stored pezzi (if any)
+        current_pezzi = self.eod_stock_edits.get(sku)
+        if current_pezzi is not None:
+            initial_colli = round(current_pezzi / pack_size, 4) if pack_size > 0 else current_pezzi
+        else:
+            initial_colli = 0.0
+        
+        # Show dialog to edit EOD stock in COLLI
+        unit_hint = f"(pack={pack_size} pz/collo)" if pack_size > 1 else "(pack=1 pz)"
+        new_eod_colli = simpledialog.askfloat(
             "Inserisci Stock EOD",
-            f"SKU: {sku}\nDisponibile corrente: {on_hand}\n\nInserisci stock a fine giornata:",
-            minvalue=0,
-            initialvalue=int(on_hand) if on_hand else 0,
+            f"SKU: {sku}  {unit_hint}\nGiacenza corrente: {on_hand_display}\n\nInserisci stock a fine giornata in COLLI:",
+            minvalue=0.0,
+            initialvalue=initial_colli,
         )
         
-        if new_eod_stock is None:
+        if new_eod_colli is None:
             return  # User cancelled
         
-        # Store edit
-        self.eod_stock_edits[sku] = new_eod_stock
+        # Convert colli -> pezzi (round half-up) and store
+        new_eod_pezzi = colli_to_pezzi(new_eod_colli, pack_size)
+        self.eod_stock_edits[sku] = new_eod_pezzi
         
         # Update display
         self.stock_treeview.item(
@@ -7761,7 +7779,7 @@ class DesktopOrderApp:
                 item["values"][2],  # On Hand
                 item["values"][3],  # On Order
                 item["values"][4],  # Available
-                new_eod_stock,      # EOD Stock
+                format_pezzi_colli(new_eod_pezzi, pack_size),  # EOD Stock
             ),
             tags=("eod_edited",),
         )

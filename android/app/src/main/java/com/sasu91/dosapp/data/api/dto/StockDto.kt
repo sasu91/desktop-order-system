@@ -34,6 +34,7 @@ data class StockDetailDto(
     @SerializedName("description")          val description: String,
     @SerializedName("on_hand")              val onHand: Int,
     @SerializedName("on_order")             val onOrder: Int,
+    @SerializedName("pack_size")            val packSize: Int = 1,
     @SerializedName("asof")                 val asof: String,
     @SerializedName("mode")                 val mode: String,
     @SerializedName("unfulfilled_qty")      val unfulfilledQty: Int = 0,
@@ -47,6 +48,7 @@ data class StockItemDto(
     @SerializedName("description")     val description: String,
     @SerializedName("on_hand")         val onHand: Int,
     @SerializedName("on_order")        val onOrder: Int,
+    @SerializedName("pack_size")       val packSize: Int = 1,
     /** Date of the most recent ledger event; null if the SKU has no events. */
     @SerializedName("last_event_date") val lastEventDate: String?,
 )

@@ -7,6 +7,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Inventory
+import androidx.compose.material.icons.filled.Today
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -22,6 +23,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.*
 import androidx.navigation.compose.*
 import com.sasu91.dosapp.ui.connectivity.ConnectivityViewModel
+import com.sasu91.dosapp.ui.eod.EodScreen
 import com.sasu91.dosapp.ui.exceptions.ExceptionScreen
 import com.sasu91.dosapp.ui.queue.OfflineQueueScreen
 import com.sasu91.dosapp.ui.queue.OfflineQueueViewModel
@@ -36,9 +38,12 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector)
     }
     object Receiving : Screen("receiving",      "Ricezione",  Icons.Default.Inventory)
     object Queue     : Screen("offline_queue",  "Coda offline", Icons.Default.Inbox)
+    object Eod       : Screen("eod?sku={sku}",  "Chiusura EOD", Icons.Default.Today) {
+        fun withSku(sku: String) = "eod?sku=$sku"
+    }
 }
 
-private val TOP_LEVEL_SCREENS = listOf(Screen.Scan, Screen.Exceptions, Screen.Receiving, Screen.Queue)
+private val TOP_LEVEL_SCREENS = listOf(Screen.Scan, Screen.Exceptions, Screen.Receiving, Screen.Eod, Screen.Queue)
 
 /**
  * Root navigation graph with a Material 3 bottom navigation bar.
@@ -68,7 +73,11 @@ fun DosNavGraph(
                         selected = selected,
                         onClick  = {
                             navController.navigate(
-                                if (screen is Screen.Exceptions) screen.route.replace("{sku}", "") else screen.route
+                                when (screen) {
+                                    is Screen.Exceptions -> screen.route.replace("{sku}", "")
+                                    is Screen.Eod        -> screen.route.replace("{sku}", "")
+                                    else                 -> screen.route
+                                }
                             ) {
                                 popUpTo(navController.graph.startDestinationId) { saveState = true }
                                 launchSingleTop = true
@@ -103,6 +112,9 @@ fun DosNavGraph(
                     onNavigateToExceptions = { sku ->
                         navController.navigate(Screen.Exceptions.withSku(sku))
                     },
+                    onNavigateToEod = { sku ->
+                        navController.navigate(Screen.Eod.withSku(sku))
+                    },
                 )
             }
 
@@ -123,6 +135,20 @@ fun DosNavGraph(
             // Receiving screen
             composable(Screen.Receiving.route) {
                 ReceivingScreen(
+                    onNavigateToQueue = { navController.navigate(Screen.Queue.route) },
+                )
+            }
+
+            // EOD daily-closure screen (optional sku arg from ScanScreen)
+            composable(
+                route     = Screen.Eod.route,
+                arguments = listOf(navArgument("sku") {
+                    nullable     = true
+                    defaultValue = null
+                    type         = NavType.StringType
+                }),
+            ) {
+                EodScreen(
                     onNavigateToQueue = { navController.navigate(Screen.Queue.route) },
                 )
             }

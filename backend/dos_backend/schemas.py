@@ -92,6 +92,7 @@ class StockItem(BaseModel):
     description: str
     on_hand: int
     on_order: int
+    pack_size: int = 1
     last_event_date: Optional[date] = None
 
 
@@ -131,7 +132,7 @@ class ExceptionRequest(BaseModel):
     date: date
     sku: str
     event: ExceptionEventType
-    qty: int = Field(..., ge=1)
+    qty: float = Field(..., gt=0, description="Quantità: in colli (ADJUST/UNFULFILLED) o pezzi (WASTE). Conversione colli->pezzi avviene server-side.")
     note: str = Field("", max_length=500)
     client_event_id: Optional[str] = Field(
         default=None,
@@ -298,3 +299,60 @@ class ReceiptsCloseResponse(BaseModel):
     already_posted: bool = False
     client_receipt_id: Optional[str] = None
     lines: list[ReceiptLineResult]
+
+
+# ---------------------------------------------------------------------------
+# EOD (End-of-Day) batch close
+# ---------------------------------------------------------------------------
+# Semantics per entry:
+#   on_hand       → ADJUST event  (absolute inventory count; on_hand := qty)
+#   waste_qty     → WASTE  event  (units wasted/spoiled this day)
+#   unfulfilled_qty → UNFULFILLED event (demand not served this day)
+#   adjust_qty    → ADJUST event  (manual adjustment / correction)
+#
+# on_hand and adjust_qty both map to ADJUST; if both are provided the backend
+# writes them in declaration order (adjust_qty first, on_hand second) so that
+# the end-of-day physical count is always the final state in the ledger.
+#
+# All entry fields are optional: an entry with every field null/0 is silently
+# skipped (noop=true for that SKU).
+# ---------------------------------------------------------------------------
+
+class EodEntry(BaseModel):
+    """Single SKU block inside an EOD close request."""
+    sku: Optional[str] = None
+    ean: Optional[str] = None
+    # Colli fields (decimal): server converts colli->pezzi using SKU.pack_size
+    # None = not provided / skip; all >= 0 validated in router
+    on_hand: Optional[float] = Field(default=None, description="Giacenza fisica EOD in COLLI (decimale) -> ADJUST")
+    waste_qty: Optional[int] = Field(default=None, description="Scarto in PEZZI (intero) -> WASTE")
+    adjust_qty: Optional[float] = Field(default=None, description="Rettifica in COLLI (decimale) -> ADJUST")
+    unfulfilled_qty: Optional[float] = Field(default=None, description="Non evaso in COLLI (decimale) -> UNFULFILLED")
+    note: str = Field("", max_length=500)
+
+
+class EodCloseRequest(BaseModel):
+    date: date
+    client_eod_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        description="UUID client per idempotenza.",
+        examples=["550e8400-e29b-41d4-a716-446655440000"],
+    )
+    entries: list[EodEntry] = Field(..., min_length=1)
+
+
+class EodEntryResult(BaseModel):
+    sku: str
+    events_written: list[str] = []
+    noop: bool = False
+    skip_reason: Optional[str] = None
+
+
+class EodCloseResponse(BaseModel):
+    date: date
+    client_eod_id: str
+    already_posted: bool = False
+    total_entries: int
+    results: list[EodEntryResult] = []

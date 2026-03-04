@@ -82,12 +82,14 @@ fun ExceptionScreen(
                 }
             }
 
-            // Qty
+            // Qty — WASTE in pezzi, ADJUST/UNFULFILLED in colli
+            val qtyLabel = if (state.event == "WASTE") "Quantit\u00e0 (pz)" else "Quantit\u00e0 (colli)"
+            val qtyKeyboard = if (state.event == "WASTE") KeyboardType.Number else KeyboardType.Decimal
             OutlinedTextField(
                 value = state.qty,
                 onValueChange = viewModel::onQtyChange,
-                label = { Text("Quantità") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                label = { Text(qtyLabel) },
+                keyboardOptions = KeyboardOptions(keyboardType = qtyKeyboard),
                 isError = state.qtyError != null,
                 supportingText = state.qtyError?.let { { Text(it) } },
                 modifier = Modifier.fillMaxWidth(0.4f),

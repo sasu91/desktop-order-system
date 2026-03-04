@@ -777,3 +777,221 @@ class TestPostExceptionsDailyUpsert:
             json={**_BASE_UPSERT, "qty": 0},
         )
         assert r.status_code == 422
+
+
+# ===========================================================================
+# POST /api/v1/eod/close
+# ===========================================================================
+
+_BASE_EOD = {
+    "date": "2026-03-10",
+    "client_eod_id": "eod-test-uuid-001",
+    "entries": [
+        {
+            "sku": "PRD-001",
+            "on_hand": 50,
+            "waste_qty": 3,
+            "adjust_qty": None,
+            "unfulfilled_qty": None,
+            "note": "fine giornata",
+        }
+    ],
+}
+
+
+class TestEodClose:
+    """POST /api/v1/eod/close — happy path, idempotency, and validation errors."""
+
+    # ── Happy path ────────────────────────────────────────────────────────
+
+    def test_201_first_write(self, client: TestClient) -> None:
+        """Valid EOD → 201, already_posted=False, results present."""
+        r = client.post(f"{_V1}/eod/close", json=_BASE_EOD)
+        assert r.status_code == 201
+        body = r.json()
+        assert body["already_posted"] is False
+        assert body["client_eod_id"] == "eod-test-uuid-001"
+        assert body["total_entries"] == 1
+        assert len(body["results"]) == 1
+        assert body["results"][0]["sku"] == "PRD-001"
+        assert body["results"][0]["noop"] is False
+
+    def test_201_writes_transactions_waste_and_adjust(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """WASTE + on_hand → at least 2 ADJUST/WASTE events in ledger."""
+        client.post(f"{_V1}/eod/close", json=_BASE_EOD)
+        txns = mem_storage._transactions
+        # Should have at least WASTE (qty=3) and ADJUST (on_hand=50)
+        assert len(txns) >= 2
+        event_types = {str(t.event) for t in txns}
+        assert "EventType.WASTE" in event_types or any(
+            "WASTE" in str(e) for e in event_types
+        )
+
+    def test_201_on_hand_adjust_written_last(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """on_hand ADJUST must be the last event written per the ledger spec."""
+        payload = {
+            "date": "2026-03-10",
+            "client_eod_id": "eod-order-check",
+            "entries": [
+                {
+                    "sku": "PRD-001",
+                    "on_hand": 20,
+                    "waste_qty": 2,
+                    "note": "",
+                }
+            ],
+        }
+        client.post(f"{_V1}/eod/close", json=payload)
+        txns = mem_storage._transactions
+        # Last transaction must be the on_hand ADJUST with note [EOD-ON_HAND]
+        last = txns[-1]
+        assert last.qty == 20
+        assert "[EOD-ON_HAND]" in (last.note or "")
+
+    def test_201_ean_resolves_to_sku(self, client: TestClient) -> None:
+        """Entry with ean (no sku) → server resolves SKU → 201."""
+        payload = {
+            "date": "2026-03-10",
+            "client_eod_id": "eod-ean-resolve",
+            "entries": [{"ean": SEED_EAN_PLAIN, "on_hand": 10}],
+        }
+        r = client.post(f"{_V1}/eod/close", json=payload)
+        assert r.status_code == 201
+        assert r.json()["results"][0]["sku"] == "PRD-001"
+
+    def test_201_all_optional_fields_empty_noop(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """Entry with no quantities → results[0].noop=True, ledger untouched."""
+        payload = {
+            "date": "2026-03-10",
+            "client_eod_id": "eod-noop-test",
+            "entries": [{"sku": "PRD-001"}],  # no qty fields
+        }
+        r = client.post(f"{_V1}/eod/close", json=payload)
+        assert r.status_code == 201
+        assert r.json()["results"][0]["noop"] is True
+        assert len(mem_storage._transactions) == 0
+
+    def test_201_multi_sku_batch(self, client: TestClient, mem_storage) -> None:
+        """Two valid SKUs in one batch → 201, results has 2 entries."""
+        payload = {
+            "date": "2026-03-10",
+            "client_eod_id": "eod-multi-sku",
+            "entries": [
+                {"sku": "PRD-001", "waste_qty": 1},
+                {"sku": "PRD-EXP", "on_hand": 5},
+            ],
+        }
+        r = client.post(f"{_V1}/eod/close", json=payload)
+        assert r.status_code == 201
+        body = r.json()
+        assert body["total_entries"] == 2
+        assert len(body["results"]) == 2
+
+    # ── Idempotency ───────────────────────────────────────────────────────
+
+    def test_200_idempotency_replay(self, client: TestClient) -> None:
+        """Second POST with same client_eod_id → 200 already_posted=True."""
+        client.post(f"{_V1}/eod/close", json=_BASE_EOD)
+        r2 = client.post(f"{_V1}/eod/close", json=_BASE_EOD)
+        assert r2.status_code == 200
+        assert r2.json()["already_posted"] is True
+
+    def test_200_idempotency_no_extra_transactions(
+        self, client: TestClient, mem_storage
+    ) -> None:
+        """Replaying same client_eod_id must not write additional events."""
+        client.post(f"{_V1}/eod/close", json=_BASE_EOD)
+        count_after_first = len(mem_storage._transactions)
+        client.post(f"{_V1}/eod/close", json=_BASE_EOD)
+        assert len(mem_storage._transactions) == count_after_first
+
+    # ── Validation (atomic: nothing written on 400) ───────────────────────
+
+    def test_400_unknown_sku(self, client: TestClient, mem_storage) -> None:
+        """Unknown SKU → 400, ledger untouched."""
+        payload = {
+            "date": "2026-03-10",
+            "client_eod_id": "eod-bad-sku",
+            "entries": [{"sku": "GHOST-SKU", "on_hand": 5}],
+        }
+        r = client.post(f"{_V1}/eod/close", json=payload)
+        assert r.status_code == 400
+        assert len(mem_storage._transactions) == 0
+
+    def test_400_unknown_ean(self, client: TestClient, mem_storage) -> None:
+        """EAN that doesn't match any SKU → 400, ledger untouched."""
+        payload = {
+            "date": "2026-03-10",
+            "client_eod_id": "eod-bad-ean",
+            "entries": [{"ean": EAN_UNKNOWN, "on_hand": 5}],
+        }
+        r = client.post(f"{_V1}/eod/close", json=payload)
+        assert r.status_code == 400
+        assert len(mem_storage._transactions) == 0
+
+    def test_400_on_hand_negative(self, client: TestClient) -> None:
+        """on_hand < 0 → 400 with field error entries[0].on_hand."""
+        payload = {
+            "date": "2026-03-10",
+            "client_eod_id": "eod-neg-onhand",
+            "entries": [{"sku": "PRD-001", "on_hand": -1}],
+        }
+        r = client.post(f"{_V1}/eod/close", json=payload)
+        assert r.status_code == 400
+        details = r.json()["error"]["details"]
+        assert any("on_hand" in d["field"] for d in details)
+
+    def test_400_waste_zero(self, client: TestClient) -> None:
+        """waste_qty=0 → 400 (must be >= 1)."""
+        payload = {
+            "date": "2026-03-10",
+            "client_eod_id": "eod-zero-waste",
+            "entries": [{"sku": "PRD-001", "waste_qty": 0}],
+        }
+        r = client.post(f"{_V1}/eod/close", json=payload)
+        assert r.status_code == 400
+
+    def test_400_no_sku_no_ean(self, client: TestClient) -> None:
+        """Entry with neither sku nor ean → 400."""
+        payload = {
+            "date": "2026-03-10",
+            "client_eod_id": "eod-no-id",
+            "entries": [{"on_hand": 10}],   # sku and ean both missing
+        }
+        r = client.post(f"{_V1}/eod/close", json=payload)
+        assert r.status_code == 400
+
+    def test_400_empty_entries_list(self, client: TestClient) -> None:
+        """Pydantic min_length=1 on entries → 422."""
+        payload = {
+            "date": "2026-03-10",
+            "client_eod_id": "eod-empty",
+            "entries": [],
+        }
+        r = client.post(f"{_V1}/eod/close", json=payload)
+        # Pydantic validation → 422
+        assert r.status_code == 422
+
+    def test_400_multi_entry_collects_all_errors(
+        self, client: TestClient
+    ) -> None:
+        """Two invalid entries → errors for both, single 400 response."""
+        payload = {
+            "date": "2026-03-10",
+            "client_eod_id": "eod-multi-error",
+            "entries": [
+                {"sku": "GHOST-1", "on_hand": 5},
+                {"sku": "GHOST-2", "waste_qty": 2},
+            ],
+        }
+        r = client.post(f"{_V1}/eod/close", json=payload)
+        assert r.status_code == 400
+        details = r.json()["error"]["details"]
+        # Should have one error for each unknown SKU
+        assert len(details) >= 2

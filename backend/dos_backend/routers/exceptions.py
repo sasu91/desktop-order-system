@@ -41,6 +41,7 @@ from ..schemas import (
     DailyUpsertRequest,
     DailyUpsertResponse,
 )
+from ..utils.colli_utils import colli_to_pezzi
 
 logger = logging.getLogger(__name__)
 
@@ -165,19 +166,30 @@ def create_exception(
     # ------------------------------------------------------------------ #
     full_note = body.note
 
+    # Convert qty to int pezzi:
+    #   WASTE       : input is pezzi (int); just round to be safe
+    #   ADJUST      : input is colli (float); convert using pack_size
+    #   UNFULFILLED : input is colli (float); convert using pack_size
+    pack_size: int = getattr(sku_obj, "pack_size", 1) or 1
+    if event_type == EventType.WASTE:
+        qty_pezzi: int = max(1, int(round(body.qty)))
+    else:
+        qty_pezzi = max(1, colli_to_pezzi(body.qty, pack_size))
+
     txn = Transaction(
         date=body.date,
         sku=body.sku,
         event=event_type,
-        qty=body.qty,
+        qty=qty_pezzi,
         note=full_note,
     )
     storage.write_transaction(txn)
     logger.info(
-        "exception recorded: date=%s sku=%s event=%s qty=%d client_event_id=%r",
+        "exception recorded: date=%s sku=%s event=%s qty=%d (from input=%g colli/pezzi) client_event_id=%r",
         body.date,
         body.sku,
         body.event,
+        qty_pezzi,
         body.qty,
         client_event_id,
     )
@@ -190,7 +202,7 @@ def create_exception(
         date=body.date,
         sku=body.sku,
         event=body.event,
-        qty=body.qty,
+        qty=qty_pezzi,
         note=full_note,
         idempotency_key=client_event_id,
         already_recorded=False,

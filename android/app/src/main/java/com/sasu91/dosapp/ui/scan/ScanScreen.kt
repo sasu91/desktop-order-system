@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -49,6 +50,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 @Composable
 fun ScanScreen(
     onNavigateToExceptions: (String) -> Unit = {},
+    onNavigateToEod: (String) -> Unit = {},
     viewModel: ScanViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.state.collectAsStateWithLifecycle()
@@ -78,6 +80,7 @@ fun ScanScreen(
                         onResumeScan = viewModel::resumeScanning,
                         onDismissPairing = viewModel::dismissPairing,
                         onNavigateToExceptions = onNavigateToExceptions,
+                        onNavigateToEod = onNavigateToEod,
                         modifier = Modifier.align(Alignment.BottomCenter),
                     )
                 }
@@ -220,6 +223,7 @@ private fun ScanOverlay(
     onResumeScan: () -> Unit,
     onDismissPairing: () -> Unit,
     onNavigateToExceptions: (String) -> Unit,
+    onNavigateToEod: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scrollState = rememberScrollState()
@@ -257,10 +261,10 @@ private fun ScanOverlay(
                 if (stock != null) {
                     Spacer(Modifier.height(4.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        StockChip(label = "In magazzino", value = stock.onHand)
-                        StockChip(label = "In ordine", value = stock.onOrder)
+                        StockChip(label = "In magazzino", value = formatPezziColli(stock.onHand, stock.packSize))
+                        StockChip(label = "In ordine", value = formatPezziColli(stock.onOrder, stock.packSize))
                         if (stock.unfulfilledQty > 0)
-                            StockChip(label = "Non evaso", value = stock.unfulfilledQty, tint = MaterialTheme.colorScheme.error)
+                            StockChip(label = "Non evaso", value = formatPezziColli(stock.unfulfilledQty, stock.packSize), tint = MaterialTheme.colorScheme.error)
                     }
                     Text("AsOf: ${stock.asof} · ${stock.mode}", style = MaterialTheme.typography.labelSmall)
                 }
@@ -271,6 +275,11 @@ private fun ScanOverlay(
                         Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("Eccezione")
+                    }
+                    OutlinedButton(onClick = { onNavigateToEod(sku.sku) }) {
+                        Icon(Icons.Default.Today, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("EOD")
                     }
                 }
             }
@@ -312,11 +321,20 @@ private fun PairingSuccessCard(pairedUrl: String, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun StockChip(label: String, value: Int, tint: Color = MaterialTheme.colorScheme.onSurface) {
+private fun StockChip(label: String, value: String, tint: Color = MaterialTheme.colorScheme.onSurface) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value.toString(), style = MaterialTheme.typography.headlineSmall, color = tint, fontWeight = FontWeight.Bold)
+        Text(value, style = MaterialTheme.typography.headlineSmall, color = tint, fontWeight = FontWeight.Bold)
         Text(label, style = MaterialTheme.typography.labelSmall, color = tint)
     }
+}
+
+/** Format pezzi as "N pz (M colli)" when pack_size > 1, else "N pz". */
+private fun formatPezziColli(pezzi: Int, packSize: Int): String {
+    if (packSize <= 1) return "$pezzi pz"
+    val colli = pezzi.toDouble() / packSize
+    val colliStr = if (colli % 1.0 == 0.0) colli.toLong().toString()
+                   else String.format("%.4f", colli).trimEnd('0').trimEnd('.')
+    return "$pezzi pz ($colliStr colli)"
 }
 
 /**

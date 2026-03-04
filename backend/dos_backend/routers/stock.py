@@ -116,6 +116,7 @@ def list_stock(
 
     # Build description lookup
     desc_map = {s.sku: s.description for s in all_skus}
+    pack_size_map = {s.sku: (getattr(s, "pack_size", 1) or 1) for s in all_skus}
 
     # Determine last event date per SKU
     last_event: dict[str, date] = {}
@@ -133,6 +134,7 @@ def list_stock(
                 description=desc_map.get(sku_id, ""),
                 on_hand=stock.on_hand,
                 on_order=stock.on_order,
+                pack_size=pack_size_map.get(sku_id, 1),
                 last_event_date=last_event.get(sku_id),
             )
         )
@@ -250,6 +252,7 @@ def get_stock(
         description=sku_obj.description,
         on_hand=stock.on_hand,
         on_order=stock.on_order,
+        pack_size=getattr(sku_obj, "pack_size", 1) or 1,
         unfulfilled_qty=stock.unfulfilled_qty,
         last_event_date=last_event_date,
         asof=resolved,        # user-facing date (not the shifted effective)

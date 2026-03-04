@@ -23,7 +23,9 @@ data class ExceptionRequestDto(
     @SerializedName("date")             val date: String,         // YYYY-MM-DD
     @SerializedName("sku")              val sku: String,
     @SerializedName("event")            val event: String,
-    @SerializedName("qty")              val qty: Int,
+    /** Quantity: colli (decimal) for ADJUST/UNFULFILLED, pezzi (integer) for WASTE.
+     *  Server converts colli->pezzi using SKU.pack_size. */
+    @SerializedName("qty")              val qty: Double,
     @SerializedName("note")             val note: String = "",
     @SerializedName("client_event_id")  val clientEventId: String? = null,
 )

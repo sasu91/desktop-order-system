@@ -11,6 +11,7 @@ import com.sasu91.dosapp.data.api.DosApiService
 import com.sasu91.dosapp.data.api.RetrofitClient
 import com.sasu91.dosapp.data.api.TokenProvider
 import com.sasu91.dosapp.data.db.DosDatabase
+import com.sasu91.dosapp.data.db.dao.DraftEodDao
 import com.sasu91.dosapp.data.db.dao.DraftReceiptDao
 import com.sasu91.dosapp.data.db.dao.PendingExceptionDao
 import com.sasu91.dosapp.data.db.dao.PendingRequestDao
@@ -147,7 +148,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): DosDatabase =
         Room.databaseBuilder(ctx, DosDatabase::class.java, "dos_offline.db")
-            .addMigrations(DosDatabase.MIGRATION_1_2)   // explicit DDL — v1 → v2
+            .addMigrations(DosDatabase.MIGRATION_1_2, DosDatabase.MIGRATION_2_3)
             .fallbackToDestructiveMigration()            // safety net for dev builds
             .build()
 
@@ -170,4 +171,9 @@ object AppModule {
     @Provides
     fun providePendingExceptionDao(db: DosDatabase): PendingExceptionDao =
         db.pendingExceptionDao()
+
+    /** Typed outbox for EOD batch close operations. */
+    @Provides
+    fun provideDraftEodDao(db: DosDatabase): DraftEodDao =
+        db.draftEodDao()
 }
