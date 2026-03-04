@@ -237,7 +237,7 @@ def close_eod(
     if errors:
         raise BadRequestError(
             message="Errori di validazione EOD — nessun evento scritto.",
-            details=[{"field": e.field, "issue": e.issue} for e in errors],
+            details=errors,
         )
 
     # ------------------------------------------------------------------ #

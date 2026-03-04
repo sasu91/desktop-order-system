@@ -133,7 +133,7 @@ class ExceptionRequest(BaseModel):
     sku: str
     event: ExceptionEventType
     qty: float = Field(..., gt=0, description="Quantità: in colli (ADJUST/UNFULFILLED) o pezzi (WASTE). Conversione colli->pezzi avviene server-side.")
-    note: str = Field("", max_length=500)
+    note: str = Field(default="", max_length=500)
     client_event_id: Optional[str] = Field(
         default=None,
         min_length=1,
@@ -328,7 +328,7 @@ class EodEntry(BaseModel):
     waste_qty: Optional[int] = Field(default=None, description="Scarto in PEZZI (intero) -> WASTE")
     adjust_qty: Optional[float] = Field(default=None, description="Rettifica in COLLI (decimale) -> ADJUST")
     unfulfilled_qty: Optional[float] = Field(default=None, description="Non evaso in COLLI (decimale) -> UNFULFILLED")
-    note: str = Field("", max_length=500)
+    note: str = Field(default="", max_length=500)
 
 
 class EodCloseRequest(BaseModel):

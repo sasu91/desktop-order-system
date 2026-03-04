@@ -14,6 +14,7 @@ Scenarios covered:
 import math
 import sys
 import os
+from datetime import date
 
 import pytest
 
@@ -144,14 +145,14 @@ class TestBackendSchemas:
 
     def test_exception_request_accepts_float_qty(self):
         from backend.dos_backend.schemas import ExceptionRequest
-        req = ExceptionRequest(date="2026-03-04", sku="TEST", event="ADJUST", qty=1.5)
+        req = ExceptionRequest(date=date(2026, 3, 4), sku="TEST", event="ADJUST", qty=1.5)
         assert req.qty == 1.5
 
     def test_exception_request_rejects_zero_qty(self):
         from backend.dos_backend.schemas import ExceptionRequest
-        import pydantic
-        with pytest.raises((pydantic.ValidationError, Exception)):
-            ExceptionRequest(date="2026-03-04", sku="TEST", event="WASTE", qty=0)
+        from pydantic import ValidationError
+        with pytest.raises((ValidationError, Exception)):
+            ExceptionRequest(date=date(2026, 3, 4), sku="TEST", event="WASTE", qty=0)
 
     def test_stock_item_has_pack_size(self):
         from backend.dos_backend.schemas import StockItem

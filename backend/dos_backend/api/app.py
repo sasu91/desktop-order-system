@@ -171,7 +171,7 @@ def _configure_logging() -> None:
     try:
         # Python 3.7+: reconfigure the underlying stream encoding
         if hasattr(stream_handler.stream, "reconfigure"):
-            stream_handler.stream.reconfigure(encoding="utf-8", errors="replace")
+            stream_handler.stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
     except Exception:
         pass  # best-effort — never crash because of logging setup
     stream_handler.setLevel(level)
