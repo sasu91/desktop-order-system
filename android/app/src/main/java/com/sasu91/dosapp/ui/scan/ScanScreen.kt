@@ -260,11 +260,20 @@ private fun ScanOverlay(
                 Text(sku.description)
                 if (stock != null) {
                     Spacer(Modifier.height(4.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        StockChip(label = "In magazzino", value = formatPezziColli(stock.onHand, stock.packSize))
-                        StockChip(label = "In ordine", value = formatPezziColli(stock.onOrder, stock.packSize))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Box(modifier = Modifier.weight(1f)) {
+                            StockChip(label = "In magazzino", value = formatPezziColli(stock.onHand, stock.packSize))
+                        }
+                        Box(modifier = Modifier.weight(1f)) {
+                            StockChip(label = "In ordine", value = formatPezziColli(stock.onOrder, stock.packSize))
+                        }
                         if (stock.unfulfilledQty > 0)
-                            StockChip(label = "Non evaso", value = formatPezziColli(stock.unfulfilledQty, stock.packSize), tint = MaterialTheme.colorScheme.error)
+                            Box(modifier = Modifier.weight(1f)) {
+                                StockChip(label = "Non evaso", value = formatPezziColli(stock.unfulfilledQty, stock.packSize), tint = MaterialTheme.colorScheme.error)
+                            }
                     }
                     Text("AsOf: ${stock.asof} · ${stock.mode}", style = MaterialTheme.typography.labelSmall)
                 }
@@ -328,12 +337,12 @@ private fun StockChip(label: String, value: String, tint: Color = MaterialTheme.
     }
 }
 
-/** Format pezzi as "N pz (M colli)" when pack_size > 1, else "N pz". */
+/** Format pezzi as "N pz (M,X colli)" when pack_size > 1 and pezzi > 0, else "N pz". */
 private fun formatPezziColli(pezzi: Int, packSize: Int): String {
-    if (packSize <= 1) return "$pezzi pz"
+    if (packSize <= 1 || pezzi == 0) return "$pezzi pz"
     val colli = pezzi.toDouble() / packSize
     val colliStr = if (colli % 1.0 == 0.0) colli.toLong().toString()
-                   else String.format("%.4f", colli).trimEnd('0').trimEnd('.')
+                   else String.format("%.1f", colli)
     return "$pezzi pz ($colliStr colli)"
 }
 

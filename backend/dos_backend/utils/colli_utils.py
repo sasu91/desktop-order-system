@@ -73,10 +73,11 @@ def format_pezzi_colli(pezzi: int, pack_size: int) -> str:
         format_pezzi_colli(15, 10)  -> "15 pz (1.5 colli)"
         format_pezzi_colli(5, 1)    -> "5 pz"
         format_pezzi_colli(3, 6)    -> "3 pz (0.5 colli)"
-        format_pezzi_colli(0, 10)   -> "0 pz (0 colli)"
+        format_pezzi_colli(0, 10)   -> "0 pz"
     """
-    if pack_size <= 1:
+    if pack_size <= 1 or pezzi == 0:
         return f"{pezzi} pz"
     colli = pezzi / pack_size
-    colli_str = f"{colli:g}"  # removes trailing zeros: 1.50 -> 1.5, 2.00 -> 2
+    # Round to 1 decimal place; use :g to drop trailing zero (1.0 → 1)
+    colli_str = f"{round(colli, 1):g}"
     return f"{pezzi} pz ({colli_str} colli)"

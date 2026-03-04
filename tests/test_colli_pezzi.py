@@ -114,10 +114,11 @@ class TestFormatPezziColli:
         ( 5,   1, "5 pz"),               # pack_size=1 -> no colli suffix
         ( 0,   1, "0 pz"),
         ( 3,   6, "3 pz (0.5 colli)"),
-        ( 0,  10, "0 pz (0 colli)"),
+        ( 0,  10, "0 pz"),               # zero pezzi -> no colli suffix
         (12,  12, "12 pz (1 colli)"),
         (25,  10, "25 pz (2.5 colli)"),
         (100,  4, "100 pz (25 colli)"),
+        (209,  6, "209 pz (34.8 colli)"), # 34.8333... rounds to 1 decimal
     ])
     def test_format(self, pezzi, pack, expected):
         for name, _, _, fn in _IMPLS:
