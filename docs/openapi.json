@@ -109,6 +109,197 @@
         "title": "DailyUpsertResponse",
         "type": "object"
       },
+      "EodCloseRequest": {
+        "properties": {
+          "client_eod_id": {
+            "description": "UUID client per idempotenza.",
+            "examples": [
+              "550e8400-e29b-41d4-a716-446655440000"
+            ],
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Client Eod Id",
+            "type": "string"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/EodEntry"
+            },
+            "minItems": 1,
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "date",
+          "client_eod_id",
+          "entries"
+        ],
+        "title": "EodCloseRequest",
+        "type": "object"
+      },
+      "EodCloseResponse": {
+        "properties": {
+          "already_posted": {
+            "default": false,
+            "title": "Already Posted",
+            "type": "boolean"
+          },
+          "client_eod_id": {
+            "title": "Client Eod Id",
+            "type": "string"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "results": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/EodEntryResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "total_entries": {
+            "title": "Total Entries",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "date",
+          "client_eod_id",
+          "total_entries"
+        ],
+        "title": "EodCloseResponse",
+        "type": "object"
+      },
+      "EodEntry": {
+        "description": "Single SKU block inside an EOD close request.",
+        "properties": {
+          "adjust_qty": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Rettifica in COLLI (decimale) -> ADJUST",
+            "title": "Adjust Qty"
+          },
+          "ean": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ean"
+          },
+          "note": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Note",
+            "type": "string"
+          },
+          "on_hand": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Giacenza fisica EOD in COLLI (decimale) -> ADJUST",
+            "title": "On Hand"
+          },
+          "sku": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sku"
+          },
+          "unfulfilled_qty": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Non evaso in COLLI (decimale) -> UNFULFILLED",
+            "title": "Unfulfilled Qty"
+          },
+          "waste_qty": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Scarto in PEZZI (intero) -> WASTE",
+            "title": "Waste Qty"
+          }
+        },
+        "title": "EodEntry",
+        "type": "object"
+      },
+      "EodEntryResult": {
+        "properties": {
+          "events_written": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Events Written",
+            "type": "array"
+          },
+          "noop": {
+            "default": false,
+            "title": "Noop",
+            "type": "boolean"
+          },
+          "skip_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skip Reason"
+          },
+          "sku": {
+            "title": "Sku",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sku"
+        ],
+        "title": "EodEntryResult",
+        "type": "object"
+      },
       "ExceptionRequest": {
         "properties": {
           "client_event_id": {
@@ -149,9 +340,10 @@
             "type": "string"
           },
           "qty": {
-            "minimum": 1.0,
+            "description": "Quantità: in colli (ADJUST/UNFULFILLED) o pezzi (WASTE). Conversione colli->pezzi avviene server-side.",
+            "exclusiveMinimum": 0.0,
             "title": "Qty",
-            "type": "integer"
+            "type": "number"
           },
           "sku": {
             "title": "Sku",
@@ -618,6 +810,11 @@
             "title": "On Order",
             "type": "integer"
           },
+          "pack_size": {
+            "default": 1,
+            "title": "Pack Size",
+            "type": "integer"
+          },
           "recent_transactions": {
             "default": [],
             "items": {
@@ -670,6 +867,11 @@
           },
           "on_order": {
             "title": "On Order",
+            "type": "integer"
+          },
+          "pack_size": {
+            "default": 1,
+            "title": "Pack Size",
             "type": "integer"
           },
           "sku": {
@@ -830,6 +1032,66 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/eod/close": {
+      "post": {
+        "description": "Registra gli eventi EOD nel ledger per ogni SKU con almeno un campo valorizzato.\n\n**Campi opzionali per SKU** (tutti nullable):\n- `on_hand` (≥ 0)        → ADJUST event (conteggio fisico di fine giornata)\n- `waste_qty` (≥ 1)       → WASTE event\n- `adjust_qty` (≥ 1)      → ADJUST event (rettifica manuale)\n- `unfulfilled_qty` (≥ 1) → UNFULFILLED event\n\n**Atomicità**: se anche un solo SKU non è trovato nel catalogo, **nessun**\nevento viene scritto e la risposta 400 elenca tutti gli errori.\n\n**Idempotenza**: `client_eod_id` (UUID, obbligatorio) — duplicato → 200\n`already_posted=true`, ledger invariato.\n\n**Ordine scrittura per SKU**: WASTE → UNFULFILLED → ADJUST (adjust_qty) →\nADJUST (on_hand). Il conteggio fisico è sempre lo stato finale.",
+        "operationId": "close_eod_api_v1_eod_close_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EodCloseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EodCloseResponse"
+                }
+              }
+            },
+            "description": "Già processato (already_posted=true)."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EodCloseResponse"
+                }
+              }
+            },
+            "description": "Chiusura EOD registrata con successo."
+          },
+          "400": {
+            "description": "Errori di validazione — nessun evento scritto."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Chiusura giornaliera multi-SKU (EOD batch)",
+        "tags": [
+          "eod"
+        ]
+      }
+    },
     "/api/v1/exceptions": {
       "post": {
         "description": "Scrive un evento WASTE, ADJUST o UNFULFILLED nel ledger.\n\n**Idempotenza con client_event_id**\n\nInserisci nel payload un UUID univoco per ogni evento logico:\n\n```json\n{ \"date\": \"2026-02-25\", \"sku\": \"PRD-0042\", \"event\": \"WASTE\",\n  \"qty\": 3, \"client_event_id\": \"550e8400-e29b-41d4-a716-446655440000\" }\n```\n\nSe la stessa richiesta arriva due volte (es. retry di rete), il server\nrisponde **200** con `already_recorded=true` — il ledger non viene\ntoccato una seconda volta.\n\n**Senza client_event_id**: ogni chiamata viene accettata — non si usa\nla tripletta ``date+sku+event`` come chiave legacy (niente 409).",
