@@ -4,10 +4,12 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.sasu91.dosapp.data.db.dao.CachedSkuDao
 import com.sasu91.dosapp.data.db.dao.DraftEodDao
 import com.sasu91.dosapp.data.db.dao.DraftReceiptDao
 import com.sasu91.dosapp.data.db.dao.PendingExceptionDao
 import com.sasu91.dosapp.data.db.dao.PendingRequestDao
+import com.sasu91.dosapp.data.db.entity.CachedSkuEntity
 import com.sasu91.dosapp.data.db.entity.DraftEodEntity
 import com.sasu91.dosapp.data.db.entity.DraftReceiptEntity
 import com.sasu91.dosapp.data.db.entity.PendingExceptionEntity
@@ -21,6 +23,8 @@ import com.sasu91.dosapp.data.db.entity.PendingRequestEntity
  * |---------|-----------------------------------------------------------|
  * | 1       | Initial schema — `pending_requests` table                 |
  * | 2       | Added `draft_receipts` + `pending_exceptions` tables      |
+ * | 3       | Added `draft_eod` table                                   |
+ * | 4       | Added `cached_skus` table (offline EAN→SKU+stock cache)   |
  *
  * ## Accessing the singleton
  * Inject [DosDatabase] via Hilt (see `AppModule`).  Never instantiate directly.
@@ -37,8 +41,9 @@ import com.sasu91.dosapp.data.db.entity.PendingRequestEntity
         DraftReceiptEntity::class,
         PendingExceptionEntity::class,
         DraftEodEntity::class,
+        CachedSkuEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class DosDatabase : RoomDatabase() {
@@ -55,6 +60,10 @@ abstract class DosDatabase : RoomDatabase() {
     abstract fun pendingExceptionDao(): PendingExceptionDao
     /** Typed outbox for End-of-Day batch close operations. */
     abstract fun draftEodDao(): DraftEodDao
+
+    /** Offline EAN→SKU+stock cache — enables fully-offline barcode resolution. */
+    abstract fun cachedSkuDao(): CachedSkuDao
+
     // ── Migrations ────────────────────────────────────────────────────────────
 
     companion object {
@@ -111,6 +120,29 @@ abstract class DosDatabase : RoomDatabase() {
                         PRIMARY KEY(`client_eod_id`)
                     )
                 """.trimIndent())
+            }
+        }
+
+        /**
+         * Migration 3 → 4: create `cached_skus` table for offline EAN→SKU+stock cache.
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `cached_skus` (
+                        `ean`         TEXT    NOT NULL,
+                        `sku`         TEXT    NOT NULL DEFAULT '',
+                        `description` TEXT    NOT NULL DEFAULT '',
+                        `on_hand`     INTEGER NOT NULL DEFAULT 0,
+                        `on_order`    INTEGER NOT NULL DEFAULT 0,
+                        `pack_size`   INTEGER NOT NULL DEFAULT 1,
+                        `cached_at`   INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY(`ean`)
+                    )
+                """.trimIndent())
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_cached_skus_sku` ON `cached_skus` (`sku`)"
+                )
             }
         }
     }

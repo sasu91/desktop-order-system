@@ -9,6 +9,7 @@ import com.sasu91.dosapp.data.api.dto.SkuDto
 import com.sasu91.dosapp.data.api.dto.StockDetailDto
 import com.sasu91.dosapp.data.repository.ApiResult
 import com.sasu91.dosapp.data.repository.ScanRepository
+import com.sasu91.dosapp.data.repository.SkuCacheRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
@@ -34,16 +35,38 @@ data class ScanUiState(
      * Contains the new base URL that was saved; UI should prompt restart.
      */
     val pairedUrl: String? = null,
+    /** True while a quick EOD submit is in-flight. */
+    val isSubmitting: Boolean = false,
+    /** Non-null while there is a submit result message to display (auto-cleared after 3.5 s). */
+    val submitFeedback: String? = null,
+    /** True when the current SKU+stock data was served from the local Room cache (offline). */
+    val fromCache: Boolean = false,
+    /** True while a cache refresh is running. */
+    val isCacheRefreshing: Boolean = false,
+    /** Brief message shown after a refresh completes (auto-cleared after 3 s). */
+    val cacheRefreshResult: String? = null,
+    /** Number of EANs stored in the local cache (Live from Room). */
+    val cacheCount: Int = 0,
 )
 
 @HiltViewModel
 class ScanViewModel @Inject constructor(
     private val repo: ScanRepository,
+    private val skuCache: SkuCacheRepository,
     private val prefs: SharedPreferences,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ScanUiState())
     val state: StateFlow<ScanUiState> = _state.asStateFlow()
+
+    init {
+        // Keep cacheCount in sync with Room without polling.
+        viewModelScope.launch {
+            skuCache.observeCount().collect { count ->
+                _state.update { it.copy(cacheCount = count) }
+            }
+        }
+    }
 
     /**
      * Called by the CameraX barcode analyser every time a barcode is detected.
@@ -68,30 +91,21 @@ class ScanViewModel @Inject constructor(
         _state.update { it.copy(isLoading = true, ean = ean, sku = null, stock = null, error = null, paused = true) }
 
         viewModelScope.launch {
-            // Step 1: resolve EAN → SKU metadata
-            when (val skuResult = repo.getSkuByEan(ean)) {
-                is ApiResult.Success -> {
-                    val sku = skuResult.data
-                    _state.update { it.copy(sku = sku) }
-
-                    // Step 2: fetch current stock for the resolved SKU
-                    when (val stockResult = repo.getStock(sku.sku)) {
-                        is ApiResult.Success -> _state.update {
-                            it.copy(isLoading = false, stock = stockResult.data)
-                        }
-                        is ApiResult.ApiError -> _state.update {
-                            it.copy(isLoading = false, error = "Stock: ${stockResult.message}")
-                        }
-                        is ApiResult.NetworkError -> _state.update {
-                            it.copy(isLoading = false, error = "Offline · stock: ${stockResult.message}")
-                        }
+            when (val result = skuCache.resolveEan(ean)) {
+                is SkuCacheRepository.ResolveResult.Hit -> {
+                    _state.update {
+                        it.copy(
+                            isLoading = false,
+                            sku       = result.sku,
+                            stock     = result.stock,
+                            fromCache = result.fromCache,
+                        )
                     }
                 }
-                is ApiResult.ApiError -> _state.update {
-                    it.copy(isLoading = false, error = "${skuResult.code}: ${skuResult.message}")
-                }
-                is ApiResult.NetworkError -> _state.update {
-                    it.copy(isLoading = false, error = "Offline · ${skuResult.message}")
+                is SkuCacheRepository.ResolveResult.Miss -> {
+                    _state.update {
+                        it.copy(isLoading = false, error = result.message)
+                    }
                 }
             }
         }
@@ -129,9 +143,9 @@ class ScanViewModel @Inject constructor(
         }
     }
 
-    /** Resume scanning (user tapped 'Scansiona di nuovo'). */
+    /** Resume scanning (user tapped 'Scansiona di nuovo'). Preserves cacheCount. */
     fun resumeScanning() {
-        _state.update { ScanUiState() }
+        _state.update { current -> ScanUiState(cacheCount = current.cacheCount) }
     }
 
     fun dismissError() {
@@ -141,6 +155,68 @@ class ScanViewModel @Inject constructor(
     /** Dismiss the pairing-success card without restarting. */
     fun dismissPairing() {
         _state.update { it.copy(pairedUrl = null, paused = false) }
+    }
+
+    /**
+     * Submit a quick single-SKU EOD entry from the scan result screen.
+     * On success → auto-calls [resumeScanning] so the camera resumes.
+     *
+     * Units: [onHand]/[adjustQty]/[unfulfilledQty] are colli (decimal);
+     * [wasteQty] is pezzi (integer). Null = field not filled → skip.
+     * [onHand] = 0.0 is valid (explicit physical-count of zero).
+     */
+    fun submitQuickEod(
+        sku: String,
+        onHand: Double?,
+        wasteQty: Int?,
+        adjustQty: Double?,
+        unfulfilledQty: Double?,
+    ) {
+        _state.update { it.copy(isSubmitting = true, submitFeedback = null) }
+        val today = java.time.LocalDate.now().toString()
+        viewModelScope.launch {
+            when (val result = repo.quickEod(sku, onHand, wasteQty, adjustQty, unfulfilledQty, today)) {
+                is ApiResult.Success -> {
+                    _state.update { it.copy(isSubmitting = false) }
+                    resumeScanning()
+                }
+                is ApiResult.ApiError -> _state.update {
+                    it.copy(isSubmitting = false, submitFeedback = "Errore ${result.code}: ${result.message}")
+                }
+                is ApiResult.NetworkError -> _state.update {
+                    it.copy(isSubmitting = false, submitFeedback = "Errore di rete: ${result.message}")
+                }
+            }
+        }
+    }
+
+    /** Clear the transient submit feedback message (called by the UI after the auto-dismiss delay). */
+    fun clearSubmitFeedback() {
+        _state.update { it.copy(submitFeedback = null) }
+    }
+
+    /**
+     * Re-fetch stock figures for every EAN in the local Room cache.
+     * Requires network connectivity — call only when online.
+     * On completion, sets [ScanUiState.cacheRefreshResult] for 3 s.
+     */
+    fun refreshCache() {
+        if (_state.value.isCacheRefreshing) return
+        _state.update { it.copy(isCacheRefreshing = true, cacheRefreshResult = null) }
+        viewModelScope.launch {
+            val result = skuCache.refreshAll()
+            val msg = when {
+                result.total == 0 -> "Cache vuota — scansiona EAN quando online"
+                result.failed == 0 -> "Cache aggiornata: ${result.updated}/${result.total} SKU"
+                else -> "Aggiornati ${result.updated}, falliti ${result.failed}/${result.total}"
+            }
+            _state.update { it.copy(isCacheRefreshing = false, cacheRefreshResult = msg) }
+        }
+    }
+
+    /** Clear the cache-refresh result toast (auto-called after 3 s from the UI). */
+    fun clearCacheRefreshResult() {
+        _state.update { it.copy(cacheRefreshResult = null) }
     }
 }
 

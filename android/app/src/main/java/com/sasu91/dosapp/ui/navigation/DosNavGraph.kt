@@ -5,6 +5,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Inventory
 import androidx.compose.material.icons.filled.Today
@@ -27,6 +28,7 @@ import com.sasu91.dosapp.ui.eod.EodScreen
 import com.sasu91.dosapp.ui.exceptions.ExceptionScreen
 import com.sasu91.dosapp.ui.queue.OfflineQueueScreen
 import com.sasu91.dosapp.ui.queue.OfflineQueueViewModel
+import com.sasu91.dosapp.ui.quickwaste.QuickWasteScreen
 import com.sasu91.dosapp.ui.receiving.ReceivingScreen
 import com.sasu91.dosapp.ui.scan.ScanScreen
 
@@ -37,13 +39,14 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector)
         fun withSku(sku: String) = "exceptions?sku=$sku"
     }
     object Receiving : Screen("receiving",      "Ricezione",  Icons.Default.Inventory)
-    object Queue     : Screen("offline_queue",  "Coda offline", Icons.Default.Inbox)
-    object Eod       : Screen("eod?sku={sku}",  "Chiusura EOD", Icons.Default.Today) {
+    object Queue      : Screen("offline_queue",  "Coda offline",  Icons.Default.Inbox)
+    object QuickWaste : Screen("quick_waste",    "Quick Waste",   Icons.Default.DeleteForever)
+    object Eod        : Screen("eod?sku={sku}",  "Chiusura EOD",  Icons.Default.Today) {
         fun withSku(sku: String) = "eod?sku=$sku"
     }
 }
 
-private val TOP_LEVEL_SCREENS = listOf(Screen.Scan, Screen.Exceptions, Screen.Receiving, Screen.Eod, Screen.Queue)
+private val TOP_LEVEL_SCREENS = listOf(Screen.Scan, Screen.QuickWaste, Screen.Exceptions, Screen.Receiving, Screen.Eod, Screen.Queue)
 
 /**
  * Root navigation graph with a Material 3 bottom navigation bar.
@@ -108,14 +111,12 @@ fun DosNavGraph(
         ) {
             // Scan screen
             composable(Screen.Scan.route) {
-                ScanScreen(
-                    onNavigateToExceptions = { sku ->
-                        navController.navigate(Screen.Exceptions.withSku(sku))
-                    },
-                    onNavigateToEod = { sku ->
-                        navController.navigate(Screen.Eod.withSku(sku))
-                    },
-                )
+                ScanScreen()
+            }
+
+            // Quick Waste — continuous high-speed barcode scanning for waste registration
+            composable(Screen.QuickWaste.route) {
+                QuickWasteScreen()
             }
 
             // Exception screen (optional sku arg from Scan)
