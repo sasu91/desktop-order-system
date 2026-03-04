@@ -165,8 +165,15 @@ def _configure_logging() -> None:
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
 
-    # Stream handler (stdout)
+    # Stream handler (stdout) — force UTF-8 to avoid UnicodeEncodeError on Windows
+    # when log messages contain emoji or non-ASCII characters.
     stream_handler = logging.StreamHandler()
+    try:
+        # Python 3.7+: reconfigure the underlying stream encoding
+        if hasattr(stream_handler.stream, "reconfigure"):
+            stream_handler.stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass  # best-effort — never crash because of logging setup
     stream_handler.setLevel(level)
     stream_handler.setFormatter(fmt)
     root_logger.addHandler(stream_handler)

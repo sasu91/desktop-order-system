@@ -143,6 +143,7 @@ class BackendManager:
         env["DOS_API_PORT"] = str(self.port)
         env["DOS_API_TOKEN"] = ""           # dev mode — nessun token
         env["DOS_LOG_LEVEL"] = "warning"    # riduce rumore nei log desktop
+        env["PYTHONIOENCODING"] = "utf-8"  # forza UTF-8 su stdout/stderr (evita UnicodeEncodeError su Windows con emoji nei log)
 
         # PYTHONPATH: assicura che dos_backend sia trovabile
         existing = env.get("PYTHONPATH", "")
