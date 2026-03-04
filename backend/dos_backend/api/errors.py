@@ -160,13 +160,29 @@ async def _handle_validation_error(
 
 
 async def _handle_unhandled(request: Request, exc: Exception) -> JSONResponse:
-    """Catch-all for unexpected exceptions — logs full traceback, returns generic 500."""
+    """Catch-all for unexpected exceptions — logs full traceback, returns generic 500.
+
+    In dev mode (DOS_API_TOKEN unset) the response body includes the exception
+    type and message to aid debugging.  In production the message is generic.
+    """
+    import traceback as _tb
     logger.exception(
         "Unhandled exception on %s %s", request.method, request.url.path
     )
+    # In dev mode expose the exception details so they show up on the phone screen.
+    from ..config import is_dev_mode
+    if is_dev_mode():
+        detail = f"{type(exc).__name__}: {exc}"
+        tb_lines = _tb.format_exc().splitlines()
+        tb_short = " | ".join(l.strip() for l in tb_lines[-6:] if l.strip())
+        message = f"[DEV] {detail}"
+        details = [ErrorDetail(field="traceback", issue=tb_short[:400])]
+    else:
+        message = "An unexpected error occurred."
+        details = []
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content=_make_body("INTERNAL_ERROR", "An unexpected error occurred.", []),
+        content=_make_body("INTERNAL_ERROR", message, details),
     )
 
 

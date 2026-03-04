@@ -145,10 +145,12 @@ def _configure_logging() -> None:
 
     Level is read from ``DOS_LOG_LEVEL`` (default: ``INFO``).
     Output goes to stdout so container runtimes / systemd can capture it.
+    A rotating file handler also writes to ``dos_backend.log`` next to the DB.
 
     Idempotent: if handlers are already attached the function is a no-op,
     which makes it safe to call repeatedly (e.g. during testing).
     """
+    import logging.handlers as _lh
     level_name = os.environ.get("DOS_LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
 
@@ -158,16 +160,32 @@ def _configure_logging() -> None:
         root_logger.setLevel(level)
         return
 
-    handler = logging.StreamHandler()
-    handler.setLevel(level)
-    handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-            datefmt="%Y-%m-%dT%H:%M:%S",
-        )
+    fmt = logging.Formatter(
+        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
     )
+
+    # Stream handler (stdout)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(level)
+    stream_handler.setFormatter(fmt)
+    root_logger.addHandler(stream_handler)
+
+    # Rotating file handler — captures tracebacks even when stderr=DEVNULL
+    try:
+        from ..config import DATA_DIR
+        log_path = DATA_DIR / "dos_backend.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = _lh.RotatingFileHandler(
+            log_path, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
+        file_handler.setLevel(logging.DEBUG)   # always verbose in file
+        file_handler.setFormatter(fmt)
+        root_logger.addHandler(file_handler)
+    except Exception:
+        pass  # never crash because of logging setup
+
     root_logger.setLevel(level)
-    root_logger.addHandler(handler)
     # Don't propagate to the root logger; we manage our own handler.
     root_logger.propagate = False
 

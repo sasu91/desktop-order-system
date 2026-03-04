@@ -109,8 +109,14 @@ class SKU:
             raise ValueError("Min shelf life cannot be negative")
         if self.min_shelf_life_days > self.shelf_life_days and self.shelf_life_days > 0:
             raise ValueError("Min shelf life cannot exceed total shelf life")
-        if self.waste_penalty_mode not in ["", "soft", "hard"]:
-            raise ValueError("Waste penalty mode must be '', 'soft', or 'hard'")
+        # Enum-like string fields: sanitize unknown values to "" (= use global
+        # config default) instead of crashing.  This lets legacy or externally
+        # created CSVs load without silent data loss.
+        _VALID_WASTE_MODES = {"", "soft", "hard", "none"}
+        if self.waste_penalty_mode not in _VALID_WASTE_MODES:
+            object.__setattr__(self, "waste_penalty_mode", "")
+        elif self.waste_penalty_mode == "none":
+            object.__setattr__(self, "waste_penalty_mode", "")
         if self.waste_penalty_factor < 0.0 or self.waste_penalty_factor > 1.0:
             raise ValueError("Waste penalty factor must be 0.0-1.0")
         if self.waste_risk_threshold < 0.0 or self.waste_risk_threshold > 100.0:
@@ -122,21 +128,23 @@ class SKU:
         if self.oos_boost_percent < 0 or self.oos_boost_percent > 100:
             raise ValueError("OOS boost percent must be between 0 and 100")
         if self.oos_detection_mode not in ["", "strict", "relaxed"]:
-            raise ValueError("OOS detection mode must be '', 'strict', or 'relaxed'")
+            object.__setattr__(self, "oos_detection_mode", "")
         if self.oos_popup_preference not in ["ask", "always_yes", "always_no"]:
-            raise ValueError("OOS popup preference must be 'ask', 'always_yes', or 'always_no'")
-        if self.forecast_method not in ["", "simple", "monte_carlo"]:
-            raise ValueError("Forecast method must be '', 'simple', or 'monte_carlo'")
+            object.__setattr__(self, "oos_popup_preference", "ask")
+        _VALID_FORECAST_METHODS = {"", "simple", "monte_carlo", "weighted",
+                                   "intermittent", "croston", "sba", "tsb"}
+        if self.forecast_method not in _VALID_FORECAST_METHODS:
+            object.__setattr__(self, "forecast_method", "")
         if self.mc_distribution not in ["", "empirical", "normal", "lognormal", "residuals"]:
-            raise ValueError("MC distribution must be '', 'empirical', 'normal', 'lognormal', or 'residuals'")
+            object.__setattr__(self, "mc_distribution", "")
         if self.mc_n_simulations < 0:
             raise ValueError("MC n_simulations cannot be negative")
         if self.mc_output_stat not in ["", "mean", "percentile"]:
-            raise ValueError("MC output_stat must be '', 'mean', or 'percentile'")
+            object.__setattr__(self, "mc_output_stat", "")
         if self.mc_output_percentile < 0 or self.mc_output_percentile > 99:
             raise ValueError("MC output_percentile must be 0-99")
         if self.mc_horizon_mode not in ["", "auto", "custom"]:
-            raise ValueError("MC horizon_mode must be '', 'auto', or 'custom'")
+            object.__setattr__(self, "mc_horizon_mode", "")
         if self.mc_horizon_days < 0:
             raise ValueError("MC horizon_days cannot be negative")
         if self.target_csl < 0.0 or self.target_csl >= 1.0:

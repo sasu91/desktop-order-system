@@ -1,1 +1,1 @@
-receipt_id,date,sku,qty_received,receipt_date
+document_id,receipt_id,date,sku,qty_received,receipt_date,order_ids
