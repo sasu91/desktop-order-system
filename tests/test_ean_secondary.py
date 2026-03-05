@@ -6,6 +6,7 @@ Covers:
 - CSV layer: schema, read/write round-trip, uniqueness helper
 - SKU import: COLUMN_ALIASES mapping, _validate_row warning
 - Backend router lookup by secondary EAN
+- StorageAdapter desktop: _dict_to_sku / _sku_to_dict / SQLite round-trip
 """
 
 import csv
@@ -262,3 +263,92 @@ class TestSkuImportEanSecondary:
         assert preview.valid_rows == 1
         row = preview.rows[0]
         assert any("secondario" in w.lower() or "uguale" in w.lower() for w in row.warnings)
+
+
+# ---------------------------------------------------------------------------
+# 5. StorageAdapter desktop: dict ↔ SKU conversion and SQLite round-trip
+#    Regression guard for the missing ean_secondary mapping in _dict_to_sku /
+#    _sku_to_dict discovered when Android bind did not surface in the desktop.
+# ---------------------------------------------------------------------------
+
+class TestStorageAdapterEanSecondary:
+
+    def test_dict_to_sku_maps_ean_secondary(self):
+        """_dict_to_sku must propagate ean_secondary from the row dict."""
+        from src.persistence.storage_adapter import StorageAdapter
+
+        d = {
+            "sku": "SKU001",
+            "description": "Test",
+            "ean": "1234567890123",
+            "ean_secondary": "9876543210987",
+            "demand_variability": "STABLE",
+        }
+        sku = StorageAdapter._dict_to_sku(d)
+        assert sku.ean_secondary == "9876543210987"
+
+    def test_dict_to_sku_ean_secondary_none(self):
+        """_dict_to_sku returns None for ean_secondary when absent or empty."""
+        from src.persistence.storage_adapter import StorageAdapter
+
+        for val in (None, "", "  "):
+            d = {"sku": "SKU001", "description": "T", "demand_variability": "STABLE",
+                 "ean_secondary": val}
+            sku = StorageAdapter._dict_to_sku(d)
+            assert sku.ean_secondary is None, f"Expected None for ean_secondary={val!r}"
+
+    def test_sku_to_dict_includes_ean_secondary(self):
+        """_sku_to_dict must include ean_secondary in the output dict."""
+        from src.persistence.storage_adapter import StorageAdapter
+
+        sku = make_sku(ean="1234567890123", ean_secondary="9876543210987")
+        d = StorageAdapter._sku_to_dict(sku)
+        assert "ean_secondary" in d
+        assert d["ean_secondary"] == "9876543210987"
+
+    def test_sku_to_dict_ean_secondary_none(self):
+        """_sku_to_dict must preserve None for ean_secondary."""
+        from src.persistence.storage_adapter import StorageAdapter
+
+        sku = make_sku(ean="1234567890123", ean_secondary=None)
+        d = StorageAdapter._sku_to_dict(sku)
+        assert d.get("ean_secondary") is None
+
+    def test_sqlite_round_trip_ean_secondary(self, data_dir):
+        """Write a SKU with ean_secondary via StorageAdapter(CSV), read it back."""
+        from src.persistence.storage_adapter import StorageAdapter
+
+        adapter = StorageAdapter(data_dir=data_dir, force_backend="csv")
+
+        sku = make_sku(sku="SKU_RT", description="Round-trip",
+                       ean="1234567890123", ean_secondary="9876543210987")
+        adapter.write_sku(sku)
+
+        skus = adapter.read_skus()
+        assert len(skus) == 1
+        assert skus[0].ean_secondary == "9876543210987"
+
+    def test_sqlite_round_trip_bind_then_read(self, data_dir):
+        """Simulate Android bind: write sku without secondary, then update via
+        update_sku (setting ean_secondary), then read — must reflect the change."""
+        from src.persistence.storage_adapter import StorageAdapter
+
+        adapter = StorageAdapter(data_dir=data_dir, force_backend="csv")
+
+        # 1. Write SKU without secondary EAN (as it exists before Android bind)
+        sku = make_sku(sku="SKU_BIND", description="Bind test", ean="1234567890123")
+        adapter.write_sku(sku)
+
+        # 2. Update via update_sku (mirrors what bind_ean_secondary does in the backend)
+        adapter.update_sku(
+            old_sku_id="SKU_BIND",
+            new_sku_id="SKU_BIND",
+            new_description="Bind test",
+            new_ean="1234567890123",
+            new_ean_secondary="9876543210987",
+        )
+
+        # 3. Read back — desktop must see the secondary EAN
+        skus = adapter.read_skus()
+        assert len(skus) == 1
+        assert skus[0].ean_secondary == "9876543210987"
