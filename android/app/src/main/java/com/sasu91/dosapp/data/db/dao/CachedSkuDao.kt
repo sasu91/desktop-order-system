@@ -57,4 +57,20 @@ interface CachedSkuDao {
     /** Remove all cached rows (e.g. on sign-out or explicit user reset). */
     @Query("DELETE FROM cached_skus")
     suspend fun deleteAll()
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(entities: List<CachedSkuEntity>)
+
+    /**
+     * Atomically replace the entire cache with [entities].
+     *
+     * Runs in a single Room transaction: the old cache is cleared *only if*
+     * [insertAll] succeeds.  If [insertAll] throws, the delete is rolled back
+     * and the existing cache is preserved.
+     */
+    @Transaction
+    suspend fun replaceAll(entities: List<CachedSkuEntity>) {
+        deleteAll()
+        insertAll(entities)
+    }
 }

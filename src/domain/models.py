@@ -38,7 +38,8 @@ class SKU:
     """Stock Keeping Unit (inventory item) - immutable."""
     sku: str
     description: str
-    ean: Optional[str] = None  # EAN/GTIN; can be empty or invalid
+    ean: Optional[str] = None           # Primary EAN/GTIN; can be empty or invalid
+    ean_secondary: Optional[str] = None  # Secondary EAN/GTIN (alternative barcode)
     
     # Order parameters
     moq: int = 1                    # Minimum Order Quantity
@@ -115,6 +116,15 @@ class SKU:
             raise ValueError("Waste penalty factor must be 0.0-1.0")
         if self.waste_risk_threshold < 0.0 or self.waste_risk_threshold > 100.0:
             raise ValueError("Waste risk threshold must be 0.0-100.0")
+        # EAN secondary must differ from primary (when both are non-empty)
+        if (
+            self.ean
+            and self.ean.strip()
+            and self.ean_secondary
+            and self.ean_secondary.strip()
+            and self.ean.strip() == self.ean_secondary.strip()
+        ):
+            raise ValueError("EAN secondario deve essere diverso dall'EAN primario")
         if self.max_stock < 1:
             raise ValueError("Max stock must be >= 1")
         if self.reorder_point < 0:

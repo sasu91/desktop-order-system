@@ -17,6 +17,8 @@ data class SkuDto(
     @SerializedName("sku")              val sku: String,
     @SerializedName("description")      val description: String,
     @SerializedName("ean")              val ean: String?,
+    /** Secondary EAN/GTIN alias (alternative barcode for the same SKU). */
+    @SerializedName("ean_secondary")    val eanSecondary: String? = null,
     /** false if the stored EAN has an irregular format (legacy data). Never crashes. */
     @SerializedName("ean_valid")        val eanValid: Boolean = true,
     /** Minimum order quantity. */

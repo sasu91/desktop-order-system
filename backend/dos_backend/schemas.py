@@ -72,6 +72,7 @@ class SKUResponse(BaseModel):
     sku: str
     description: str
     ean: Optional[str] = None
+    ean_secondary: Optional[str] = None
     ean_valid: bool = True
     moq: int = 1
     pack_size: int = 1
@@ -81,6 +82,24 @@ class SKUResponse(BaseModel):
     in_assortment: bool = True
     category: str = ""
     department: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Scanner preload (bulk offline cache)
+# ---------------------------------------------------------------------------
+
+class ScannerPreloadItem(BaseModel):
+    """Single EAN→SKU+stock row for the Android offline scanner cache.
+
+    One row per barcode alias: if a SKU has both *ean* and *ean_secondary*,
+    two rows are returned (same sku/stock data, different ``ean`` value).
+    """
+    ean: str
+    sku: str
+    description: str
+    pack_size: int = 1
+    on_hand: int = 0
+    on_order: int = 0
 
 
 # ---------------------------------------------------------------------------

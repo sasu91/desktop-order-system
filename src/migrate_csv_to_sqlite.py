@@ -467,6 +467,7 @@ class MigrationOrchestrator:
                 'sku': row['sku'],
                 'description': row.get('description', ''),
                 'ean': row.get('ean'),
+                'ean_secondary': row.get('ean_secondary'),
             }
             
             # Optional integer fields

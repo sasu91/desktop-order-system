@@ -196,9 +196,14 @@ class ScanViewModel @Inject constructor(
     }
 
     /**
-     * Re-fetch stock figures for every EAN in the local Room cache.
-     * Requires network connectivity — call only when online.
-     * On completion, sets [ScanUiState.cacheRefreshResult] for 3 s.
+     * Full catalog preload: downloads all in-assortment SKUs + EAN barcodes +
+     * current stock from the backend and atomically replaces the Room cache.
+     *
+     * After success every in-assortment EAN (primary and secondary) resolves
+     * immediately offline — no connection needed at scan time.
+     *
+     * On API / network failure the existing cache is left unmodified.
+     * Sets [ScanUiState.cacheRefreshResult] for 3 s on completion.
      */
     fun refreshCache() {
         if (_state.value.isCacheRefreshing) return
@@ -206,9 +211,12 @@ class ScanViewModel @Inject constructor(
         viewModelScope.launch {
             val result = skuCache.refreshAll()
             val msg = when {
-                result.total == 0 -> "Cache vuota — scansiona EAN quando online"
-                result.failed == 0 -> "Cache aggiornata: ${result.updated}/${result.total} SKU"
-                else -> "Aggiornati ${result.updated}, falliti ${result.failed}/${result.total}"
+                result.error != null ->
+                    "⚠ Preload fallito: ${result.error}"
+                result.total == 0 ->
+                    "✓ Cache aggiornata (nessuno SKU in assortimento con barcode)"
+                else ->
+                    "✓ Pronto offline: ${result.skusLoaded} SKU · ${result.total} barcode caricati"
             }
             _state.update { it.copy(isCacheRefreshing = false, cacheRefreshResult = msg) }
         }

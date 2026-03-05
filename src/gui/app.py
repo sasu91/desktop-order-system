@@ -3773,7 +3773,15 @@ class DesktopOrderApp:
                 # SKU info
                 sku_obj = skus_by_id.get(confirmation.sku)
                 description = sku_obj.description if sku_obj else "N/A"
-                ean = sku_obj.ean if sku_obj else None
+                # Use primary EAN for barcode; fall back to secondary if primary is absent/invalid
+                _ean_primary = sku_obj.ean if sku_obj else None
+                _ean_sec = sku_obj.ean_secondary if sku_obj else None
+                if _ean_primary and validate_ean(_ean_primary)[0]:
+                    ean = _ean_primary
+                elif _ean_sec and validate_ean(_ean_sec)[0]:
+                    ean = _ean_sec
+                else:
+                    ean = _ean_primary  # keep original (may be invalid/empty; barcode renderer handles it)
                 pack_size = sku_obj.pack_size if sku_obj else 1
                 
                 # Layout a 2 colonne: sinistra = info, destra = barcode
@@ -6797,10 +6805,29 @@ class DesktopOrderApp:
         ean_status_label = ttk.Label(ean_validate_frame, textvariable=ean_status_var, foreground="green")
         ean_status_label.pack(side="left")
 
+        # EAN Secondario
+        ean_secondary_var = tk.StringVar(value=bval("ean_secondary", "", transform=lambda v: v if v else ""))
+        add_field_row(
+            content_basic, 3 if mode == "batch" else 4, "EAN Secondario (opz.):", "Codice a barre alternativo per lo stesso SKU",
+            ean_secondary_var, "entry"
+        )
+
+        # EAN Secondario validation button
+        ean_sec_status_var = tk.StringVar(value="")
+        ean_sec_validate_frame = ttk.Frame(content_basic)
+        ean_sec_validate_frame.grid(row=4 if mode == "batch" else 5, column=0, columnspan=2, sticky="ew", pady=5)
+        ttk.Button(
+            ean_sec_validate_frame,
+            text="Valida EAN 2",
+            command=lambda: self._validate_ean_field(ean_secondary_var.get(), ean_sec_status_var)
+        ).pack(side="left", padx=(0, 10))
+        ean_sec_status_label = ttk.Label(ean_sec_validate_frame, textvariable=ean_sec_status_var, foreground="green")
+        ean_sec_status_label.pack(side="left")
+
         # In Assortment checkbox
         in_assortment_var = tk.BooleanVar(value=bval_bool("in_assortment", True))
         assortment_frame = ttk.Frame(content_basic)
-        assortment_frame.grid(row=3 if mode == "batch" else 4, column=0, columnspan=2, sticky="ew", pady=5)
+        assortment_frame.grid(row=5 if mode == "batch" else 6, column=0, columnspan=2, sticky="ew", pady=5)
         ttk.Checkbutton(
             assortment_frame,
             text="In assortimento (attivo per proposte d'ordine)",
@@ -6951,6 +6978,7 @@ class DesktopOrderApp:
         initial_vals.update({
             "desc": desc_var.get(),
             "ean": ean_var.get(),
+            "ean_secondary": ean_secondary_var.get(),
             "in_assortment": str(in_assortment_var.get()),
             "famiglia": famiglia_var.get(),
             "sottofamiglia": sottofamiglia_var.get(),
@@ -6992,7 +7020,7 @@ class DesktopOrderApp:
                 text="Salva in batch",
                 command=lambda: self._save_sku_batch_form(
                     popup, batch_skus, initial_vals,
-                    desc_var, ean_var, in_assortment_var,
+                    desc_var, ean_var, ean_secondary_var, in_assortment_var,
                     moq_var, pack_size_var, lead_time_var,
                     review_period_var, safety_stock_var, shelf_life_var,
                     max_stock_var, reorder_point_var,
@@ -7012,7 +7040,7 @@ class DesktopOrderApp:
                 button_frame,
                 text="Salva",
                 command=lambda: self._save_sku_form(
-                    popup, mode, sku_var.get(), desc_var.get(), ean_var.get(),
+                    popup, mode, sku_var.get(), desc_var.get(), ean_var.get(), ean_secondary_var.get(),
                     moq_var.get(), pack_size_var.get(), lead_time_var.get(),
                     review_period_var.get(), safety_stock_var.get(), shelf_life_var.get(),
                     max_stock_var.get(), reorder_point_var.get(),
@@ -7055,7 +7083,7 @@ class DesktopOrderApp:
         else:
             status_var.set(f"✗ {error}")
     
-    def _save_sku_form(self, popup, mode, sku_code, description, ean,
+    def _save_sku_form(self, popup, mode, sku_code, description, ean, ean_secondary,
                         moq_str, pack_size_str, lead_time_str, review_period_str, 
                         safety_stock_str, shelf_life_str, max_stock_str, reorder_point_str,
                         demand_variability_str, oos_boost_str, oos_mode_str, 
@@ -7084,6 +7112,7 @@ class DesktopOrderApp:
         sku_code = sku_code.strip()
         description = description.strip()
         ean = ean.strip() if ean else None
+        ean_secondary = ean_secondary.strip() if ean_secondary else None
         
         # Parse and validate numeric fields
         try:
@@ -7182,6 +7211,41 @@ class DesktopOrderApp:
             if not is_valid:
                 messagebox.showerror("EAN Non Valido", error, parent=popup)
                 return
+
+        # Validate secondary EAN if provided
+        if ean_secondary:
+            is_valid_sec, error_sec = validate_ean(ean_secondary)
+            if not is_valid_sec:
+                messagebox.showerror("EAN Secondario Non Valido", error_sec, parent=popup)
+                return
+            if ean and ean_secondary == ean:
+                messagebox.showerror(
+                    "EAN Duplicato",
+                    "EAN secondario deve essere diverso dall'EAN primario.",
+                    parent=popup,
+                )
+                return
+
+        # Check EAN uniqueness (both primary and secondary) 
+        exclude = current_sku.sku if current_sku else None
+        if ean:
+            clash = self.csv_layer.check_ean_unique(ean, exclude_sku=exclude)
+            if clash:
+                messagebox.showerror(
+                    "EAN già Usato",
+                    f"L'EAN '{ean}' è già assegnato a SKU '{clash}'.",
+                    parent=popup,
+                )
+                return
+        if ean_secondary:
+            clash_sec = self.csv_layer.check_ean_unique(ean_secondary, exclude_sku=exclude)
+            if clash_sec:
+                messagebox.showerror(
+                    "EAN Secondario già Usato",
+                    f"L'EAN secondario '{ean_secondary}' è già assegnato a SKU '{clash_sec}'.",
+                    parent=popup,
+                )
+                return
         
         # Parse Monte Carlo parameters
         forecast_method = (forecast_method_str or "").strip()
@@ -7244,6 +7308,7 @@ class DesktopOrderApp:
                     sku=sku_code,
                     description=description,
                     ean=ean,
+                    ean_secondary=ean_secondary,
                     moq=moq,
                     pack_size=pack_size,
                     lead_time_days=lead_time_days,
@@ -7290,15 +7355,21 @@ class DesktopOrderApp:
                 old_sku_code = current_sku.sku
                 success = self.csv_layer.update_sku(
                     old_sku_code, sku_code, description, ean,
-                    moq, pack_size, lead_time_days, review_period, 
-                    safety_stock, shelf_life_days, max_stock, reorder_point,
-                    demand_variability, oos_boost_percent, oos_detection_mode,
-                    oos_popup_preference,
-                    min_shelf_life_days, waste_penalty_mode, waste_penalty_factor, 
-                    waste_risk_threshold,
-                    forecast_method, mc_distribution, mc_n_simulations, mc_random_seed,
-                    mc_output_stat, mc_output_percentile, mc_horizon_mode, mc_horizon_days,
-                    in_assortment, target_csl,
+                    moq=moq, new_ean_secondary=ean_secondary,
+                    pack_size=pack_size, lead_time_days=lead_time_days, review_period=review_period, 
+                    safety_stock=safety_stock, shelf_life_days=shelf_life_days,
+                    max_stock=max_stock, reorder_point=reorder_point,
+                    demand_variability=demand_variability,
+                    oos_boost_percent=oos_boost_percent, oos_detection_mode=oos_detection_mode,
+                    oos_popup_preference=oos_popup_preference,
+                    min_shelf_life_days=min_shelf_life_days,
+                    waste_penalty_mode=waste_penalty_mode, waste_penalty_factor=waste_penalty_factor,
+                    waste_risk_threshold=waste_risk_threshold,
+                    forecast_method=forecast_method, mc_distribution=mc_distribution,
+                    mc_n_simulations=mc_n_simulations, mc_random_seed=mc_random_seed,
+                    mc_output_stat=mc_output_stat, mc_output_percentile=mc_output_percentile,
+                    mc_horizon_mode=mc_horizon_mode, mc_horizon_days=mc_horizon_days,
+                    in_assortment=in_assortment, target_csl=target_csl,
                     has_expiry_label=has_expiry_label,
                     category=sottofamiglia_str.strip(),
                     department=famiglia_str.strip(),
@@ -7354,7 +7425,7 @@ class DesktopOrderApp:
         popup,
         batch_skus,
         initial_vals: dict,
-        desc_var, ean_var, in_assortment_var,
+        desc_var, ean_var, ean_secondary_var, in_assortment_var,
         moq_var, pack_size_var, lead_time_var,
         review_period_var, safety_stock_var, shelf_life_var,
         max_stock_var, reorder_point_var,
@@ -7428,6 +7499,7 @@ class DesktopOrderApp:
         try:
             ov_desc             = opt_str("desc", desc_var)
             ov_ean              = opt_str("ean", ean_var)
+            ov_ean_secondary    = opt_str("ean_secondary", ean_secondary_var)
             ov_in_assortment    = opt_bool("in_assortment", in_assortment_var)
             ov_famiglia         = opt_str("famiglia", famiglia_var)
             ov_sottofamiglia    = opt_str("sottofamiglia", sottofamiglia_var)
@@ -7474,7 +7546,7 @@ class DesktopOrderApp:
 
         # Count actual changes
         all_overrides = [
-            ov_desc, ov_ean, ov_in_assortment, ov_famiglia, ov_sottofamiglia,
+            ov_desc, ov_ean, ov_ean_secondary, ov_in_assortment, ov_famiglia, ov_sottofamiglia,
             ov_moq, ov_pack_size, ov_lead_time, ov_review_period, ov_safety_stock,
             ov_shelf_life, ov_max_stock, ov_reorder_point, ov_target_csl,
             ov_oos_boost, ov_oos_mode, ov_oos_popup, ov_min_shelf_life,
@@ -7506,6 +7578,7 @@ class DesktopOrderApp:
                     new_sku_id=orig_sku.sku,  # batch mode never renames
                     new_description=ov_desc if ov_desc is not None else orig_sku.description,
                     new_ean=ov_ean if ov_ean is not None else orig_sku.ean,
+                    new_ean_secondary=ov_ean_secondary if ov_ean_secondary is not None else orig_sku.ean_secondary,
                     moq=ov_moq if ov_moq is not None else orig_sku.moq,
                     pack_size=ov_pack_size if ov_pack_size is not None else orig_sku.pack_size,
                     lead_time_days=ov_lead_time if ov_lead_time is not None else orig_sku.lead_time_days,
@@ -7975,10 +8048,10 @@ class DesktopOrderApp:
             
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow(["SKU", "Description", "EAN", "Famiglia", "Sotto-famiglia"])
+                writer.writerow(["SKU", "Description", "EAN", "EAN Secondario", "Famiglia", "Sotto-famiglia"])
                 
                 for sku in skus:
-                    writer.writerow([sku.sku, sku.description, sku.ean, sku.department, sku.category])
+                    writer.writerow([sku.sku, sku.description, sku.ean, sku.ean_secondary, sku.department, sku.category])
             
             messagebox.showinfo("Successo", f"Elenco SKU esportato in:\n{file_path}\n\n{len(skus)} SKU esportati.")
             

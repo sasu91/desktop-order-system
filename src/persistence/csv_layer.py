@@ -29,7 +29,7 @@ class CSVLayer:
     
     # CSV file schemas (filename -> list of columns)
     SCHEMAS = {
-        "skus.csv": ["sku", "description", "ean", "moq", "pack_size", "lead_time_days", 
+        "skus.csv": ["sku", "description", "ean", "ean_secondary", "moq", "pack_size", "lead_time_days", 
                      "review_period", "safety_stock", "shelf_life_days", "min_shelf_life_days",
                      "waste_penalty_mode", "waste_penalty_factor", "waste_risk_threshold",
                      "max_stock", "reorder_point", "demand_variability", "category", "department",
@@ -196,6 +196,7 @@ class CSVLayer:
                     sku=row.get("sku", "").strip(),
                     description=row.get("description", "").strip(),
                     ean=row.get("ean", "").strip() or None,
+                    ean_secondary=row.get("ean_secondary", "").strip() or None,
                     # New parameters with defaults for backward-compatibility
                     moq=int(row.get("moq", "1").strip() or "1"),
                     pack_size=int(row.get("pack_size", "1").strip() or "1"),
@@ -278,6 +279,7 @@ class CSVLayer:
                     sku=sku.sku,
                     description=sku.description,
                     ean=sku.ean,
+                    ean_secondary=sku.ean_secondary,
                     moq=sku.moq,
                     pack_size=sku.pack_size,
                     lead_time_days=sku.lead_time_days,
@@ -321,6 +323,7 @@ class CSVLayer:
             sku=sku.sku,
             description=sku.description,
             ean=sku.ean,
+            ean_secondary=sku.ean_secondary,
             moq=defaults.get("moq", sku.moq) if sku.moq == 1 else sku.moq,
             pack_size=defaults.get("pack_size", sku.pack_size) if sku.pack_size == 1 else sku.pack_size,
             lead_time_days=defaults.get("lead_time_days", sku.lead_time_days) if sku.lead_time_days == 7 else sku.lead_time_days,
@@ -358,6 +361,7 @@ class CSVLayer:
             "sku": final_sku.sku,
             "description": final_sku.description,
             "ean": final_sku.ean or "",
+            "ean_secondary": final_sku.ean_secondary or "",
             "moq": str(final_sku.moq),
             "pack_size": str(final_sku.pack_size),
             "lead_time_days": str(final_sku.lead_time_days),
@@ -398,7 +402,30 @@ class CSVLayer:
     def sku_exists(self, sku_id: str) -> bool:
         """Check if SKU exists in skus.csv."""
         return sku_id in self.get_all_sku_ids()
-    
+
+    def check_ean_unique(self, ean: Optional[str], exclude_sku: Optional[str] = None) -> Optional[str]:
+        """
+        Check whether an EAN is already assigned to any other SKU (primary or secondary).
+
+        Args:
+            ean: EAN value to check.  None / empty → always OK (no-op).
+            exclude_sku: SKU code to ignore (use when editing an existing SKU).
+
+        Returns:
+            None if the EAN is unique, else the sku code that already uses it.
+        """
+        if not ean or not ean.strip():
+            return None
+        ean_norm = ean.strip()
+        for s in self.read_skus():
+            if exclude_sku and s.sku == exclude_sku:
+                continue
+            if (s.ean or "").strip() == ean_norm:
+                return s.sku
+            if (s.ean_secondary or "").strip() == ean_norm:
+                return s.sku
+        return None
+
     def search_skus(self, query: str) -> List[SKU]:
         """
         Search SKUs by SKU code or description (case-insensitive, client-side).
@@ -436,6 +463,7 @@ class CSVLayer:
             new_sku_id=sku_object.sku,
             new_description=sku_object.description,
             new_ean=sku_object.ean,
+            new_ean_secondary=sku_object.ean_secondary,
             moq=sku_object.moq,
             pack_size=sku_object.pack_size,
             lead_time_days=sku_object.lead_time_days,
@@ -471,6 +499,7 @@ class CSVLayer:
         new_sku_id: str, 
         new_description: str, 
         new_ean: Optional[str],
+        new_ean_secondary: Optional[str] = None,
         moq: int = 1,
         pack_size: int = 1,
         lead_time_days: int = 7,
@@ -567,6 +596,7 @@ class CSVLayer:
                 "sku": row.get("sku", "").strip(),
                 "description": row.get("description", "").strip(),
                 "ean": row.get("ean", "").strip(),
+                "ean_secondary": row.get("ean_secondary", "").strip(),
                 "moq": row.get("moq", "1").strip() or "1",
                 "pack_size": row.get("pack_size", "1").strip() or "1",
                 "lead_time_days": row.get("lead_time_days", "7").strip() or "7",
@@ -611,6 +641,7 @@ class CSVLayer:
                 normalized_row["sku"] = new_sku_id
                 normalized_row["description"] = new_description
                 normalized_row["ean"] = new_ean or ""
+                normalized_row["ean_secondary"] = new_ean_secondary or ""
                 normalized_row["moq"] = str(moq)
                 normalized_row["pack_size"] = str(pack_size)
                 normalized_row["lead_time_days"] = str(lead_time_days)

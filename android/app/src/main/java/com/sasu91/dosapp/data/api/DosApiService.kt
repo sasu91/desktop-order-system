@@ -24,6 +24,17 @@ interface DosApiService {
     suspend fun getHealth(): Response<HealthDto>
 
     // -----------------------------------------------------------------------
+    // GET /api/v1/skus/scanner-preload
+    // -----------------------------------------------------------------------
+    /**
+     * Returns all in-assortment SKUs with EAN barcode(s) and current stock.
+     * Used to pre-populate the offline Room cache before the first scan.
+     * Each SKU with a secondary EAN produces two rows (aliases).
+     */
+    @GET("api/v1/skus/scanner-preload")
+    suspend fun getScannerPreload(): Response<List<ScannerPreloadItemDto>>
+
+    // -----------------------------------------------------------------------
     // GET /api/v1/skus/by-ean/{ean}
     // -----------------------------------------------------------------------
     @GET("api/v1/skus/by-ean/{ean}")

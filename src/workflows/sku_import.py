@@ -29,6 +29,7 @@ COLUMN_ALIASES = {
     "sku": ["sku", "code", "item_code", "product_code", "sku_code"],
     "description": ["description", "desc", "name", "product_name", "item_name"],
     "ean": ["ean", "ean13", "barcode", "gtin", "upc"],
+    "ean_secondary": ["ean_secondary", "ean2", "barcode2", "secondary_ean", "gtin2", "upc2"],
     "moq": ["moq", "min_order_qty", "minimum_order_quantity"],
     "pack_size": ["pack_size", "pack", "pack_qty", "case_size"],
     "lead_time_days": ["lead_time_days", "lead_time", "leadtime", "delivery_days"],
@@ -384,6 +385,16 @@ class SKUImporter:
                     is_valid, error_msg = validate_ean(ean)
                     if not is_valid:
                         warnings.append(f"Invalid EAN format: {error_msg}")
+
+            # Secondary EAN validation (warning only)
+            if "ean_secondary" in mapped_data and mapped_data["ean_secondary"]:
+                ean_sec = mapped_data["ean_secondary"].strip()
+                if ean_sec:
+                    is_valid_sec, error_msg_sec = validate_ean(ean_sec)
+                    if not is_valid_sec:
+                        warnings.append(f"Invalid secondary EAN format: {error_msg_sec}")
+                    elif ean_sec == (mapped_data.get("ean") or "").strip():
+                        warnings.append("EAN secondario uguale all'EAN primario; sarà ignorato.")
             
             # Cross-field validation: min_shelf_life vs shelf_life
             shelf_life = int(mapped_data.get("shelf_life_days", 0) or 0)
@@ -423,6 +434,13 @@ class SKUImporter:
             sku=mapped_data.get("sku", "").strip(),
             description=mapped_data.get("description", "").strip(),
             ean=mapped_data.get("ean", "").strip() or None,
+            # Clear secondary EAN if identical to primary (warning already added by _validate_row)
+            ean_secondary=(
+                (mapped_data.get("ean_secondary", "").strip() or None)
+                if (mapped_data.get("ean_secondary", "").strip() or "") !=
+                   (mapped_data.get("ean", "").strip() or "")
+                else None
+            ),
             moq=int(mapped_data.get("moq") or 1),
             pack_size=int(mapped_data.get("pack_size") or 1),
             lead_time_days=int(mapped_data.get("lead_time_days") or 7),

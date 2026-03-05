@@ -2,6 +2,7 @@ package com.sasu91.dosapp.data.repository
 
 import android.util.Log
 import com.sasu91.dosapp.data.api.DosApiService
+import com.sasu91.dosapp.data.api.dto.ScannerPreloadItemDto
 import com.sasu91.dosapp.data.api.dto.SkuDto
 import com.sasu91.dosapp.data.api.dto.StockDetailDto
 import com.sasu91.dosapp.data.db.dao.CachedSkuDao
@@ -23,11 +24,15 @@ private const val TAG = "SkuCacheRepo"
  * 2. On cache miss, call the API (requires network).  On API success, write the
  *    full entry to Room so the next scan of the same EAN works offline.
  *
- * ## Refresh strategy (manual, triggered by the user)
- * - For every EAN already in Room, call [DosApiService.getStock] to fetch
- *   fresh `on_hand` / `on_order` values.  The EAN→SKU mapping itself is stable
- *   and never re-fetched (EANs don't change).
- * - Returns a [RefreshResult] with counts of updated / failed / total rows.
+ * ## Refresh strategy (manual, triggered by the user — [refreshAll])
+ * Performs a **full catalog preload** via `GET /api/v1/skus/scanner-preload`:
+ * 1. Downloads all in-assortment SKUs with EAN barcode(s) and current stock.
+ * 2. On success, atomically replaces the Room cache in a single transaction
+ *    (clear + bulk insert) — no partial state can persist.
+ * 3. On API / network failure, the existing cache is untouched (rollback).
+ *
+ * A SKU with both a primary and a secondary EAN produces two rows so that
+ * either barcode resolves immediately offline.
  *
  * ## Offline indicator
  * [ResolveResult.fromCache] == true means the data came from Room, not a live
@@ -63,9 +68,18 @@ class SkuCacheRepository @Inject constructor(
     }
 
     data class RefreshResult(
+        /** Number of EAN barcode rows written to Room. */
         val updated: Int,
-        val failed : Int,
-        val total  : Int,
+        /** Number of distinct SKU codes loaded (one SKU can have 2 EAN rows). */
+        val skusLoaded: Int = 0,
+        /**
+         * Always 0 for full preload (kept for backward compat).
+         * The preload is all-or-nothing: either everything succeeds or nothing changes.
+         */
+        val failed: Int = 0,
+        val total: Int,
+        /** Non-null when the preload failed; the existing cache was NOT modified. */
+        val error: String? = null,
     )
 
     // -----------------------------------------------------------------------
@@ -150,42 +164,69 @@ class SkuCacheRepository @Inject constructor(
     }
 
     /**
-     * Re-fetch fresh stock figures from the API for every EAN already in Room.
+     * Full catalog preload via `GET /api/v1/skus/scanner-preload`.
      *
-     * Does NOT modify the EAN→SKU mapping — only updates `on_hand`, `on_order`,
-     * and `cached_at` for each row.  Rows whose stock call fails (network blip,
-     * SKU removed) are skipped; their existing values are kept.
+     * Downloads all in-assortment SKUs with barcode(s) and current stock, then
+     * **atomically replaces** the Room cache (delete-all + bulk-insert in one
+     * transaction).  If the API call fails for any reason the current cache is
+     * left completely unmodified (rollback policy).
      *
-     * @return [RefreshResult] summary for display in the UI.
+     * After this call succeeds, every in-assortment EAN (primary and secondary)
+     * resolves immediately offline via [resolveEan] without any network request.
+     *
+     * @return [RefreshResult] — check [RefreshResult.error] for failure details.
      */
     suspend fun refreshAll(): RefreshResult {
-        val all = dao.getAll()
-        if (all.isEmpty()) return RefreshResult(0, 0, 0)
+        // ── 1. Fetch full preload catalogue ───────────────────────────────
+        val apiResult = safeCall { api.getScannerPreload().toApiResult() }
 
-        var updated = 0; var failed = 0
-        val now = System.currentTimeMillis()
-
-        for (entity in all) {
-            when (val r = safeCall { api.getStock(entity.sku).toApiResult() }) {
-                is ApiResult.Success -> {
-                    dao.updateStock(
-                        sku      = entity.sku,
-                        onHand   = r.data.onHand,
-                        onOrder  = r.data.onOrder,
-                        cachedAt = now,
-                    )
-                    updated++
-                    Log.d(TAG, "refreshAll: updated ${entity.sku}")
-                }
-                else -> {
-                    failed++
-                    Log.w(TAG, "refreshAll: failed ${entity.sku}: $r")
-                }
+        if (apiResult !is ApiResult.Success) {
+            val errMsg = when (apiResult) {
+                is ApiResult.NetworkError ->
+                    "Nessuna connessione · la cache esistente è invariata"
+                is ApiResult.ApiError ->
+                    "Errore server ${apiResult.code}: ${apiResult.message}"
+                else -> "Errore sconosciuto durante il preload"
             }
+            Log.w(TAG, "refreshAll: preload failed (Ξε$apiResult)")
+            return RefreshResult(updated = 0, skusLoaded = 0, total = 0, error = errMsg)
         }
 
-        Log.i(TAG, "refreshAll: $updated/${all.size} updated, $failed failed")
-        return RefreshResult(updated, failed, all.size)
+        val items: List<ScannerPreloadItemDto> = apiResult.data
+        Log.i(TAG, "refreshAll: received ${items.size} barcode aliases from server")
+
+        // ── 2. Convert to Room entities ───────────────────────────────────
+        val now = System.currentTimeMillis()
+        val entities = items.map { item ->
+            CachedSkuEntity(
+                ean         = item.ean,
+                sku         = item.sku,
+                description = item.description,
+                packSize    = item.packSize,
+                onHand      = item.onHand,
+                onOrder     = item.onOrder,
+                cachedAt    = now,
+            )
+        }
+
+        // ── 3. Atomic replace (clear + bulk insert in a single transaction) ─
+        try {
+            dao.replaceAll(entities)
+        } catch (e: Exception) {
+            Log.e(TAG, "refreshAll: Room transaction failed", e)
+            return RefreshResult(
+                updated = 0, skusLoaded = 0, total = 0,
+                error = "Errore scrittura cache: ${e.message}",
+            )
+        }
+
+        val skuCount = items.map { it.sku }.toSet().size
+        Log.i(TAG, "refreshAll: cache replaced — ${items.size} EAN alias, $skuCount SKU")
+        return RefreshResult(
+            updated    = items.size,
+            skusLoaded = skuCount,
+            total      = items.size,
+        )
     }
 
     /** Live count of cached EANs for the UI badge. */

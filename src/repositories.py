@@ -141,6 +141,7 @@ class SKURepository:
                     # INSERT
                     # Set defaults
                     defaults = {
+                        'ean_secondary': '',
                         'moq': 1,
                         'pack_size': 1,
                         'lead_time_days': 7,

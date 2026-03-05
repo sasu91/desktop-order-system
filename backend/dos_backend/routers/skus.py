@@ -6,15 +6,90 @@ Errors
 400 BAD_REQUEST   EAN contains non-digit characters or has invalid length.
 404 NOT_FOUND     EAN format is valid but no SKU with that code exists.
 """
+from datetime import date, timedelta
+
 from fastapi import APIRouter, Depends
 
 from ..api.auth import verify_token
 from ..api.deps import get_storage
 from ..api.errors import BadRequestError, NotFoundError
-from ..domain.ledger import validate_ean
-from ..schemas import SKUResponse
+from ..domain.ledger import StockCalculator, validate_ean
+from ..schemas import SKUResponse, ScannerPreloadItem
 
 router = APIRouter(tags=["skus"])
+
+
+# ---------------------------------------------------------------------------
+# GET /skus/scanner-preload
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/skus/scanner-preload",
+    response_model=list[ScannerPreloadItem],
+    summary="Pre-carica catalogo barcode per scanner offline",
+    dependencies=[Depends(verify_token)],
+)
+def get_scanner_preload(
+    storage=Depends(get_storage),
+) -> list[ScannerPreloadItem]:
+    """
+    Restituisce tutti gli SKU *in assortimento* con barcode e stock corrente
+    (END_OF_DAY di oggi).
+
+    Se uno SKU ha sia EAN primario che EAN secondario, vengono emesse due righe
+    con lo stesso sku/stock ma EAN diverso — l'app li inserisce come alias
+    separati nella cache Room.
+
+    Usato dall'app Android per pre-popolare la cache offline prima della prima
+    scansione, senza richiedere connessione al momento della scansione.
+    """
+    today = date.today()
+    # END_OF_DAY: include events of today → effective = today + 1
+    effective = today + timedelta(days=1)
+
+    all_skus = [s for s in storage.read_skus() if s.in_assortment]
+
+    transactions = storage.read_transactions()
+    sales_records = storage.read_sales() if hasattr(storage, "read_sales") else []
+
+    sku_ids = [s.sku for s in all_skus]
+    stock_map = StockCalculator.calculate_all_skus(
+        sku_ids, effective, transactions, sales_records
+    )
+
+    result: list[ScannerPreloadItem] = []
+    for sku_obj in all_skus:
+        primary = (sku_obj.ean or "").strip()
+        secondary = (sku_obj.ean_secondary or "").strip()
+
+        if not primary and not secondary:
+            continue  # SKU senza nessun barcode — salta
+
+        stock = stock_map.get(sku_obj.sku)
+        on_hand = stock.on_hand if stock else 0
+        on_order = stock.on_order if stock else 0
+
+        if primary:
+            result.append(ScannerPreloadItem(
+                ean=primary,
+                sku=sku_obj.sku,
+                description=sku_obj.description,
+                pack_size=getattr(sku_obj, "pack_size", 1) or 1,
+                on_hand=on_hand,
+                on_order=on_order,
+            ))
+
+        if secondary and secondary != primary:
+            result.append(ScannerPreloadItem(
+                ean=secondary,
+                sku=sku_obj.sku,
+                description=sku_obj.description,
+                pack_size=getattr(sku_obj, "pack_size", 1) or 1,
+                on_hand=on_hand,
+                on_order=on_order,
+            ))
+
+    return result
 
 
 @router.get(
@@ -50,7 +125,11 @@ def get_sku_by_ean(
     # --- 2. Lookup: linear scan over all SKUs (no EAN index yet) ---
     # Normalise both sides: strip whitespace, compare as strings.
     skus = storage.read_skus()
-    hit = next((s for s in skus if (s.ean or "").strip() == ean), None)
+    hit = next(
+        (s for s in skus
+         if (s.ean or "").strip() == ean or (s.ean_secondary or "").strip() == ean),
+        None,
+    )
 
     if hit is None:
         raise NotFoundError(f"Nessuno SKU trovato con EAN '{ean}'.")
@@ -62,6 +141,7 @@ def get_sku_by_ean(
         sku=hit.sku,
         description=hit.description,
         ean=hit.ean,
+        ean_secondary=hit.ean_secondary,
         ean_valid=stored_ean_ok,
         moq=hit.moq,
         pack_size=hit.pack_size,
