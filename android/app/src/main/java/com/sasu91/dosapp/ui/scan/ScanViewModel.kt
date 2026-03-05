@@ -5,15 +5,20 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.sasu91.dosapp.data.api.dto.EodCloseRequestDto
+import com.sasu91.dosapp.data.api.dto.EodEntryDto
+import com.sasu91.dosapp.data.api.dto.ExceptionRequestDto
 import com.sasu91.dosapp.data.api.dto.SkuDto
 import com.sasu91.dosapp.data.api.dto.StockDetailDto
-import com.sasu91.dosapp.data.repository.ApiResult
+import com.sasu91.dosapp.data.repository.EodRepository
+import com.sasu91.dosapp.data.repository.ExceptionRepository
 import com.sasu91.dosapp.data.repository.ScanRepository
 import com.sasu91.dosapp.data.repository.SkuCacheRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.util.UUID
 import javax.inject.Inject
 
 /** QR payload prefix emitted by the desktop app for Wi-Fi pairing. */
@@ -39,6 +44,8 @@ data class ScanUiState(
     val isSubmitting: Boolean = false,
     /** Non-null while there is a submit result message to display (auto-cleared after 3.5 s). */
     val submitFeedback: String? = null,
+    /** True when [submitFeedback] represents an offline-queued confirmation (not an error). */
+    val offlineEnqueued: Boolean = false,
     /** True when the current SKU+stock data was served from the local Room cache (offline). */
     val fromCache: Boolean = false,
     /** True while a cache refresh is running. */
@@ -54,6 +61,8 @@ class ScanViewModel @Inject constructor(
     private val repo: ScanRepository,
     private val skuCache: SkuCacheRepository,
     private val prefs: SharedPreferences,
+    private val exceptionRepo: ExceptionRepository,
+    private val eodRepo: EodRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ScanUiState())
@@ -158,8 +167,15 @@ class ScanViewModel @Inject constructor(
     }
 
     /**
-     * Submit a quick single-SKU EOD entry from the scan result screen.
-     * On success → auto-calls [resumeScanning] so the camera resumes.
+     * Submit quick scan actions from the scan result screen.
+     *
+     * Routing (offline-queue aware):
+     *   [wasteQty] > 0  → POST /exceptions (event=WASTE) via [ExceptionRepository]
+     *   [onHand] / [adjustQty] / [unfulfilledQty] → POST /eod/close via [EodRepository]
+     *
+     * On [EodRepository.PostResult.OfflineEnqueued] or
+     * [ExceptionRepository.PostResult.OfflineEnqueued]: resumes scanning immediately
+     * with a soft "offline queued" toast instead of blocking with an error.
      *
      * Units: [onHand]/[adjustQty]/[unfulfilledQty] are colli (decimal);
      * [wasteQty] is pezzi (integer). Null = field not filled → skip.
@@ -172,19 +188,70 @@ class ScanViewModel @Inject constructor(
         adjustQty: Double?,
         unfulfilledQty: Double?,
     ) {
-        _state.update { it.copy(isSubmitting = true, submitFeedback = null) }
+        _state.update { it.copy(isSubmitting = true, submitFeedback = null, offlineEnqueued = false) }
         val today = java.time.LocalDate.now().toString()
         viewModelScope.launch {
-            when (val result = repo.quickEod(sku, onHand, wasteQty, adjustQty, unfulfilledQty, today)) {
-                is ApiResult.Success -> {
+            var anyOffline = false
+            var errorMsg: String? = null
+
+            // ── 1. Waste → POST /exceptions (WASTE event, pezzi) ────────────
+            if (wasteQty != null && wasteQty > 0) {
+                val req = ExceptionRequestDto(
+                    date  = today,
+                    sku   = sku,
+                    event = "WASTE",
+                    qty   = wasteQty.toDouble(),
+                )
+                when (val r = exceptionRepo.postException(req)) {
+                    is ExceptionRepository.PostResult.OfflineEnqueued -> anyOffline = true
+                    is ExceptionRepository.PostResult.Error ->
+                        if (errorMsg == null) errorMsg = "Errore scarto ${r.code}: ${r.message}"
+                    else -> Unit  // Sent ✓
+                }
+            }
+
+            // ── 2. EOD fields → POST /eod/close (colli) ─────────────────────
+            val hasEodFields = onHand != null ||
+                (adjustQty != null && adjustQty > 0) ||
+                (unfulfilledQty != null && unfulfilledQty > 0)
+            if (hasEodFields) {
+                val req = EodCloseRequestDto(
+                    date        = today,
+                    clientEodId = UUID.randomUUID().toString(),
+                    entries     = listOf(
+                        EodEntryDto(
+                            sku            = sku,
+                            onHand         = onHand,
+                            adjustQty      = adjustQty,
+                            unfulfilledQty = unfulfilledQty,
+                        )
+                    ),
+                )
+                when (val r = eodRepo.closeEod(req)) {
+                    is EodRepository.PostResult.OfflineEnqueued -> anyOffline = true
+                    is EodRepository.PostResult.Error ->
+                        if (errorMsg == null) errorMsg = "Errore EOD ${r.code}: ${r.message}"
+                    else -> Unit  // Sent ✓
+                }
+            }
+
+            // ── 3. Handle aggregate result ───────────────────────────────────
+            when {
+                errorMsg != null -> _state.update {
+                    it.copy(isSubmitting = false, submitFeedback = errorMsg, offlineEnqueued = false)
+                }
+                anyOffline -> {
+                    // Resume scanning immediately; soft toast will auto-dismiss after 3.5 s.
+                    val cacheCount = _state.value.cacheCount
+                    _state.value = ScanUiState(
+                        cacheCount      = cacheCount,
+                        submitFeedback  = "\uD83D\uDD50 Salvato offline \u2013 verr\u00E0 inviato al prossimo retry",
+                        offlineEnqueued = true,
+                    )
+                }
+                else -> {
                     _state.update { it.copy(isSubmitting = false) }
                     resumeScanning()
-                }
-                is ApiResult.ApiError -> _state.update {
-                    it.copy(isSubmitting = false, submitFeedback = "Errore ${result.code}: ${result.message}")
-                }
-                is ApiResult.NetworkError -> _state.update {
-                    it.copy(isSubmitting = false, submitFeedback = "Errore di rete: ${result.message}")
                 }
             }
         }
@@ -192,7 +259,7 @@ class ScanViewModel @Inject constructor(
 
     /** Clear the transient submit feedback message (called by the UI after the auto-dismiss delay). */
     fun clearSubmitFeedback() {
-        _state.update { it.copy(submitFeedback = null) }
+        _state.update { it.copy(submitFeedback = null, offlineEnqueued = false) }
     }
 
     /**

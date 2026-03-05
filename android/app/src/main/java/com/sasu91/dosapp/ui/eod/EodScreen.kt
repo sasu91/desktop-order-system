@@ -16,6 +16,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.sasu91.dosapp.data.api.dto.SkuSearchResultDto
+import com.sasu91.dosapp.ui.common.SkuAutocompleteField
 
 /**
  * EOD daily-closure screen.
@@ -153,7 +155,13 @@ fun EodScreen(
                     index     = index,
                     entry     = entry,
                     canRemove = state.entries.size > 1,
+                    skuSuggestions = if (entry.localId == state.skuSuggestionsForId)
+                        state.skuSuggestions else emptyList(),
+                    isSearchingSkus = state.isSearchingSkus &&
+                        entry.localId == state.skuSuggestionsForId,
                     onSkuChange             = { v -> viewModel.onSkuChange(index, v) },
+                    onSkuSelected           = { item -> viewModel.onSkuSelected(index, item) },
+                    onSkuDropdownDismiss    = { viewModel.dismissSkuDropdown(index) },
                     onOnHandChange          = { v -> viewModel.onOnHandChange(index, v) },
                     onWasteQtyChange        = { v -> viewModel.onWasteQtyChange(index, v) },
                     onAdjustQtyChange       = { v -> viewModel.onAdjustQtyChange(index, v) },
@@ -222,7 +230,11 @@ private fun EodEntryCard(
     index: Int,
     entry: EodEntryUiState,
     canRemove: Boolean,
+    skuSuggestions: List<SkuSearchResultDto>,
+    isSearchingSkus: Boolean,
     onSkuChange: (String) -> Unit,
+    onSkuSelected: (SkuSearchResultDto) -> Unit,
+    onSkuDropdownDismiss: () -> Unit,
     onOnHandChange: (String) -> Unit,
     onWasteQtyChange: (String) -> Unit,
     onAdjustQtyChange: (String) -> Unit,
@@ -239,19 +251,23 @@ private fun EodEntryCard(
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
         }
 
-        // ── Header: SKU field + remove icon ───────────────────────────────
+        // ── Header: SKU autocomplete + remove icon ────────────────────────
         Row(
             modifier          = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.Top,
         ) {
-            OutlinedTextField(
-                value           = entry.sku,
-                onValueChange   = onSkuChange,
-                label           = { Text("SKU ${index + 1}") },
-                isError         = entry.skuError != null,
-                supportingText  = entry.skuError?.let { { Text(it) } },
-                modifier        = Modifier.weight(1f),
-                singleLine      = true,
+            SkuAutocompleteField(
+                query         = entry.sku,
+                onQueryChange = onSkuChange,
+                suggestions   = skuSuggestions,
+                expanded      = entry.skuDropdownExpanded,
+                onDismiss     = onSkuDropdownDismiss,
+                onSelect      = onSkuSelected,
+                isSearching   = isSearchingSkus,
+                label         = "SKU ${index + 1}",
+                isError       = entry.skuError != null,
+                supportingText = entry.skuError?.let { { Text(it) } },
+                modifier      = Modifier.weight(1f),
             )
             IconButton(
                 onClick  = onRemove,

@@ -5,12 +5,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sasu91.dosapp.data.api.dto.EodCloseRequestDto
 import com.sasu91.dosapp.data.api.dto.EodEntryDto
+import com.sasu91.dosapp.data.api.dto.SkuSearchResultDto
 import com.sasu91.dosapp.data.repository.EodRepository
+import com.sasu91.dosapp.data.repository.SkuEanBindRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.util.UUID
@@ -38,6 +38,8 @@ data class EodEntryUiState(
     val unfulfilledQty: String = "",
     val note: String = "",
     val skuError: String? = null,
+    /** Whether the SKU autocomplete dropdown is open for this entry. */
+    val skuDropdownExpanded: Boolean = false,
 )
 
 // ---------------------------------------------------------------------------
@@ -53,6 +55,11 @@ data class EodUiState(
     val offlineEnqueued: Boolean = false,
     /** When true the confirm-and-send dialog is displayed. */
     val showConfirmDialog: Boolean = false,
+    /** Autocomplete suggestions for the most recently edited SKU entry. */
+    val skuSuggestions: List<SkuSearchResultDto> = emptyList(),
+    /** [EodEntryUiState.localId] of the entry whose dropdown is active. */
+    val skuSuggestionsForId: String = "",
+    val isSearchingSkus: Boolean = false,
 )
 
 // ---------------------------------------------------------------------------
@@ -62,6 +69,7 @@ data class EodUiState(
 @HiltViewModel
 class EodViewModel @Inject constructor(
     private val repo: EodRepository,
+    private val skuSearchRepo: SkuEanBindRepository,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -74,6 +82,40 @@ class EodViewModel @Inject constructor(
         )
     )
     val state: StateFlow<EodUiState> = _state.asStateFlow()
+
+    // -----------------------------------------------------------------------
+    // SKU autocomplete — debounced per-entry search
+    // -----------------------------------------------------------------------
+
+    /** Emits (localId, query) whenever the operator types in a SKU field. */
+    private val _skuSearchSignal = MutableStateFlow("" to "")
+
+    init {
+        @OptIn(FlowPreview::class)
+        viewModelScope.launch {
+            _skuSearchSignal
+                .debounce(280L)
+                .distinctUntilChanged()
+                .collectLatest { (id, q) -> loadSkuSuggestions(id, q) }
+        }
+    }
+
+    private suspend fun loadSkuSuggestions(localId: String, query: String) {
+        if (query.isBlank()) {
+            _state.update { it.copy(skuSuggestions = emptyList(), isSearchingSkus = false) }
+            return
+        }
+        _state.update { it.copy(isSearchingSkus = true, skuSuggestionsForId = localId) }
+        val result = skuSearchRepo.searchSkus(query.trim())
+        _state.update { s ->
+            when (result) {
+                is SkuEanBindRepository.SearchResult.Success ->
+                    s.copy(isSearchingSkus = false, skuSuggestions = result.items)
+                is SkuEanBindRepository.SearchResult.Error ->
+                    s.copy(isSearchingSkus = false, skuSuggestions = emptyList())
+            }
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Date
@@ -100,8 +142,20 @@ class EodViewModel @Inject constructor(
     // Per-entry field updates  (identified by list index for simplicity)
     // -----------------------------------------------------------------------
 
-    fun onSkuChange(index: Int, v: String) = updateEntry(index) {
-        it.copy(sku = v, skuError = null)
+    fun onSkuChange(index: Int, v: String) {
+        val entry = _state.value.entries.getOrNull(index) ?: return
+        _skuSearchSignal.value = entry.localId to v
+        updateEntry(index) { it.copy(sku = v, skuError = null, skuDropdownExpanded = v.isNotBlank()) }
+    }
+
+    fun onSkuSelected(index: Int, item: SkuSearchResultDto) {
+        _skuSearchSignal.value = "" to ""
+        updateEntry(index) { it.copy(sku = item.sku, skuError = null, skuDropdownExpanded = false) }
+        _state.update { it.copy(skuSuggestions = emptyList(), skuSuggestionsForId = "") }
+    }
+
+    fun dismissSkuDropdown(index: Int) {
+        updateEntry(index) { it.copy(skuDropdownExpanded = false) }
     }
 
     fun onOnHandChange(index: Int, v: String) = updateEntry(index) {

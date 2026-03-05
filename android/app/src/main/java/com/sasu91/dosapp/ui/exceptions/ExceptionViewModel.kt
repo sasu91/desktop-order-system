@@ -4,12 +4,12 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sasu91.dosapp.data.api.dto.ExceptionRequestDto
+import com.sasu91.dosapp.data.api.dto.SkuSearchResultDto
 import com.sasu91.dosapp.data.repository.ExceptionRepository
+import com.sasu91.dosapp.data.repository.SkuEanBindRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import javax.inject.Inject
@@ -34,11 +34,17 @@ data class ExceptionUiState(
     // Field-level validation errors
     val skuError: String? = null,
     val qtyError: String? = null,
+
+    // SKU autocomplete
+    val skuSuggestions: List<SkuSearchResultDto> = emptyList(),
+    val skuDropdownExpanded: Boolean = false,
+    val isSearchingSkus: Boolean = false,
 )
 
 @HiltViewModel
 class ExceptionViewModel @Inject constructor(
     private val repo: ExceptionRepository,
+    private val skuSearchRepo: SkuEanBindRepository,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -51,10 +57,68 @@ class ExceptionViewModel @Inject constructor(
     val state: StateFlow<ExceptionUiState> = _state.asStateFlow()
 
     // -----------------------------------------------------------------------
+    // SKU autocomplete — debounced search
+    // -----------------------------------------------------------------------
+
+    private val _skuQuery = MutableStateFlow("")
+
+    init {
+        @OptIn(FlowPreview::class)
+        viewModelScope.launch {
+            _skuQuery
+                .debounce(280L)
+                .distinctUntilChanged()
+                .collectLatest { q -> loadSkuSuggestions(q) }
+        }
+    }
+
+    private suspend fun loadSkuSuggestions(query: String) {
+        if (query.isBlank()) {
+            _state.update { it.copy(skuSuggestions = emptyList(), isSearchingSkus = false) }
+            return
+        }
+        _state.update { it.copy(isSearchingSkus = true) }
+        val result = skuSearchRepo.searchSkus(query.trim())
+        _state.update { s ->
+            when (result) {
+                is SkuEanBindRepository.SearchResult.Success ->
+                    s.copy(isSearchingSkus = false, skuSuggestions = result.items)
+                is SkuEanBindRepository.SearchResult.Error ->
+                    s.copy(isSearchingSkus = false, skuSuggestions = emptyList())
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Form field updates
     // -----------------------------------------------------------------------
 
-    fun onSkuChange(v: String) = _state.update { it.copy(sku = v, skuError = null) }
+    fun onSkuChange(v: String) {
+        _skuQuery.value = v
+        _state.update {
+            it.copy(
+                sku = v,
+                skuError = null,
+                skuDropdownExpanded = v.isNotBlank(),
+            )
+        }
+    }
+
+    fun onSkuSelected(item: SkuSearchResultDto) {
+        _skuQuery.value = ""
+        _state.update {
+            it.copy(
+                sku = item.sku,
+                skuError = null,
+                skuDropdownExpanded = false,
+                skuSuggestions = emptyList(),
+            )
+        }
+    }
+
+    fun dismissSkuSuggestions() {
+        _state.update { it.copy(skuDropdownExpanded = false) }
+    }
     fun onEventChange(v: String) = _state.update { it.copy(event = v) }
     fun onQtyChange(v: String) = _state.update { it.copy(qty = v, qtyError = null) }
     fun onNoteChange(v: String) = _state.update { it.copy(note = v) }

@@ -314,18 +314,53 @@ class StorageAdapter(CSVLayer):
             return self.csv_layer.sku_exists(sku_id)
     
     def search_skus(self, query: str) -> List[SKU]:
-        """Search SKUs by query string"""
-        # Always use CSV for search (SQLite full-text search not implemented yet)
+        """Search SKUs: LIKE on sku+description, routes to SQLite when available."""
+        if self.is_sqlite_mode():
+            assert self.repos is not None
+            try:
+                cursor = self.conn.cursor()  # type: ignore[union-attr]
+                if query.strip():
+                    pattern = f"%{query.strip()}%"
+                    cursor.execute(
+                        "SELECT * FROM skus WHERE sku LIKE ? OR description LIKE ?",
+                        (pattern, pattern),
+                    )
+                else:
+                    cursor.execute("SELECT * FROM skus")
+                rows = cursor.fetchall()
+                return [StorageAdapter._dict_to_sku(dict(row)) for row in rows]
+            except Exception as e:
+                self._sqlite_degrade(e)
+                print(f"⚠ SQLite search_skus failed, falling back to CSV: {e}")
+                return self.csv_layer.search_skus(query)
         return self.csv_layer.search_skus(query)
 
     def bind_ean_secondary(self, sku_id: str, ean_secondary: Optional[str]) -> bool:
         """
         Patch only the ean_secondary field of an existing SKU.
 
-        Both CSV and SQLite paths delegate to the CSV layer for this targeted
-        operation (lightest possible write; SQLite is kept in sync on next
-        full re-read via read_skus).
+        When in SQLite mode the change is written to both SQLite (immediate)
+        and CSV (so the two stores stay in sync).  In CSV-only mode only the
+        CSV file is written.
         """
+        if self.is_sqlite_mode():
+            assert self.repos is not None
+            try:
+                from ..db import transaction as _tx
+                with _tx(self.conn) as cur:  # type: ignore[arg-type]
+                    cur.execute(
+                        "UPDATE skus SET ean_secondary = ?, updated_at = datetime('now') WHERE sku = ?",
+                        (ean_secondary, sku_id),
+                    )
+                    if cur.rowcount == 0:
+                        return False  # SKU not found in SQLite
+                # Mirror to CSV to keep the two stores in sync
+                self.csv_layer.update_sku_ean_secondary(sku_id, ean_secondary)
+                return True
+            except Exception as e:
+                self._sqlite_degrade(e)
+                print(f"⚠ SQLite bind_ean_secondary failed, falling back to CSV: {e}")
+                return self.csv_layer.update_sku_ean_secondary(sku_id, ean_secondary)
         return self.csv_layer.update_sku_ean_secondary(sku_id, ean_secondary)
 
     def update_sku_object(self, old_sku_id: str, sku_object: SKU) -> bool:

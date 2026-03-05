@@ -418,7 +418,10 @@ private fun ScanOverlay(
                     Text(
                         text = uiState.submitFeedback!!,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = if (uiState.offlineEnqueued)
+                            MaterialTheme.colorScheme.tertiary   // soft amber: offline-queued
+                        else
+                            MaterialTheme.colorScheme.error,     // red: server/validation error
                     )
                 }
                 // Action row: Scansiona di nuovo always visible; Conferma appears when ≥1 field valid

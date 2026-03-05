@@ -69,6 +69,25 @@ fun DosNavGraph(
     val pendingCount by queueViewModel.pendingCount.collectAsStateWithLifecycle()
     val connStatus by connectivityViewModel.status.collectAsStateWithLifecycle()
 
+    // ── Auto-retry queued items on Offline→Online transition (foreground only) ─
+    // Detects the edge Offline→Online (possibly via Checking) and calls
+    // retryAll() once. The guard in retryAll() prevents concurrent invocations.
+    LaunchedEffect(Unit) {
+        var prevWasOffline = false
+        connectivityViewModel.status.collect { status ->
+            when (status) {
+                ConnectivityViewModel.ConnStatus.Offline -> prevWasOffline = true
+                ConnectivityViewModel.ConnStatus.Online  -> {
+                    if (prevWasOffline) {
+                        prevWasOffline = false
+                        queueViewModel.retryAll()
+                    }
+                }
+                else -> Unit  // Checking / Unconfigured — keep prevWasOffline as-is
+            }
+        }
+    }
+
     Scaffold(
         topBar = { ConnStatusBar(connStatus) },
         bottomBar = {

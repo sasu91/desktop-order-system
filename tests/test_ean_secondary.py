@@ -22,14 +22,12 @@ from src.persistence.csv_layer import CSVLayer
 # ---------------------------------------------------------------------------
 
 def make_sku(**kwargs) -> SKU:
-    defaults = dict(
-        sku="SKU001",
-        description="Test SKU",
-        ean=None,
-        ean_secondary=None,
+    return SKU(
+        sku=kwargs.get("sku", "SKU001"),
+        description=kwargs.get("description", "Test SKU"),
+        ean=kwargs.get("ean", None),
+        ean_secondary=kwargs.get("ean_secondary", None),
     )
-    defaults.update(kwargs)
-    return SKU(**defaults)
 
 
 @pytest.fixture
@@ -227,6 +225,7 @@ class TestSkuImportEanSecondary:
 
         assert preview.valid_rows == 1
         row = preview.rows[0]
+        assert row.sku_object is not None
         assert row.sku_object.ean_secondary == "9876543210987"
 
     def test_validate_row_warns_on_invalid_secondary_ean(self, data_dir):

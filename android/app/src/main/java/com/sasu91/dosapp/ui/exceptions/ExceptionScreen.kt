@@ -12,6 +12,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.sasu91.dosapp.ui.common.SkuAutocompleteField
 
 /**
  * Exception entry screen.
@@ -59,15 +60,18 @@ fun ExceptionScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // SKU
-            OutlinedTextField(
-                value = state.sku,
-                onValueChange = viewModel::onSkuChange,
-                label = { Text("SKU") },
-                isError = state.skuError != null,
+            // SKU — autocomplete field
+            SkuAutocompleteField(
+                query         = state.sku,
+                onQueryChange = viewModel::onSkuChange,
+                suggestions   = state.skuSuggestions,
+                expanded      = state.skuDropdownExpanded,
+                onDismiss     = viewModel::dismissSkuSuggestions,
+                onSelect      = viewModel::onSkuSelected,
+                isSearching   = state.isSearchingSkus,
+                label         = "SKU",
+                isError       = state.skuError != null,
                 supportingText = state.skuError?.let { { Text(it) } },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
             )
 
             // Event type selector

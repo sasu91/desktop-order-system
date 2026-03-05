@@ -12,7 +12,9 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -101,6 +103,13 @@ class OfflineQueueViewModel @Inject constructor(
     private val _busyIds = MutableStateFlow<Set<String>>(emptySet())
 
     /**
+     * True while [retryAll] is running — prevents concurrent auto+manual retry races.
+     * Exposed so callers (e.g. [DosNavGraph]) can gate additional triggers.
+     */
+    private val _isRetryingAll = MutableStateFlow(false)
+    val isRetryingAll: StateFlow<Boolean> = _isRetryingAll.asStateFlow()
+
+    /**
      * Full queue history merged from both typed tables, newest-first.
      * Re-emits whenever any DB row changes.
      */
@@ -143,6 +152,43 @@ class OfflineQueueViewModel @Inject constructor(
                 QueueType.EOD       -> eodRepo.retry(item.id)
             }
             _busyIds.value = _busyIds.value - item.id
+        }
+    }
+
+    /**
+     * Retry all PENDING / FAILED rows across every typed table, in chronological
+     * order (oldest-first). Single-flight: a concurrent call is ignored.
+     *
+     * Called automatically by [DosNavGraph] on Offline→Online transition.
+     * Also safe to call manually from the queue screen.
+     */
+    fun retryAll() {
+        if (_isRetryingAll.value) return
+        _isRetryingAll.value = true
+        viewModelScope.launch {
+            try {
+                // Snapshot current pending / failed rows
+                val exceptions = exceptionRepo.observePending().first()
+                val receipts   = receivingRepo.observePending().first()
+                val eods       = eodRepo.observePending().first()
+
+                // Mark them all as busy in the UI
+                val allIds = buildSet<String> {
+                    exceptions.forEach { add(it.clientEventId) }
+                    receipts.forEach   { add(it.clientReceiptId) }
+                    eods.forEach       { add(it.clientEodId) }
+                }
+                _busyIds.value = _busyIds.value + allIds
+
+                // Retry sequentially (oldest-first order is maintained by the DAOs)
+                exceptions.forEach { exceptionRepo.retry(it.clientEventId) }
+                receipts.forEach   { receivingRepo.retry(it.clientReceiptId) }
+                eods.forEach       { eodRepo.retry(it.clientEodId) }
+
+                _busyIds.value = _busyIds.value - allIds
+            } finally {
+                _isRetryingAll.value = false
+            }
         }
     }
 
