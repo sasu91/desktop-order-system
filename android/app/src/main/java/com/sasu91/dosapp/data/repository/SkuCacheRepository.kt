@@ -235,6 +235,39 @@ class SkuCacheRepository @Inject constructor(
     /** Remove all cached rows (e.g. when user changes backend URL). */
     suspend fun clearAll() = dao.deleteAll()
 
+    /**
+     * Add a new EAN alias for an existing SKU in the Room cache.
+     *
+     * Called after a successful `PATCH /skus/{sku}/bind-secondary-ean` so
+     * that the new barcode resolves immediately offline without a full
+     * [refreshAll] round-trip.
+     *
+     * Strategy:
+     * - Find the existing cache row for [skuCode] via [CachedSkuDao.getBySku].
+     * - If found: insert a new row with [newEan] as the primary key, copying
+     *   all other fields (description, stock, pack_size) from the template.
+     * - If no row exists yet for that SKU the cache is treated as cold for
+     *   this EAN — the next [resolveEan] call will populate it from the API.
+     *
+     * @return `true` when the alias row was written; `false` when the SKU was
+     *         not yet in the local cache (non-fatal — just means a cache miss
+     *         on first scan of the secondary EAN).
+     */
+    suspend fun addEanAlias(newEan: String, skuCode: String): Boolean {
+        val template = dao.getBySku(skuCode)
+        if (template == null) {
+            Log.d(TAG, "addEanAlias: no cached row for sku=$skuCode — alias not written locally")
+            return false
+        }
+        val aliasEntity = template.copy(
+            ean      = newEan,
+            cachedAt = System.currentTimeMillis(),
+        )
+        dao.upsert(aliasEntity)
+        Log.i(TAG, "addEanAlias: EAN '$newEan' → sku='$skuCode' added to Room cache")
+        return true
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------

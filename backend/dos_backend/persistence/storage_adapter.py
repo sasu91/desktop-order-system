@@ -317,7 +317,17 @@ class StorageAdapter(CSVLayer):
         """Search SKUs by query string"""
         # Always use CSV for search (SQLite full-text search not implemented yet)
         return self.csv_layer.search_skus(query)
-    
+
+    def bind_ean_secondary(self, sku_id: str, ean_secondary: Optional[str]) -> bool:
+        """
+        Patch only the ean_secondary field of an existing SKU.
+
+        Both CSV and SQLite paths delegate to the CSV layer for this targeted
+        operation (lightest possible write; SQLite is kept in sync on next
+        full re-read via read_skus).
+        """
+        return self.csv_layer.update_sku_ean_secondary(sku_id, ean_secondary)
+
     def update_sku_object(self, old_sku_id: str, sku_object: SKU) -> bool:
         """Update SKU (with potential SKU ID change)"""
         if self.is_sqlite_mode():
@@ -706,6 +716,7 @@ class StorageAdapter(CSVLayer):
             sku=d['sku'],
             description=d.get('description', ''),
             ean=d.get('ean'),
+            ean_secondary=d.get('ean_secondary') or None,
             moq=d.get('moq', 1),
             pack_size=d.get('pack_size', 1),
             lead_time_days=d.get('lead_time_days', 7),
@@ -744,6 +755,7 @@ class StorageAdapter(CSVLayer):
             'sku': sku.sku,
             'description': sku.description,
             'ean': sku.ean,
+            'ean_secondary': sku.ean_secondary,
             'moq': sku.moq,
             'pack_size': sku.pack_size,
             'lead_time_days': sku.lead_time_days,

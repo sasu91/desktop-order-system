@@ -29,7 +29,7 @@ class CSVLayer:
     
     # CSV file schemas (filename -> list of columns)
     SCHEMAS = {
-        "skus.csv": ["sku", "description", "ean", "moq", "pack_size", "lead_time_days", 
+        "skus.csv": ["sku", "description", "ean", "ean_secondary", "moq", "pack_size", "lead_time_days", 
                      "review_period", "safety_stock", "shelf_life_days", "min_shelf_life_days",
                      "waste_penalty_mode", "waste_penalty_factor", "waste_risk_threshold",
                      "max_stock", "reorder_point", "demand_variability", "category", "department",
@@ -358,6 +358,7 @@ class CSVLayer:
             "sku": final_sku.sku,
             "description": final_sku.description,
             "ean": final_sku.ean or "",
+            "ean_secondary": final_sku.ean_secondary or "",
             "moq": str(final_sku.moq),
             "pack_size": str(final_sku.pack_size),
             "lead_time_days": str(final_sku.lead_time_days),
@@ -567,6 +568,7 @@ class CSVLayer:
                 "sku": row.get("sku", "").strip(),
                 "description": row.get("description", "").strip(),
                 "ean": row.get("ean", "").strip(),
+                "ean_secondary": row.get("ean_secondary", "").strip(),
                 "moq": row.get("moq", "1").strip() or "1",
                 "pack_size": row.get("pack_size", "1").strip() or "1",
                 "lead_time_days": row.get("lead_time_days", "7").strip() or "7",
@@ -672,6 +674,33 @@ class CSVLayer:
         
         return True
     
+    def update_sku_ean_secondary(self, sku_id: str, ean_secondary: Optional[str]) -> bool:
+        """
+        Patch only the ean_secondary field of an existing SKU row.
+
+        Used by the Android bind endpoint to associate a secondary barcode
+        without re-writing every other SKU field.
+
+        Args:
+            sku_id: Existing SKU identifier.
+            ean_secondary: New secondary EAN (empty string or None to clear).
+
+        Returns:
+            True if the SKU was found and updated, False otherwise.
+        """
+        rows = self._read_csv("skus.csv")
+        updated = False
+        sku_id_norm = str(sku_id).strip()
+        new_val = (ean_secondary or "").strip()
+        for row in rows:
+            if str(row.get("sku", "")).strip() == sku_id_norm:
+                row["ean_secondary"] = new_val
+                updated = True
+                break
+        if updated:
+            self._write_csv("skus.csv", rows)
+        return updated
+
     def delete_sku(self, sku_id: str) -> bool:
         """
         Hard delete SKU from skus.csv.

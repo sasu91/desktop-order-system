@@ -8,6 +8,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Inventory
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
@@ -31,6 +32,7 @@ import com.sasu91.dosapp.ui.queue.OfflineQueueViewModel
 import com.sasu91.dosapp.ui.quickwaste.QuickWasteScreen
 import com.sasu91.dosapp.ui.receiving.ReceivingScreen
 import com.sasu91.dosapp.ui.scan.ScanScreen
+import com.sasu91.dosapp.ui.skubind.SkuEanBindScreen
 
 /** Navigation route definitions */
 sealed class Screen(val route: String, val label: String, val icon: ImageVector) {
@@ -44,9 +46,11 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector)
     object Eod        : Screen("eod?sku={sku}",  "Chiusura EOD",  Icons.Default.Today) {
         fun withSku(sku: String) = "eod?sku=$sku"
     }
+    /** Associate secondary EAN barcodes to SKUs. */
+    object SkuBind    : Screen("sku_bind",        "Abbina EAN",    Icons.Default.Link)
 }
 
-private val TOP_LEVEL_SCREENS = listOf(Screen.Scan, Screen.QuickWaste, Screen.Exceptions, Screen.Receiving, Screen.Eod, Screen.Queue)
+private val TOP_LEVEL_SCREENS = listOf(Screen.Scan, Screen.QuickWaste, Screen.Exceptions, Screen.Receiving, Screen.Eod, Screen.Queue, Screen.SkuBind)
 
 /**
  * Root navigation graph with a Material 3 bottom navigation bar.
@@ -157,6 +161,11 @@ fun DosNavGraph(
             // Offline queue screen
             composable(Screen.Queue.route) {
                 OfflineQueueScreen()
+            }
+
+            // SKU ↔ secondary EAN binding
+            composable(Screen.SkuBind.route) {
+                SkuEanBindScreen()
             }
         }
     }

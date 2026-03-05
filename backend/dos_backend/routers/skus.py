@@ -8,13 +8,20 @@ Errors
 """
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from ..api.auth import verify_token
 from ..api.deps import get_storage
-from ..api.errors import BadRequestError, NotFoundError
+from ..api.errors import BadRequestError, ConflictError, NotFoundError
 from ..domain.ledger import StockCalculator, validate_ean
-from ..schemas import SKUResponse, ScannerPreloadItem
+from ..schemas import (
+    BindSecondaryEanRequest,
+    BindSecondaryEanResponse,
+    SKUResponse,
+    ScannerPreloadItem,
+    SkuSearchResponse,
+    SkuSearchResult,
+)
 
 router = APIRouter(tags=["skus"])
 
@@ -152,3 +159,133 @@ def get_sku_by_ean(
         category=hit.category or "",
         department=hit.department or "",
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /skus/search   — autocomplete / SKU picker for Android bind tab
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/skus/search",
+    response_model=SkuSearchResponse,
+    summary="Cerca SKU per codice o descrizione (autocomplete)",
+    dependencies=[Depends(verify_token)],
+)
+def search_skus(
+    q: str = Query(default="", description="Stringa di ricerca (SKU code o descrizione)"),
+    limit: int = Query(default=20, ge=1, le=200, description="Numero massimo risultati"),
+    storage=Depends(get_storage),
+) -> SkuSearchResponse:
+    """
+    Ricerca full-text lato server su codice SKU e descrizione.
+
+    - `q` vuota → restituisce i primi `limit` SKU ordinati per código.
+    - La ricerca è case-insensitive e cerca per sottostringa.
+    - Usato dall'app Android per l'autocomplete nella tab Abbinamento EAN.
+    """
+    all_skus = storage.search_skus(q.strip()) if q.strip() else storage.read_skus()
+    # Sort: perfect-prefix match first, then alphabetical
+    q_lower = q.strip().lower()
+    if q_lower:
+        all_skus = sorted(
+            all_skus,
+            key=lambda s: (
+                0 if s.sku.lower().startswith(q_lower) else
+                1 if s.description.lower().startswith(q_lower) else 2,
+                s.sku.lower(),
+            ),
+        )
+    else:
+        all_skus = sorted(all_skus, key=lambda s: s.sku.lower())
+
+    results = [
+        SkuSearchResult(
+            sku=s.sku,
+            description=s.description,
+            ean=s.ean,
+            ean_secondary=s.ean_secondary,
+            in_assortment=s.in_assortment,
+        )
+        for s in all_skus[:limit]
+    ]
+    return SkuSearchResponse(query=q, results=results)
+
+
+# ---------------------------------------------------------------------------
+# PATCH /skus/{sku}/bind-secondary-ean
+# ---------------------------------------------------------------------------
+
+@router.patch(
+    "/skus/{sku}/bind-secondary-ean",
+    response_model=BindSecondaryEanResponse,
+    summary="Associa EAN secondario a uno SKU",
+    dependencies=[Depends(verify_token)],
+)
+def bind_secondary_ean(
+    sku: str,
+    body: BindSecondaryEanRequest,
+    storage=Depends(get_storage),
+) -> BindSecondaryEanResponse:
+    """
+    Associa (o rimuove) un EAN secondario a uno SKU esistente.
+
+    Regole di business:
+    - `sku` deve esistere nel catalogo → **404** se non trovato.
+    - `ean_secondary` vuoto → rimuove l'EAN secondario corrente (clear).
+    - `ean_secondary` non vuoto → validato come EAN (8/12/13 cifre) → **400** se non valido.
+    - `ean_secondary` uguale all'EAN primario dello stesso SKU → **409** (conflitto).
+    - `ean_secondary` già usato come primario o secondario da un *altro* SKU → **409**.
+
+    In caso di successo aggiorna `skus.csv` (campo ``ean_secondary``) e restituisce
+    i valori aggiornati.  Il preload scanner dell'app Android includerà il nuovo
+    alias dalla prossima chiamata a ``GET /skus/scanner-preload``.
+    """
+    sku = sku.strip()
+    new_ean = body.ean_secondary.strip()
+
+    # --- 1. SKU must exist ---
+    all_skus = storage.read_skus()
+    target = next((s for s in all_skus if s.sku == sku), None)
+    if target is None:
+        raise NotFoundError(f"SKU '{sku}' non trovato nel catalogo.")
+
+    # --- 2. If non-empty, validate EAN format ---
+    if new_ean:
+        ok, err_msg = validate_ean(new_ean)
+        if not ok:
+            raise BadRequestError(f"EAN non valido: {err_msg}")
+
+        # --- 3. Conflict: same as primary EAN of this SKU ---
+        if (target.ean or "").strip() == new_ean:
+            raise ConflictError(
+                f"L'EAN '{new_ean}' è già l'EAN primario di questo SKU."
+            )
+
+        # --- 4. Conflict: already in use by another SKU ---
+        conflict = next(
+            (
+                s for s in all_skus
+                if s.sku != sku and (
+                    (s.ean or "").strip() == new_ean
+                    or (s.ean_secondary or "").strip() == new_ean
+                )
+            ),
+            None,
+        )
+        if conflict is not None:
+            raise ConflictError(
+                f"L'EAN '{new_ean}' è già associato allo SKU '{conflict.sku}'."
+            )
+
+    # --- 5. Persist ---
+    updated = storage.bind_ean_secondary(sku, new_ean or None)
+    if not updated:
+        raise NotFoundError(f"SKU '{sku}' non trovato durante il salvataggio.")
+
+    stored_ean = new_ean if new_ean else None
+    msg = (
+        f"EAN secondario '{stored_ean}' associato a SKU '{sku}'."
+        if stored_ean
+        else f"EAN secondario rimosso da SKU '{sku}'."
+    )
+    return BindSecondaryEanResponse(sku=sku, ean_secondary=stored_ean, message=msg)

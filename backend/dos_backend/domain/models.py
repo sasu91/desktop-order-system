@@ -38,7 +38,8 @@ class SKU:
     """Stock Keeping Unit (inventory item) - immutable."""
     sku: str
     description: str
-    ean: Optional[str] = None  # EAN/GTIN; can be empty or invalid
+    ean: Optional[str] = None           # EAN/GTIN primary; can be empty or invalid
+    ean_secondary: Optional[str] = None  # EAN/GTIN secondary alias (optional)
     
     # Order parameters
     moq: int = 1                    # Minimum Order Quantity

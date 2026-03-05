@@ -103,6 +103,39 @@ class ScannerPreloadItem(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# SKU search / EAN bind (Android abbinamento EAN)
+# ---------------------------------------------------------------------------
+
+class SkuSearchResult(BaseModel):
+    """Lightweight SKU row for autocomplete / search results."""
+    sku: str
+    description: str
+    ean: Optional[str] = None
+    ean_secondary: Optional[str] = None
+    in_assortment: bool = True
+
+
+class SkuSearchResponse(BaseModel):
+    query: str
+    results: list[SkuSearchResult]
+
+
+class BindSecondaryEanRequest(BaseModel):
+    """Request body for PATCH /skus/{sku}/bind-secondary-ean."""
+    ean_secondary: str = Field(
+        ...,
+        description="EAN to associate as secondary barcode; pass empty string to clear.",
+    )
+
+
+class BindSecondaryEanResponse(BaseModel):
+    """Response for a successful secondary-EAN bind."""
+    sku: str
+    ean_secondary: Optional[str] = None
+    message: str
+
+
+# ---------------------------------------------------------------------------
 # Stock
 # ---------------------------------------------------------------------------
 

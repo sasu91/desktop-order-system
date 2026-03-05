@@ -136,4 +136,38 @@ interface DosApiService {
     suspend fun closeEod(
         @Body body: EodCloseRequestDto,
     ): Response<EodCloseResponseDto>
+
+    // -----------------------------------------------------------------------
+    // GET /api/v1/skus/search  — SKU autocomplete for the bind-EAN tab
+    // -----------------------------------------------------------------------
+    /**
+     * Server-side case-insensitive substring search on SKU code and description.
+     *
+     * @param q      Search string (empty = return top results).
+     * @param limit  Max number of results to return (default 20, max 200).
+     */
+    @GET("api/v1/skus/search")
+    suspend fun searchSkus(
+        @Query("q")     q: String,
+        @Query("limit") limit: Int = 20,
+    ): Response<SkuSearchResponseDto>
+
+    // -----------------------------------------------------------------------
+    // PATCH /api/v1/skus/{sku}/bind-secondary-ean
+    // -----------------------------------------------------------------------
+    /**
+     * Associate (or clear) a secondary EAN barcode for a SKU.
+     *
+     * The server enforces uniqueness: if [BindSecondaryEanRequestDto.eanSecondary]
+     * is already used by another SKU the call returns HTTP 409.
+     * Pass an empty string to clear an existing secondary EAN association.
+     *
+     * HTTP 200 = updated (or no-op if same value). HTTP 404 = SKU not found.
+     * HTTP 409 = EAN conflict with another SKU.
+     */
+    @PATCH("api/v1/skus/{sku}/bind-secondary-ean")
+    suspend fun bindSecondaryEan(
+        @Path("sku")  sku: String,
+        @Body         body: BindSecondaryEanRequestDto,
+    ): Response<BindSecondaryEanResponseDto>
 }
