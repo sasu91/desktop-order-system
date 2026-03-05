@@ -1,6 +1,51 @@
 {
   "components": {
     "schemas": {
+      "BindSecondaryEanRequest": {
+        "description": "Request body for PATCH /skus/{sku}/bind-secondary-ean.",
+        "properties": {
+          "ean_secondary": {
+            "description": "EAN to associate as secondary barcode; pass empty string to clear.",
+            "title": "Ean Secondary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ean_secondary"
+        ],
+        "title": "BindSecondaryEanRequest",
+        "type": "object"
+      },
+      "BindSecondaryEanResponse": {
+        "description": "Response for a successful secondary-EAN bind.",
+        "properties": {
+          "ean_secondary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ean Secondary"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "sku": {
+            "title": "Sku",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sku",
+          "message"
+        ],
+        "title": "BindSecondaryEanResponse",
+        "type": "object"
+      },
       "DailyUpsertRequest": {
         "properties": {
           "date": {
@@ -723,6 +768,17 @@
             ],
             "title": "Ean"
           },
+          "ean_secondary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ean Secondary"
+          },
           "ean_valid": {
             "default": true,
             "title": "Ean Valid",
@@ -768,6 +824,112 @@
           "description"
         ],
         "title": "SKUResponse",
+        "type": "object"
+      },
+      "ScannerPreloadItem": {
+        "description": "Single EAN→SKU+stock row for the Android offline scanner cache.\n\nOne row per barcode alias: if a SKU has both *ean* and *ean_secondary*,\ntwo rows are returned (same sku/stock data, different ``ean`` value).",
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "ean": {
+            "title": "Ean",
+            "type": "string"
+          },
+          "on_hand": {
+            "default": 0,
+            "title": "On Hand",
+            "type": "integer"
+          },
+          "on_order": {
+            "default": 0,
+            "title": "On Order",
+            "type": "integer"
+          },
+          "pack_size": {
+            "default": 1,
+            "title": "Pack Size",
+            "type": "integer"
+          },
+          "sku": {
+            "title": "Sku",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ean",
+          "sku",
+          "description"
+        ],
+        "title": "ScannerPreloadItem",
+        "type": "object"
+      },
+      "SkuSearchResponse": {
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SkuSearchResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "query",
+          "results"
+        ],
+        "title": "SkuSearchResponse",
+        "type": "object"
+      },
+      "SkuSearchResult": {
+        "description": "Lightweight SKU row for autocomplete / search results.",
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "ean": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ean"
+          },
+          "ean_secondary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ean Secondary"
+          },
+          "in_assortment": {
+            "default": true,
+            "title": "In Assortment",
+            "type": "boolean"
+          },
+          "sku": {
+            "title": "Sku",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sku",
+          "description"
+        ],
+        "title": "SkuSearchResult",
         "type": "object"
       },
       "StockDetailResponse": {
@@ -1311,6 +1473,160 @@
           }
         ],
         "summary": "Cerca SKU per EAN",
+        "tags": [
+          "skus"
+        ]
+      }
+    },
+    "/api/v1/skus/scanner-preload": {
+      "get": {
+        "description": "Restituisce tutti gli SKU *in assortimento* con barcode e stock corrente\n(END_OF_DAY di oggi).\n\nSe uno SKU ha sia EAN primario che EAN secondario, vengono emesse due righe\ncon lo stesso sku/stock ma EAN diverso — l'app li inserisce come alias\nseparati nella cache Room.\n\nUsato dall'app Android per pre-popolare la cache offline prima della prima\nscansione, senza richiedere connessione al momento della scansione.",
+        "operationId": "get_scanner_preload_api_v1_skus_scanner_preload_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ScannerPreloadItem"
+                  },
+                  "title": "Response Get Scanner Preload Api V1 Skus Scanner Preload Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Pre-carica catalogo barcode per scanner offline",
+        "tags": [
+          "skus"
+        ]
+      }
+    },
+    "/api/v1/skus/search": {
+      "get": {
+        "description": "Ricerca full-text lato server su codice SKU e descrizione.\n\n- `q` vuota → restituisce i primi `limit` SKU ordinati per código.\n- La ricerca è case-insensitive e cerca per sottostringa.\n- Usato dall'app Android per l'autocomplete nella tab Abbinamento EAN.",
+        "operationId": "search_skus_api_v1_skus_search_get",
+        "parameters": [
+          {
+            "description": "Stringa di ricerca (SKU code o descrizione)",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "description": "Stringa di ricerca (SKU code o descrizione)",
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Numero massimo risultati",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Numero massimo risultati",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkuSearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cerca SKU per codice o descrizione (autocomplete)",
+        "tags": [
+          "skus"
+        ]
+      }
+    },
+    "/api/v1/skus/{sku}/bind-secondary-ean": {
+      "patch": {
+        "description": "Associa (o rimuove) un EAN secondario a uno SKU esistente.\n\nRegole di business:\n- `sku` deve esistere nel catalogo → **404** se non trovato.\n- `ean_secondary` vuoto → rimuove l'EAN secondario corrente (clear).\n- `ean_secondary` non vuoto → validato come EAN (8/12/13 cifre) → **400** se non valido.\n- `ean_secondary` uguale all'EAN primario dello stesso SKU → **409** (conflitto).\n- `ean_secondary` già usato come primario o secondario da un *altro* SKU → **409**.\n\nIn caso di successo aggiorna `skus.csv` (campo ``ean_secondary``) e restituisce\ni valori aggiornati.  Il preload scanner dell'app Android includerà il nuovo\nalias dalla prossima chiamata a ``GET /skus/scanner-preload``.",
+        "operationId": "bind_secondary_ean_api_v1_skus__sku__bind_secondary_ean_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sku",
+            "required": true,
+            "schema": {
+              "title": "Sku",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BindSecondaryEanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BindSecondaryEanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Associa EAN secondario a uno SKU",
         "tags": [
           "skus"
         ]
