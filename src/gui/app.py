@@ -362,7 +362,7 @@ class DesktopOrderApp:
         eod_btn.pack(side="left", padx=20)
         
         # Tooltip hint
-        ttk.Label(controls_frame, text="(Doppio click su Stock EOD per modificare)", font=("Helvetica", 8, "italic"), foreground="#777").pack(side="left", padx=5)
+        ttk.Label(controls_frame, text="(Doppio click su Stock EOD per modificare · Tab per riga successiva)", font=("Helvetica", 8, "italic"), foreground="#777").pack(side="left", padx=5)
         
         # Right panel: Audit Timeline
         right_panel = ttk.LabelFrame(main_frame, text="📋 Storico Audit (Seleziona SKU)", padding=5)
@@ -2025,18 +2025,16 @@ class DesktopOrderApp:
             self.proposal_details_text.config(state="disabled")
             return
         
-        item = self.proposal_treeview.item(selected[0])
-        values = item["values"]
-        # Tkinter may return numeric-looking strings as integers; normalise to str
-        sku = str(values[0]).strip()
+        # iid is set to proposal.sku on insert — read it directly, never loses leading zeros
+        sku = selected[0]
         
-        # Find proposal — compare as strings to guard against any type coercion
-        proposal = next((p for p in self.current_proposals if str(p.sku).strip() == sku), None)
+        # Find proposal
+        proposal = next((p for p in self.current_proposals if p.sku == sku), None)
         if not proposal:
             logger.warning(
                 f"_on_proposal_select: SKU {sku!r} not found in current_proposals "
                 f"(total={len(self.current_proposals)}, "
-                f"skus={[str(p.sku) for p in self.current_proposals[:5]]})"
+                f"skus={[p.sku for p in self.current_proposals[:5]]})"
             )
             return
         
@@ -3396,6 +3394,7 @@ class DesktopOrderApp:
             self.proposal_treeview.insert(
                 "",
                 "end",
+                iid=proposal.sku,  # use SKU as row identifier — never loses leading zeros
                 values=self._build_proposal_row_values(proposal),
                 tags=tags
             )
@@ -3500,12 +3499,10 @@ class DesktopOrderApp:
 
         column_name = columns[column_index]
 
-        item = self.proposal_treeview.item(selected[0])
-        values = item["values"]
-        # Tkinter may coerce numeric-looking SKUs to int; normalise to str
-        sku = str(values[0]).strip()
+        # iid is set to proposal.sku on insert — read it directly, never loses leading zeros
+        sku = selected[0]
 
-        proposal = next((p for p in self.current_proposals if str(p.sku).strip() == sku), None)
+        proposal = next((p for p in self.current_proposals if p.sku == sku), None)
         if not proposal:
             return
 
@@ -7818,69 +7815,105 @@ class DesktopOrderApp:
             self.audit_timeline_treeview.insert("", "end", values=(f"Error: {str(e)}", "", "", ""))
     
     def _on_stock_eod_double_click(self, event):
-        """Handle double-click on EOD Stock column for editing."""
-        # Identify which column was clicked
+        """Handle double-click on EOD Stock column — opens inline cell editor."""
         region = self.stock_treeview.identify_region(event.x, event.y)
         if region != "cell":
             return
-        
+
         column = self.stock_treeview.identify_column(event.x)
-        # EOD Stock is column #6 (0-indexed: #0, #1=SKU, #2=Desc, #3=OnHand, #4=OnOrder, #5=Available, #6=EOD)
+        # EOD Stock is column #6 (columns: #1=SKU, #2=Desc, #3=OnHand, #4=OnOrder, #5=Available, #6=EOD)
         if column != "#6":
             return
-        
-        # Get selected item
-        selection = self.stock_treeview.selection()
-        if not selection:
+
+        row_id = self.stock_treeview.identify_row(event.y)
+        if not row_id:
             return
-        
-        item_id = selection[0]
+
+        self._open_eod_inline_editor(row_id, column)
+
+    def _open_eod_inline_editor(self, item_id, column_id):
+        """Place an inline Entry widget directly over the EOD Stock cell."""
         item = self.stock_treeview.item(item_id)
-        # Use iid directly — set to the original SKU string on insert, never loses leading zeros.
+        # item_id == iid == original SKU string (never loses leading zeros)
         sku = item_id
-        on_hand_display = item["values"][2]  # formatted string e.g. "15 pz (1.5 colli)"
-        
-        # Look up pack_size for this SKU
+
+        # Look up pack_size
         skus_by_id = {str(s.sku).strip(): s for s in self.csv_layer.read_skus()}
         sku_obj = skus_by_id.get(sku)
         pack_size = (sku_obj.pack_size if sku_obj and sku_obj.pack_size else 1)
-        
-        # Compute initial colli value from currently stored pezzi (if any)
+
+        # Current value in colli
         current_pezzi = self.eod_stock_edits.get(sku)
         if current_pezzi is not None:
-            initial_colli = round(current_pezzi / pack_size, 4) if pack_size > 0 else current_pezzi
+            initial_colli = str(round(current_pezzi / pack_size, 4) if pack_size > 0 else current_pezzi)
         else:
-            initial_colli = 0.0
-        
-        # Show dialog to edit EOD stock in COLLI
-        unit_hint = f"(pack={pack_size} pz/collo)" if pack_size > 1 else "(pack=1 pz)"
-        new_eod_colli = simpledialog.askfloat(
-            "Inserisci Stock EOD",
-            f"SKU: {sku}  {unit_hint}\nGiacenza corrente: {on_hand_display}\n\nInserisci stock a fine giornata in COLLI:",
-            minvalue=0.0,
-            initialvalue=initial_colli,
-        )
-        
-        if new_eod_colli is None:
-            return  # User cancelled
-        
-        # Convert colli -> pezzi (round half-up) and store
-        new_eod_pezzi = colli_to_pezzi(new_eod_colli, pack_size)
-        self.eod_stock_edits[sku] = new_eod_pezzi
-        
-        # Update display
-        self.stock_treeview.item(
-            item_id,
-            values=(
-                item_id,            # SKU — use iid (original string) to preserve leading zeros
-                item["values"][1],  # Description
-                item["values"][2],  # On Hand
-                item["values"][3],  # On Order
-                item["values"][4],  # Available
-                format_pezzi_colli(new_eod_pezzi, pack_size),  # EOD Stock
-            ),
-            tags=("eod_edited",),
-        )
+            initial_colli = ""
+
+        # Cell bounding box
+        bbox = self.stock_treeview.bbox(item_id, column_id)
+        if not bbox:
+            return
+        x, y, width, height = bbox
+
+        # Entry widget placed over the cell
+        entry_var = tk.StringVar(value=initial_colli)
+        entry = ttk.Entry(self.stock_treeview, textvariable=entry_var, justify="center")
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.focus_set()
+        entry.select_range(0, tk.END)
+
+        def _commit(event=None):
+            raw = entry_var.get().strip().replace(",", ".")
+            if raw == "":
+                entry.destroy()
+                return
+            try:
+                new_colli = float(raw)
+                if new_colli < 0:
+                    entry.destroy()
+                    return
+            except ValueError:
+                entry.destroy()
+                return
+
+            new_pezzi = colli_to_pezzi(new_colli, pack_size)
+            self.eod_stock_edits[sku] = new_pezzi
+
+            self.stock_treeview.item(
+                item_id,
+                values=(
+                    item_id,            # SKU — iid preserves leading zeros
+                    item["values"][1],  # Description
+                    item["values"][2],  # On Hand
+                    item["values"][3],  # On Order
+                    item["values"][4],  # Available
+                    format_pezzi_colli(new_pezzi, pack_size),  # EOD Stock
+                ),
+                tags=("eod_edited",),
+            )
+            entry.destroy()
+
+            # Tab → move to next row and open its editor
+            if event and getattr(event, "keysym", None) == "Tab":
+                all_rows = self.stock_treeview.get_children()
+                try:
+                    idx = list(all_rows).index(item_id)
+                    next_id = all_rows[idx + 1] if idx + 1 < len(all_rows) else None
+                except (ValueError, IndexError):
+                    next_id = None
+                if next_id:
+                    self.stock_treeview.selection_set(next_id)
+                    self.stock_treeview.see(next_id)
+                    self.stock_treeview.after(30, lambda: self._open_eod_inline_editor(next_id, "#6"))
+
+        def _cancel(event=None):
+            entry.destroy()
+
+        entry.bind("<Return>", _commit)
+        entry.bind("<KP_Enter>", _commit)
+        entry.bind("<Tab>", _commit)
+        entry.bind("<Escape>", _cancel)
+        entry.bind("<FocusOut>", _cancel)
     
     def _filter_stock_table(self):
         """Filter stock table based on search input."""
