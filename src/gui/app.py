@@ -3502,9 +3502,10 @@ class DesktopOrderApp:
 
         item = self.proposal_treeview.item(selected[0])
         values = item["values"]
-        sku = values[0]
+        # Tkinter may coerce numeric-looking SKUs to int; normalise to str
+        sku = str(values[0]).strip()
 
-        proposal = next((p for p in self.current_proposals if p.sku == sku), None)
+        proposal = next((p for p in self.current_proposals if str(p.sku).strip() == sku), None)
         if not proposal:
             return
 
@@ -7707,6 +7708,7 @@ class DesktopOrderApp:
             item_id = self.stock_treeview.insert(
                 "",
                 "end",
+                iid=sku_id,  # use SKU as row identifier so selection[0] always returns the exact string
                 values=(
                     stock.sku,
                     description,
@@ -7730,9 +7732,9 @@ class DesktopOrderApp:
             self.audit_timeline_treeview.delete(*self.audit_timeline_treeview.get_children())
             return
         
-        # Get selected SKU
-        item = self.stock_treeview.item(selection[0])
-        sku_code = item["values"][0]
+        # Use iid directly — it is set to the original SKU string on insert,
+        # so it never loses leading zeros through int coercion.
+        sku_code = selection[0]
         self.selected_sku_for_audit = sku_code
         
         # Update label
@@ -7834,11 +7836,12 @@ class DesktopOrderApp:
         
         item_id = selection[0]
         item = self.stock_treeview.item(item_id)
-        sku = item["values"][0]
+        # Use iid directly — set to the original SKU string on insert, never loses leading zeros.
+        sku = item_id
         on_hand_display = item["values"][2]  # formatted string e.g. "15 pz (1.5 colli)"
         
         # Look up pack_size for this SKU
-        skus_by_id = {s.sku: s for s in self.csv_layer.read_skus()}
+        skus_by_id = {str(s.sku).strip(): s for s in self.csv_layer.read_skus()}
         sku_obj = skus_by_id.get(sku)
         pack_size = (sku_obj.pack_size if sku_obj and sku_obj.pack_size else 1)
         
@@ -7869,7 +7872,7 @@ class DesktopOrderApp:
         self.stock_treeview.item(
             item_id,
             values=(
-                item["values"][0],  # SKU
+                item_id,            # SKU — use iid (original string) to preserve leading zeros
                 item["values"][1],  # Description
                 item["values"][2],  # On Hand
                 item["values"][3],  # On Order
@@ -7891,7 +7894,8 @@ class DesktopOrderApp:
         # Filter items
         for item_id in self.stock_treeview.get_children():
             item = self.stock_treeview.item(item_id)
-            sku = str(item["values"][0]).lower()
+            # item_id == iid == original SKU string (preserves leading zeros)
+            sku = item_id.lower()
             description = str(item["values"][1]).lower()
             
             # Show if matches SKU or description
@@ -12461,7 +12465,7 @@ class DesktopOrderApp:
             # Get window details from treeview
             item = self.promo_treeview.item(selected[0])
             values = item["values"]
-            sku = values[0]
+            sku = str(values[0]).strip()
             start_str = values[1]
             end_str = values[2]
             store_id_display = values[4]
