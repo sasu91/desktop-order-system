@@ -1580,6 +1580,8 @@ class DesktopOrderApp:
         # Bind double-click to edit and single-click to show details
         self.proposal_treeview.bind("<Double-1>", self._on_proposal_double_click)
         self.proposal_treeview.bind("<<TreeviewSelect>>", self._on_proposal_select)
+        # Also bind Button-1 so clicking an already-selected row re-populates the panel
+        self.proposal_treeview.bind("<Button-1>", lambda e: self.proposal_treeview.after(50, lambda: self._on_proposal_select(e)))
         
         # ── RIGHT SIDE: Dettagli Calcolo — full-height right pane of outer PanedWindow ──
         details_outer = ttk.LabelFrame(self.order_outer_paned, text="Dettagli Calcolo", padding=5)
@@ -2000,6 +2002,20 @@ class DesktopOrderApp:
 
     def _on_proposal_select(self, event):
         """Handle selection of proposal to show calculation details."""
+        try:
+            self._on_proposal_select_impl(event)
+        except Exception as exc:
+            logger.error(f"_on_proposal_select error: {exc}", exc_info=True)
+            try:
+                self.proposal_details_text.config(state="normal")
+                self.proposal_details_text.delete("1.0", tk.END)
+                self.proposal_details_text.insert("1.0", f"[Errore caricamento dettagli: {exc}]")
+                self.proposal_details_text.config(state="disabled")
+            except Exception:
+                pass
+
+    def _on_proposal_select_impl(self, event):
+        """Implementation of proposal selection handler (exceptions propagate to caller)."""
         selected = self.proposal_treeview.selection()
         if not selected:
             # Clear details if no selection
@@ -2011,11 +2027,17 @@ class DesktopOrderApp:
         
         item = self.proposal_treeview.item(selected[0])
         values = item["values"]
-        sku = values[0]
+        # Tkinter may return numeric-looking strings as integers; normalise to str
+        sku = str(values[0]).strip()
         
-        # Find proposal
-        proposal = next((p for p in self.current_proposals if p.sku == sku), None)
+        # Find proposal — compare as strings to guard against any type coercion
+        proposal = next((p for p in self.current_proposals if str(p.sku).strip() == sku), None)
         if not proposal:
+            logger.warning(
+                f"_on_proposal_select: SKU {sku!r} not found in current_proposals "
+                f"(total={len(self.current_proposals)}, "
+                f"skus={[str(p.sku) for p in self.current_proposals[:5]]})"
+            )
             return
         
         # Get SKU object for pack_size

@@ -1,0 +1,379 @@
+# Code Citations
+
+## License: unknown
+https://github.com/facecrm/facecrm-android-sdk/blob/691f481b5e4c7c65f05c0a621f99080c07518ef7/README.md
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`
+```
+
+
+## License: unknown
+https://github.com/barillari/Squarechan/blob/1c317f58e6d21298f2708038e61939f3dd271a7a/android/squarechan/src/main/AndroidManifest.xml-template
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`android
+```
+
+
+## License: unknown
+https://github.com/facecrm/facecrm-android-sdk/blob/691f481b5e4c7c65f05c0a621f99080c07518ef7/README.md
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`
+```
+
+
+## License: unknown
+https://github.com/barillari/Squarechan/blob/1c317f58e6d21298f2708038e61939f3dd271a7a/android/squarechan/src/main/AndroidManifest.xml-template
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`android
+```
+
+
+## License: unknown
+https://github.com/facecrm/facecrm-android-sdk/blob/691f481b5e4c7c65f05c0a621f99080c07518ef7/README.md
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`
+```
+
+
+## License: unknown
+https://github.com/barillari/Squarechan/blob/1c317f58e6d21298f2708038e61939f3dd271a7a/android/squarechan/src/main/AndroidManifest.xml-template
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`android
+```
+
+
+## License: unknown
+https://github.com/facecrm/facecrm-android-sdk/blob/691f481b5e4c7c65f05c0a621f99080c07518ef7/README.md
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`
+```
+
+
+## License: unknown
+https://github.com/barillari/Squarechan/blob/1c317f58e6d21298f2708038e61939f3dd271a7a/android/squarechan/src/main/AndroidManifest.xml-template
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`android
+```
+
+
+## License: unknown
+https://github.com/facecrm/facecrm-android-sdk/blob/691f481b5e4c7c65f05c0a621f99080c07518ef7/README.md
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`
+```
+
+
+## License: unknown
+https://github.com/barillari/Squarechan/blob/1c317f58e6d21298f2708038e61939f3dd271a7a/android/squarechan/src/main/AndroidManifest.xml-template
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`android
+```
+
+
+## License: unknown
+https://github.com/facecrm/facecrm-android-sdk/blob/691f481b5e4c7c65f05c0a621f99080c07518ef7/README.md
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`
+```
+
+
+## License: unknown
+https://github.com/barillari/Squarechan/blob/1c317f58e6d21298f2708038e61939f3dd271a7a/android/squarechan/src/main/AndroidManifest.xml-template
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`android
+```
+
+
+## License: unknown
+https://github.com/facecrm/facecrm-android-sdk/blob/691f481b5e4c7c65f05c0a621f99080c07518ef7/README.md
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`
+```
+
+
+## License: unknown
+https://github.com/barillari/Squarechan/blob/1c317f58e6d21298f2708038e61939f3dd271a7a/android/squarechan/src/main/AndroidManifest.xml-template
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`android
+```
+
+
+## License: unknown
+https://github.com/facecrm/facecrm-android-sdk/blob/691f481b5e4c7c65f05c0a621f99080c07518ef7/README.md
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`
+```
+
+
+## License: unknown
+https://github.com/barillari/Squarechan/blob/1c317f58e6d21298f2708038e61939f3dd271a7a/android/squarechan/src/main/AndroidManifest.xml-template
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`android
+```
+
+
+## License: unknown
+https://github.com/barillari/Squarechan/blob/1c317f58e6d21298f2708038e61939f3dd271a7a/android/squarechan/src/main/AndroidManifest.xml-template
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`android
+```
+
+
+## License: unknown
+https://github.com/facecrm/facecrm-android-sdk/blob/691f481b5e4c7c65f05c0a621f99080c07518ef7/README.md
+
+```
+All correct. Here's a complete summary:
+
+---
+
+### AndroidManifest.xml — no changes needed
+
+Already has:
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="false" />
+```
+
+`android
+```
+
