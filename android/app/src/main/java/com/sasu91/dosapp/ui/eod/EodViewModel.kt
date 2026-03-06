@@ -7,7 +7,7 @@ import com.sasu91.dosapp.data.api.dto.EodCloseRequestDto
 import com.sasu91.dosapp.data.api.dto.EodEntryDto
 import com.sasu91.dosapp.data.api.dto.SkuSearchResultDto
 import com.sasu91.dosapp.data.repository.EodRepository
-import com.sasu91.dosapp.data.repository.SkuEanBindRepository
+import com.sasu91.dosapp.data.repository.SkuCacheRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
@@ -69,7 +69,7 @@ data class EodUiState(
 @HiltViewModel
 class EodViewModel @Inject constructor(
     private val repo: EodRepository,
-    private val skuSearchRepo: SkuEanBindRepository,
+    private val skuCache: SkuCacheRepository,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -106,15 +106,9 @@ class EodViewModel @Inject constructor(
             return
         }
         _state.update { it.copy(isSearchingSkus = true, skuSuggestionsForId = localId) }
-        val result = skuSearchRepo.searchSkus(query.trim())
-        _state.update { s ->
-            when (result) {
-                is SkuEanBindRepository.SearchResult.Success ->
-                    s.copy(isSearchingSkus = false, skuSuggestions = result.items)
-                is SkuEanBindRepository.SearchResult.Error ->
-                    s.copy(isSearchingSkus = false, skuSuggestions = emptyList())
-            }
-        }
+        // Always search Room cache — never call the API for autocomplete.
+        val items: List<SkuSearchResultDto> = skuCache.searchSkus(query.trim())
+        _state.update { it.copy(isSearchingSkus = false, skuSuggestions = items, skuSuggestionsForId = localId) }
     }
 
     // -----------------------------------------------------------------------

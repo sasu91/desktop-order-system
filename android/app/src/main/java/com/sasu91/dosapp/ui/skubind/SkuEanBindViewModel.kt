@@ -88,15 +88,11 @@ class SkuEanBindViewModel @Inject constructor(
             return
         }
         _state.update { it.copy(isSearching = true) }
-        val result = bindRepo.searchSkus(query.trim())
-        _state.update { s ->
-            when (result) {
-                is SkuEanBindRepository.SearchResult.Success ->
-                    s.copy(isSearching = false, suggestions = result.items)
-                is SkuEanBindRepository.SearchResult.Error ->
-                    s.copy(isSearching = false, suggestions = emptyList())
-            }
-        }
+        // Always search Room cache — covers SKU code, description, primary EAN and
+        // secondary EAN (stored as a separate row; same sku/description, different ean).
+        // Never calls the API for autocomplete; bindRepo is used only for the actual bind.
+        val items = cacheRepo.searchSkus(query.trim())
+        _state.update { it.copy(isSearching = false, suggestions = items) }
     }
 
     // -----------------------------------------------------------------------

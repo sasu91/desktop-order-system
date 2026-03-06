@@ -30,12 +30,18 @@ interface CachedSkuDao {
     suspend fun count(): Int
 
     /**
-     * Full-text autocomplete search across [sku], [description] and [ean].
+     * Full-text autocomplete search across [sku], [description], primary EAN
+     * and **secondary EAN**.
+     *
+     * The cache stores one row per distinct EAN barcode: when a SKU has both a
+     * primary and a secondary EAN the preload writes two rows with the same
+     * [sku]/[description] but different [ean] values.  Searching by [ean] therefore
+     * covers _both_ barcodes transparently — no extra column is needed.
      *
      * [pattern] must already include SQL wildcards (e.g. "%milk%").
      * Results are ordered by [sku] alphabetically and capped at [limit] rows.
-     * A single SKU may appear multiple times if it has several cached EAN rows;
-     * the caller is responsible for deduplication (e.g. [distinctBy] in Kotlin).
+     * A single SKU may appear multiple times (two EAN rows); the caller must
+     * deduplicate via [distinctBy { it.sku }] before returning to the UI.
      */
     @Query("""
         SELECT * FROM cached_skus
