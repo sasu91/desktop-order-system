@@ -151,11 +151,16 @@ class QuickWasteViewModel @Inject constructor(
     }
 
     /**
-     * Post all accumulated waste entries to the server (one WASTE event per SKU).
-     * Partial success: entries that fail with [ApiResult.NetworkError] are
-     * enqueued offline by [ExceptionRepository]; hard [ApiResult.ApiError]s
-     * are reported.  The accumulator is cleared on success regardless of
-     * partial failures (user can see summary and retry via offline queue).
+     * Queue all accumulated waste entries directly into the Room offline queue
+     * (one WASTE event per SKU) **without** attempting an API call.
+     *
+     * **Queue-first strategy** (same as the scan quick-action screen):
+     * the operator is never blocked by network availability.  The
+     * [OfflineQueueViewModel] retry loop will flush the queue to the backend
+     * when connectivity is available.
+     *
+     * All entries always end up in [CommitSummary.queued]; [succeeded] and
+     * [failed] are always 0.
      *
      * @param date  YYYY-MM-DD string — pass today's date from the UI layer.
      */
@@ -166,9 +171,7 @@ class QuickWasteViewModel @Inject constructor(
         _state.update { it.copy(sessionState = WasteSessionState.COMMITTING) }
 
         viewModelScope.launch {
-            var succeeded = 0
-            var queued    = 0
-            val failedSkus = mutableListOf<String>()
+            var queued = 0
 
             for (entry in accumulator.values.toList()) {
                 val request = ExceptionRequestDto(
@@ -178,23 +181,17 @@ class QuickWasteViewModel @Inject constructor(
                     qty   = entry.qty.toDouble(),
                     note  = "quick_waste",
                 )
-                when (val result = exceptionRepo.postException(request)) {
-                    is ExceptionRepository.PostResult.Sent          -> succeeded++
-                    is ExceptionRepository.PostResult.OfflineEnqueued -> queued++
-                    is ExceptionRepository.PostResult.Error         -> {
-                        Log.w(TAG, "WASTE failed for ${entry.sku}: ${result.message}")
-                        failedSkus += entry.sku
-                    }
-                }
+                exceptionRepo.enqueueOnly(request)
+                queued++
             }
 
             val summary = CommitSummary(
-                succeeded  = succeeded,
+                succeeded  = 0,
                 queued     = queued,
-                failed     = failedSkus.size,
-                failedSkus = failedSkus,
+                failed     = 0,
+                failedSkus = emptyList(),
             )
-            Log.i(TAG, "Commit done: $succeeded sent, $queued queued, ${failedSkus.size} failed")
+            Log.i(TAG, "Commit done: $queued events queued for offline flush")
 
             accumulator.clear()
             _state.update {
