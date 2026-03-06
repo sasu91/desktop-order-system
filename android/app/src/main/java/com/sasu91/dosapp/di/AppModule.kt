@@ -14,6 +14,7 @@ import com.sasu91.dosapp.data.db.DosDatabase
 import com.sasu91.dosapp.data.db.dao.CachedSkuDao
 import com.sasu91.dosapp.data.db.dao.DraftEodDao
 import com.sasu91.dosapp.data.db.dao.DraftReceiptDao
+import com.sasu91.dosapp.data.db.dao.PendingBindDao
 import com.sasu91.dosapp.data.db.dao.PendingExceptionDao
 import com.sasu91.dosapp.data.db.dao.PendingRequestDao
 import dagger.Module
@@ -149,7 +150,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): DosDatabase =
         Room.databaseBuilder(ctx, DosDatabase::class.java, "dos_offline.db")
-            .addMigrations(DosDatabase.MIGRATION_1_2, DosDatabase.MIGRATION_2_3, DosDatabase.MIGRATION_3_4)
+            .addMigrations(DosDatabase.MIGRATION_1_2, DosDatabase.MIGRATION_2_3, DosDatabase.MIGRATION_3_4, DosDatabase.MIGRATION_4_5)
             .fallbackToDestructiveMigration()            // safety net for dev builds
             .build()
 
@@ -182,4 +183,9 @@ object AppModule {
     @Provides
     fun provideCachedSkuDao(db: DosDatabase): CachedSkuDao =
         db.cachedSkuDao()
+
+    /** Typed outbox for secondary-EAN bind operations. */
+    @Provides
+    fun providePendingBindDao(db: DosDatabase): PendingBindDao =
+        db.pendingBindDao()
 }

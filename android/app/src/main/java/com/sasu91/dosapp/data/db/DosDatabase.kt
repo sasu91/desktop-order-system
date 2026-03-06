@@ -7,11 +7,13 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.sasu91.dosapp.data.db.dao.CachedSkuDao
 import com.sasu91.dosapp.data.db.dao.DraftEodDao
 import com.sasu91.dosapp.data.db.dao.DraftReceiptDao
+import com.sasu91.dosapp.data.db.dao.PendingBindDao
 import com.sasu91.dosapp.data.db.dao.PendingExceptionDao
 import com.sasu91.dosapp.data.db.dao.PendingRequestDao
 import com.sasu91.dosapp.data.db.entity.CachedSkuEntity
 import com.sasu91.dosapp.data.db.entity.DraftEodEntity
 import com.sasu91.dosapp.data.db.entity.DraftReceiptEntity
+import com.sasu91.dosapp.data.db.entity.PendingBindEntity
 import com.sasu91.dosapp.data.db.entity.PendingExceptionEntity
 import com.sasu91.dosapp.data.db.entity.PendingRequestEntity
 
@@ -25,6 +27,7 @@ import com.sasu91.dosapp.data.db.entity.PendingRequestEntity
  * | 2       | Added `draft_receipts` + `pending_exceptions` tables      |
  * | 3       | Added `draft_eod` table                                   |
  * | 4       | Added `cached_skus` table (offline EAN→SKU+stock cache)   |
+ * | 5       | Added `pending_binds` table (offline EAN bind queue)      |
  *
  * ## Accessing the singleton
  * Inject [DosDatabase] via Hilt (see `AppModule`).  Never instantiate directly.
@@ -42,8 +45,9 @@ import com.sasu91.dosapp.data.db.entity.PendingRequestEntity
         PendingExceptionEntity::class,
         DraftEodEntity::class,
         CachedSkuEntity::class,
+        PendingBindEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class DosDatabase : RoomDatabase() {
@@ -63,6 +67,9 @@ abstract class DosDatabase : RoomDatabase() {
 
     /** Offline EAN→SKU+stock cache — enables fully-offline barcode resolution. */
     abstract fun cachedSkuDao(): CachedSkuDao
+
+    /** Typed outbox for secondary-EAN bind operations. */
+    abstract fun pendingBindDao(): PendingBindDao
 
     // ── Migrations ────────────────────────────────────────────────────────────
 
@@ -143,6 +150,26 @@ abstract class DosDatabase : RoomDatabase() {
                 db.execSQL(
                     "CREATE INDEX IF NOT EXISTS `index_cached_skus_sku` ON `cached_skus` (`sku`)"
                 )
+            }
+        }
+
+        /**
+         * Migration 4 → 5: create `pending_binds` table for offline EAN bind queue.
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `pending_binds` (
+                        `client_bind_id`  TEXT    NOT NULL,
+                        `sku`             TEXT    NOT NULL DEFAULT '',
+                        `ean_secondary`   TEXT    NOT NULL DEFAULT '',
+                        `status`          TEXT    NOT NULL DEFAULT 'PENDING',
+                        `created_at`      INTEGER NOT NULL DEFAULT 0,
+                        `retry_count`     INTEGER NOT NULL DEFAULT 0,
+                        `last_error`      TEXT,
+                        PRIMARY KEY(`client_bind_id`)
+                    )
+                """.trimIndent())
             }
         }
     }

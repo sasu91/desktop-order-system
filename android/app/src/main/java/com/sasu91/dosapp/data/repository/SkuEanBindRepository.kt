@@ -5,6 +5,10 @@ import com.sasu91.dosapp.data.api.DosApiService
 import com.sasu91.dosapp.data.api.dto.BindSecondaryEanRequestDto
 import com.sasu91.dosapp.data.api.dto.BindSecondaryEanResponseDto
 import com.sasu91.dosapp.data.api.dto.SkuSearchResultDto
+import com.sasu91.dosapp.data.db.dao.PendingBindDao
+import com.sasu91.dosapp.data.db.entity.PendingBindEntity
+import kotlinx.coroutines.flow.Flow
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,6 +30,7 @@ private const val TAG = "SkuEanBindRepo"
 class SkuEanBindRepository @Inject constructor(
     private val api: DosApiService,
     private val skuCache: SkuCacheRepository,
+    private val bindDao: PendingBindDao,
 ) {
 
     // -----------------------------------------------------------------------
@@ -47,6 +52,8 @@ class SkuEanBindRepository @Inject constructor(
         data class Conflict(val message: String) : BindResult()
         /** Network / unexpected error. */
         data class Error(val message: String) : BindResult()
+        /** Queued locally; will be sent when online. */
+        data class OfflineEnqueued(val id: String) : BindResult()
     }
 
     // -----------------------------------------------------------------------
@@ -108,4 +115,60 @@ class SkuEanBindRepository @Inject constructor(
                 BindResult.Error("Nessuna connessione: ${result.message}")
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Offline queue
+    // -----------------------------------------------------------------------
+
+    /**
+     * Persist a bind operation directly to the Room queue **without** attempting
+     * an API call.  Always succeeds (unless Room itself throws).
+     *
+     * The [OfflineQueueViewModel] retry loop will flush the queue to the backend
+     * when connectivity is available.
+     */
+    suspend fun enqueueOnly(sku: String, eanSecondary: String): BindResult.OfflineEnqueued {
+        val id = UUID.randomUUID().toString()
+        bindDao.insert(
+            PendingBindEntity(
+                clientBindId = id,
+                sku          = sku,
+                eanSecondary = eanSecondary,
+            )
+        )
+        Log.i(TAG, "enqueueOnly: bind $sku ← $eanSecondary queued as $id")
+        return BindResult.OfflineEnqueued(id)
+    }
+
+    /** Retry a PENDING/FAILED bind row by its [clientBindId]. */
+    suspend fun retry(id: String): BindResult {
+        val row = bindDao.getById(id)
+            ?: return BindResult.Error("Row not found")
+        return when (val r = safeCall {
+            api.bindSecondaryEan(row.sku, BindSecondaryEanRequestDto(row.eanSecondary)).toApiResult()
+        }) {
+            is ApiResult.Success -> {
+                bindDao.markSent(id)
+                BindResult.Success(r.data)
+            }
+            is ApiResult.NetworkError -> {
+                bindDao.markFailed(id, r.message)
+                BindResult.OfflineEnqueued(id)
+            }
+            is ApiResult.ApiError -> {
+                bindDao.markFailed(id, r.message)
+                when (r.code) {
+                    400  -> BindResult.ValidationError(r.message)
+                    404  -> BindResult.NotFound(r.message)
+                    409  -> BindResult.Conflict(r.message)
+                    else -> BindResult.Error("Errore ${r.code}: ${r.message}")
+                }
+            }
+        }
+    }
+
+    fun observePending(): Flow<List<PendingBindEntity>> = bindDao.observePending()
+    fun observeAll(): Flow<List<PendingBindEntity>> = bindDao.observeAll()
+    fun observePendingCount(): Flow<Int> = bindDao.observePendingCount()
+    suspend fun deleteSent() = bindDao.deleteSent()
 }

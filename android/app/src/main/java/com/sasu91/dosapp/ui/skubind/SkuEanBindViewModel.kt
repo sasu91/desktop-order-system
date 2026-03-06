@@ -165,55 +165,21 @@ class SkuEanBindViewModel @Inject constructor(
         _state.update { it.copy(isBinding = true, resultMessage = null) }
 
         viewModelScope.launch {
-            val result = bindRepo.bindSecondaryEan(sku.sku, ean)
-            when (result) {
-                is SkuEanBindRepository.BindResult.Success -> {
-                    // Targeted cache update — adds the new EAN alias to Room
-                    cacheRepo.addEanAlias(ean, sku.sku)
+            // Queue-first: always write to Room. The OfflineQueueViewModel retry
+            // loop will flush to the backend when connectivity is available.
+            // Also update the local EAN alias cache immediately so the operator
+            // can scan the new barcode right away (even before the server confirms).
+            bindRepo.enqueueOnly(sku.sku, ean)
+            cacheRepo.addEanAlias(ean, sku.sku)
 
-                    _state.update {
-                        it.copy(
-                            isBinding     = false,
-                            scannedEan    = null,
-                            resultMessage = "✅ ${result.response.message}",
-                            isError       = false,
-                            // Reset so the operator can bind another SKU
-                            selectedSku = it.selectedSku?.copy(eanSecondary = ean),
-                        )
-                    }
-                }
-                is SkuEanBindRepository.BindResult.Conflict ->
-                    _state.update {
-                        it.copy(
-                            isBinding     = false,
-                            resultMessage = "⚠️ Conflitto: ${result.message}",
-                            isError       = true,
-                        )
-                    }
-                is SkuEanBindRepository.BindResult.ValidationError ->
-                    _state.update {
-                        it.copy(
-                            isBinding     = false,
-                            resultMessage = "❌ ${result.message}",
-                            isError       = true,
-                        )
-                    }
-                is SkuEanBindRepository.BindResult.NotFound ->
-                    _state.update {
-                        it.copy(
-                            isBinding     = false,
-                            resultMessage = "❌ ${result.message}",
-                            isError       = true,
-                        )
-                    }
-                is SkuEanBindRepository.BindResult.Error ->
-                    _state.update {
-                        it.copy(
-                            isBinding     = false,
-                            resultMessage = "❌ ${result.message}",
-                            isError       = true,
-                        )
-                    }
+            _state.update {
+                it.copy(
+                    isBinding     = false,
+                    scannedEan    = null,
+                    resultMessage = "🕐 Abbinamento salvato – verrà inviato al prossimo retry",
+                    isError       = false,
+                    selectedSku   = it.selectedSku?.copy(eanSecondary = ean),
+                )
             }
         }
     }

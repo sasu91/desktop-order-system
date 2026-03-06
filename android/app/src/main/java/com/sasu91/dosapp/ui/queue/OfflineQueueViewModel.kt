@@ -4,10 +4,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sasu91.dosapp.data.db.entity.DraftEodEntity
 import com.sasu91.dosapp.data.db.entity.DraftReceiptEntity
+import com.sasu91.dosapp.data.db.entity.PendingBindEntity
 import com.sasu91.dosapp.data.db.entity.PendingExceptionEntity
 import com.sasu91.dosapp.data.repository.EodRepository
 import com.sasu91.dosapp.data.repository.ExceptionRepository
 import com.sasu91.dosapp.data.repository.ReceivingRepository
+import com.sasu91.dosapp.data.repository.SkuEanBindRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -24,7 +26,7 @@ import javax.inject.Inject
 // ---------------------------------------------------------------------------
 
 enum class QueueStatus { PENDING, FAILED, SENT }
-enum class QueueType   { EXCEPTION, RECEIPT, EOD }
+enum class QueueType   { EXCEPTION, RECEIPT, EOD, BIND }
 
 /**
  * Flattened row shown in the offline-queue screen.
@@ -84,6 +86,20 @@ private fun DraftEodEntity.toQueueItem() = QueueItem(
     summary    = "EOD · $date",
 )
 
+private fun PendingBindEntity.toQueueItem() = QueueItem(
+    id         = clientBindId,
+    type       = QueueType.BIND,
+    status     = when (status) {
+        PendingBindEntity.Status.SENT   -> QueueStatus.SENT
+        PendingBindEntity.Status.FAILED -> QueueStatus.FAILED
+        else                            -> QueueStatus.PENDING
+    },
+    createdAt  = createdAt,
+    retryCount = retryCount,
+    lastError  = lastError,
+    summary    = "Abbinamento EAN · $sku ← $eanSecondary",
+)
+
 // ---------------------------------------------------------------------------
 // ViewModel
 // ---------------------------------------------------------------------------
@@ -98,6 +114,7 @@ class OfflineQueueViewModel @Inject constructor(
     private val exceptionRepo: ExceptionRepository,
     private val receivingRepo: ReceivingRepository,
     private val eodRepo: EodRepository,
+    private val bindRepo: SkuEanBindRepository,
 ) : ViewModel() {
 
     private val _busyIds = MutableStateFlow<Set<String>>(emptySet())
@@ -117,12 +134,14 @@ class OfflineQueueViewModel @Inject constructor(
         exceptionRepo.observeAll(),
         receivingRepo.observeAll(),
         eodRepo.observeAll(),
+        bindRepo.observeAll(),
         _busyIds,
-    ) { exceptions, receipts, eods, busy ->
+    ) { exceptions, receipts, eods, binds, busy ->
         val merged = buildList {
             exceptions.forEach { add(it.toQueueItem()) }
             receipts.forEach   { add(it.toQueueItem()) }
             eods.forEach       { add(it.toQueueItem()) }
+            binds.forEach      { add(it.toQueueItem()) }
         }.sortedByDescending { it.createdAt }
         QueueUiState(items = merged, busyIds = busy)
     }.stateIn(
@@ -136,7 +155,8 @@ class OfflineQueueViewModel @Inject constructor(
         exceptionRepo.observePendingCount(),
         receivingRepo.observePendingCount(),
         eodRepo.observePendingCount(),
-    ) { exCount, rcCount, eodCount -> exCount + rcCount + eodCount }
+        bindRepo.observePendingCount(),
+    ) { exCount, rcCount, eodCount, bindCount -> exCount + rcCount + eodCount + bindCount }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     // -----------------------------------------------------------------------
@@ -150,6 +170,7 @@ class OfflineQueueViewModel @Inject constructor(
                 QueueType.EXCEPTION -> exceptionRepo.retry(item.id)
                 QueueType.RECEIPT   -> receivingRepo.retry(item.id)
                 QueueType.EOD       -> eodRepo.retry(item.id)
+                QueueType.BIND      -> bindRepo.retry(item.id)
             }
             _busyIds.value = _busyIds.value - item.id
         }
@@ -171,12 +192,14 @@ class OfflineQueueViewModel @Inject constructor(
                 val exceptions = exceptionRepo.observePending().first()
                 val receipts   = receivingRepo.observePending().first()
                 val eods       = eodRepo.observePending().first()
+                val binds      = bindRepo.observePending().first()
 
                 // Mark them all as busy in the UI
                 val allIds = buildSet<String> {
                     exceptions.forEach { add(it.clientEventId) }
                     receipts.forEach   { add(it.clientReceiptId) }
                     eods.forEach       { add(it.clientEodId) }
+                    binds.forEach      { add(it.clientBindId) }
                 }
                 _busyIds.value = _busyIds.value + allIds
 
@@ -184,6 +207,7 @@ class OfflineQueueViewModel @Inject constructor(
                 exceptions.forEach { exceptionRepo.retry(it.clientEventId) }
                 receipts.forEach   { receivingRepo.retry(it.clientReceiptId) }
                 eods.forEach       { eodRepo.retry(it.clientEodId) }
+                binds.forEach      { bindRepo.retry(it.clientBindId) }
 
                 _busyIds.value = _busyIds.value - allIds
             } finally {
@@ -198,6 +222,7 @@ class OfflineQueueViewModel @Inject constructor(
             exceptionRepo.deleteSent()
             receivingRepo.deleteSent()
             eodRepo.deleteSent()
+            bindRepo.deleteSent()
         }
     }
 }
