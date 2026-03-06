@@ -14,17 +14,18 @@ private const val TAG = "SkuEanBindRepo"
  * Repository for the "Abbinamento EAN" feature.
  *
  * - [searchSkus]: drives the SKU autocomplete text field via
- *   `GET /api/v1/skus/search`.
+ *   `GET /api/v1/skus/search`.  When offline, automatically falls back to the
+ *   local Room cache ([SkuCacheRepository.searchSkus]) so the operator can
+ *   always search and select SKUs regardless of network status.
  * - [bindSecondaryEan]: triggers the server-side association of a secondary
  *   barcode to a SKU via `PATCH /api/v1/skus/{sku}/bind-secondary-ean`.
- *
- * Both operations require network connectivity; there is no offline queue for
- * this feature (binding is an intentional operator action that must be
- * acknowledged immediately).
+ *   This operation requires network connectivity (intentional operator action
+ *   that must be acknowledged immediately).
  */
 @Singleton
 class SkuEanBindRepository @Inject constructor(
     private val api: DosApiService,
+    private val skuCache: SkuCacheRepository,
 ) {
 
     // -----------------------------------------------------------------------
@@ -55,14 +56,30 @@ class SkuEanBindRepository @Inject constructor(
     /**
      * Search SKUs by [query] (empty = first [limit] SKUs alphabetically).
      *
-     * Results are returned in server-ranked order (prefix matches first).
+     * **Cache-first strategy**: the local Room cache is queried first and
+     * returned immediately if it contains matches (fast, always works offline).
+     * The API is called only when the cache returns no results for the given
+     * query — typically on first run before any preload, or after a cache clear.
+     *
+     * This ensures the autocomplete field is always responsive and never blocks
+     * on network latency during normal operation.
      */
     suspend fun searchSkus(query: String, limit: Int = 20): SearchResult {
         Log.d(TAG, "searchSkus(query='$query', limit=$limit)")
+
+        // ── 1. Cache first ────────────────────────────────────────────────
+        val cached = skuCache.searchSkus(query, limit)
+        if (cached.isNotEmpty()) {
+            Log.d(TAG, "searchSkus: cache hit (${cached.size} results)")
+            return SearchResult.Success(cached)
+        }
+
+        // ── 2. Cache miss → try API ───────────────────────────────────────
+        Log.d(TAG, "searchSkus: cache empty — querying API")
         return when (val result = safeCall { api.searchSkus(query, limit).toApiResult() }) {
-            is ApiResult.Success     -> SearchResult.Success(result.data.results)
-            is ApiResult.ApiError    -> SearchResult.Error("${result.code}: ${result.message}")
-            is ApiResult.NetworkError -> SearchResult.Error("Nessuna connessione: ${result.message}")
+            is ApiResult.Success      -> SearchResult.Success(result.data.results)
+            is ApiResult.ApiError     -> SearchResult.Error("${result.code}: ${result.message}")
+            is ApiResult.NetworkError -> SearchResult.Error("Offline · nessuna cache disponibile")
         }
     }
 

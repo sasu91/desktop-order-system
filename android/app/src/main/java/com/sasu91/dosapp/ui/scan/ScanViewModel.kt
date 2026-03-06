@@ -169,13 +169,17 @@ class ScanViewModel @Inject constructor(
     /**
      * Submit quick scan actions from the scan result screen.
      *
-     * Routing (offline-queue aware):
-     *   [wasteQty] > 0  → POST /exceptions (event=WASTE) via [ExceptionRepository]
-     *   [onHand] / [adjustQty] / [unfulfilledQty] → POST /eod/close via [EodRepository]
+     * **Queue-first strategy**: data is always written directly to the local
+     * Room queue via [ExceptionRepository.enqueueOnly] / [EodRepository.enqueueOnly]
+     * without attempting an API call.  The [OfflineQueueViewModel] retry loop
+     * (triggered on reconnect or by the user) will flush the queue to the backend.
      *
-     * On [EodRepository.PostResult.OfflineEnqueued] or
-     * [ExceptionRepository.PostResult.OfflineEnqueued]: resumes scanning immediately
-     * with a soft "offline queued" toast instead of blocking with an error.
+     * This guarantees the operator is never blocked by network availability:
+     * the action completes instantly and scanning resumes immediately.
+     *
+     * Routing:
+     *   [wasteQty] > 0  → queued as exception (event=WASTE, pezzi)
+     *   [onHand] / [adjustQty] / [unfulfilledQty] → queued as EOD close (colli)
      *
      * Units: [onHand]/[adjustQty]/[unfulfilledQty] are colli (decimal);
      * [wasteQty] is pezzi (integer). Null = field not filled → skip.
@@ -191,69 +195,46 @@ class ScanViewModel @Inject constructor(
         _state.update { it.copy(isSubmitting = true, submitFeedback = null, offlineEnqueued = false) }
         val today = java.time.LocalDate.now().toString()
         viewModelScope.launch {
-            var anyOffline = false
-            var errorMsg: String? = null
-
-            // ── 1. Waste → POST /exceptions (WASTE event, pezzi) ────────────
+            // ── 1. Waste → queue as WASTE exception (pezzi) ──────────────────
             if (wasteQty != null && wasteQty > 0) {
-                val req = ExceptionRequestDto(
-                    date  = today,
-                    sku   = sku,
-                    event = "WASTE",
-                    qty   = wasteQty.toDouble(),
+                exceptionRepo.enqueueOnly(
+                    ExceptionRequestDto(
+                        date  = today,
+                        sku   = sku,
+                        event = "WASTE",
+                        qty   = wasteQty.toDouble(),
+                    )
                 )
-                when (val r = exceptionRepo.postException(req)) {
-                    is ExceptionRepository.PostResult.OfflineEnqueued -> anyOffline = true
-                    is ExceptionRepository.PostResult.Error ->
-                        if (errorMsg == null) errorMsg = "Errore scarto ${r.code}: ${r.message}"
-                    else -> Unit  // Sent ✓
-                }
             }
 
-            // ── 2. EOD fields → POST /eod/close (colli) ─────────────────────
+            // ── 2. EOD fields → queue as EOD close (colli) ───────────────────
             val hasEodFields = onHand != null ||
                 (adjustQty != null && adjustQty > 0) ||
                 (unfulfilledQty != null && unfulfilledQty > 0)
             if (hasEodFields) {
-                val req = EodCloseRequestDto(
-                    date        = today,
-                    clientEodId = UUID.randomUUID().toString(),
-                    entries     = listOf(
-                        EodEntryDto(
-                            sku            = sku,
-                            onHand         = onHand,
-                            adjustQty      = adjustQty,
-                            unfulfilledQty = unfulfilledQty,
-                        )
-                    ),
+                eodRepo.enqueueOnly(
+                    EodCloseRequestDto(
+                        date        = today,
+                        clientEodId = UUID.randomUUID().toString(),
+                        entries     = listOf(
+                            EodEntryDto(
+                                sku            = sku,
+                                onHand         = onHand,
+                                adjustQty      = adjustQty,
+                                unfulfilledQty = unfulfilledQty,
+                            )
+                        ),
+                    )
                 )
-                when (val r = eodRepo.closeEod(req)) {
-                    is EodRepository.PostResult.OfflineEnqueued -> anyOffline = true
-                    is EodRepository.PostResult.Error ->
-                        if (errorMsg == null) errorMsg = "Errore EOD ${r.code}: ${r.message}"
-                    else -> Unit  // Sent ✓
-                }
             }
 
-            // ── 3. Handle aggregate result ───────────────────────────────────
-            when {
-                errorMsg != null -> _state.update {
-                    it.copy(isSubmitting = false, submitFeedback = errorMsg, offlineEnqueued = false)
-                }
-                anyOffline -> {
-                    // Resume scanning immediately; soft toast will auto-dismiss after 3.5 s.
-                    val cacheCount = _state.value.cacheCount
-                    _state.value = ScanUiState(
-                        cacheCount      = cacheCount,
-                        submitFeedback  = "\uD83D\uDD50 Salvato offline \u2013 verr\u00E0 inviato al prossimo retry",
-                        offlineEnqueued = true,
-                    )
-                }
-                else -> {
-                    _state.update { it.copy(isSubmitting = false) }
-                    resumeScanning()
-                }
-            }
+            // ── 3. Always resume scanning with a soft confirmation toast ──────
+            val cacheCount = _state.value.cacheCount
+            _state.value = ScanUiState(
+                cacheCount      = cacheCount,
+                submitFeedback  = "\uD83D\uDD50 Salvato \u2013 verr\u00E0 inviato al prossimo retry",
+                offlineEnqueued = true,
+            )
         }
     }
 

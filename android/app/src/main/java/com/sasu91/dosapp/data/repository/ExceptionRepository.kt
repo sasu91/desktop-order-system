@@ -88,6 +88,21 @@ class ExceptionRepository @Inject constructor(
     /** Purge SENT rows (housekeeping). */
     suspend fun deleteSent() = dao.deleteSent()
 
+    /**
+     * Persist [request] directly to the Room queue **without** attempting an
+     * API call.  Always succeeds (unless Room itself throws).
+     *
+     * Use this from screens that want a "queue-first" UX (e.g. the scan screen)
+     * where the operator should never be blocked by network availability.
+     */
+    suspend fun enqueueOnly(request: ExceptionRequestDto): PostResult.OfflineEnqueued {
+        val uuid = request.clientEventId?.takeIf { it.isNotBlank() }
+            ?: UUID.randomUUID().toString()
+        val stamped = request.copy(clientEventId = uuid)
+        enqueue(stamped)
+        return PostResult.OfflineEnqueued(uuid)
+    }
+
     // -----------------------------------------------------------------------
 
     private suspend fun enqueue(request: ExceptionRequestDto) {

@@ -103,6 +103,21 @@ class EodRepository @Inject constructor(
     /** Purge SENT EOD drafts (housekeeping). */
     suspend fun deleteSent() = dao.deleteSent()
 
+    /**
+     * Persist [request] directly to the Room queue **without** attempting an
+     * API call.  Always succeeds (unless Room itself throws).
+     *
+     * Use this from screens that want a "queue-first" UX (e.g. the scan screen)
+     * where the operator should never be blocked by network availability.
+     */
+    suspend fun enqueueOnly(request: EodCloseRequestDto): PostResult.OfflineEnqueued {
+        val uuid = request.clientEodId.takeIf { it.isNotBlank() }
+            ?: UUID.randomUUID().toString()
+        val stamped = request.copy(clientEodId = uuid)
+        enqueue(stamped)
+        return PostResult.OfflineEnqueued(uuid)
+    }
+
     // -----------------------------------------------------------------------
 
     private suspend fun enqueue(request: EodCloseRequestDto) {

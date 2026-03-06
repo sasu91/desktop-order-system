@@ -29,6 +29,33 @@ interface CachedSkuDao {
     @Query("SELECT COUNT(*) FROM cached_skus")
     suspend fun count(): Int
 
+    /**
+     * Full-text autocomplete search across [sku], [description] and [ean].
+     *
+     * [pattern] must already include SQL wildcards (e.g. "%milk%").
+     * Results are ordered by [sku] alphabetically and capped at [limit] rows.
+     * A single SKU may appear multiple times if it has several cached EAN rows;
+     * the caller is responsible for deduplication (e.g. [distinctBy] in Kotlin).
+     */
+    @Query("""
+        SELECT * FROM cached_skus
+        WHERE sku LIKE :pattern
+           OR description LIKE :pattern
+           OR ean LIKE :pattern
+        ORDER BY sku
+        LIMIT :limit
+    """)
+    suspend fun searchByText(pattern: String, limit: Int): List<CachedSkuEntity>
+
+    /**
+     * Return the first [limit] rows ordered alphabetically (empty-query autocomplete).
+     *
+     * Because a SKU with both a primary and a secondary EAN produces two rows,
+     * the result may contain duplicates; the caller must deduplicate.
+     */
+    @Query("SELECT * FROM cached_skus ORDER BY sku LIMIT :limit")
+    suspend fun getFirstN(limit: Int): List<CachedSkuEntity>
+
     // ── Writes ───────────────────────────────────────────────────────────────
 
     /**

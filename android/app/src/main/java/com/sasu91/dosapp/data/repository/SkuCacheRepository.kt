@@ -4,6 +4,7 @@ import android.util.Log
 import com.sasu91.dosapp.data.api.DosApiService
 import com.sasu91.dosapp.data.api.dto.ScannerPreloadItemDto
 import com.sasu91.dosapp.data.api.dto.SkuDto
+import com.sasu91.dosapp.data.api.dto.SkuSearchResultDto
 import com.sasu91.dosapp.data.api.dto.StockDetailDto
 import com.sasu91.dosapp.data.db.dao.CachedSkuDao
 import com.sasu91.dosapp.data.db.entity.CachedSkuEntity
@@ -234,6 +235,39 @@ class SkuCacheRepository @Inject constructor(
 
     /** Remove all cached rows (e.g. when user changes backend URL). */
     suspend fun clearAll() = dao.deleteAll()
+
+    /**
+     * Offline autocomplete search across [sku], [description] and [ean].
+     *
+     * Designed as a drop-in fallback for the API-based autocomplete when the
+     * device is offline.  Results are deduplicated by SKU code (a SKU with two
+     * cached EAN rows appears only once) and mapped to [SkuSearchResultDto]
+     * so the existing autocomplete UI works without any changes.
+     *
+     * @param query  Raw search string entered by the user.  Empty = return the
+     *               first [limit] SKUs alphabetically (same behaviour as the API).
+     * @param limit  Maximum number of distinct SKUs to return.
+     */
+    suspend fun searchSkus(query: String, limit: Int = 20): List<SkuSearchResultDto> {
+        val rawRows = if (query.isBlank()) {
+            dao.getFirstN(limit * 2)          // over-fetch to survive dedup
+        } else {
+            val pattern = "%${query.trim()}%"
+            dao.searchByText(pattern, limit * 2)
+        }
+        return rawRows
+            .distinctBy { it.sku }            // collapse duplicate EAN rows
+            .take(limit)
+            .map { entity ->
+                SkuSearchResultDto(
+                    sku          = entity.sku,
+                    description  = entity.description,
+                    ean          = entity.ean,
+                    eanSecondary = null,       // cache row keyed by one EAN at a time
+                    inAssortment = true,
+                )
+            }
+    }
 
     /**
      * Add a new EAN alias for an existing SKU in the Room cache.
