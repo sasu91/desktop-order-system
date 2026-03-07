@@ -13,6 +13,21 @@ interface CachedSkuDao {
     @Query("SELECT * FROM cached_skus WHERE ean = :ean LIMIT 1")
     suspend fun getByEan(ean: String): CachedSkuEntity?
 
+    /**
+     * Lookup tolerant of EAN 12/13-digit format mismatch.
+     *
+     * ML Kit always returns the full EAN-13 (13 digits, including check digit).
+     * Older cache entries populated before the 12→13 normalisation fix may be
+     * stored under their 12-digit form (first 12 of the 13 — i.e. without the
+     * trailing check digit).  This query checks both representations so that
+     * stale cache entries are still found without a full refresh.
+     *
+     * Only called when [ean13] is exactly 13 digits; otherwise [getByEan] is
+     * used directly.  [ean12] must be [ean13].dropLast(1).
+     */
+    @Query("SELECT * FROM cached_skus WHERE ean = :ean13 OR ean = :ean12 LIMIT 1")
+    suspend fun getByEanOrShort(ean13: String, ean12: String): CachedSkuEntity?
+
     /** Lookup by SKU code — used to find the row to patch stock values. */
     @Query("SELECT * FROM cached_skus WHERE sku = :sku LIMIT 1")
     suspend fun getBySku(sku: String): CachedSkuEntity?

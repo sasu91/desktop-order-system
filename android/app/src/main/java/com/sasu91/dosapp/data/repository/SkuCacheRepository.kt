@@ -18,6 +18,25 @@ import javax.inject.Singleton
 private const val TAG = "SkuCacheRepo"
 
 /**
+ * Normalise a barcode string to canonical EAN-13 format (13 digits).
+ *
+ * ML Kit always returns the full EAN-13 (13 digits including check digit).
+ * Some SKUs are stored with a 12-digit EAN (content only, no check digit).
+ * This function appends the EAN-13 check digit when the input is exactly
+ * 12 digits; any other length (including already-13-digit codes) is returned
+ * unchanged.
+ */
+private fun normalizeEan13(ean: String): String {
+    if (ean.length == 13 || ean.length != 12 || !ean.all { it.isDigit() }) return ean
+    // EAN-13 check digit algorithm: alternating weights 1 (odd pos) and 3 (even pos), 0-indexed
+    val total = ean.indices.sumOf { i ->
+        val digit = ean[i].digitToInt()
+        if (i % 2 == 0) digit else digit * 3
+    }
+    return ean + ((10 - total % 10) % 10).toString()
+}
+
+/**
  * Coordinates offline-capable EAN→SKU+stock lookups.
  *
  * ## Lookup strategy (per EAN barcode scan)
@@ -94,8 +113,21 @@ class SkuCacheRepository @Inject constructor(
      * Fully offline when the EAN is already in Room.
      */
     suspend fun resolveEan(ean: String): ResolveResult {
-        // ── 1. Room hit ────────────────────────────────────────────────────
-        val cached = dao.getByEan(ean)
+        // Normalise to 13-digit canonical form.
+        // ML Kit returns EAN-13 (13 digits); older Room entries may store the
+        // 12-digit form (no check digit). normalizeEan13 upgrades 12→13 so both
+        // Room lookup paths and the API call use the same canonical value.
+        val ean13 = normalizeEan13(ean)
+
+        // ── 1. Room hit (tolerant of 12/13-digit format mismatch) ─────────
+        // For EAN-13: also probe the bare 12-digit key (no check digit) to
+        // handle stale cache rows written before this normalisation fix.
+        // For other formats (EAN-8, Code128, etc.): ean13 == ean (unchanged),
+        // so just use a plain lookup — no dual-key probe needed.
+        val cached = if (ean13.length == 13)
+            dao.getByEanOrShort(ean13 = ean13, ean12 = ean13.dropLast(1))
+        else
+            dao.getByEan(ean13)
         if (cached != null) {
             Log.d(TAG, "EAN $ean → cache hit (sku=${cached.sku}, onHand=${cached.onHand})")
             val cacheDate = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault())
@@ -108,7 +140,9 @@ class SkuCacheRepository @Inject constructor(
         }
 
         // ── 2. API: EAN → SKU ──────────────────────────────────────────────
-        val skuResult = safeCall { api.getSkuByEan(ean).toApiResult() }
+        // Use ean13 (canonical 13-digit) — the backend also normalises, but
+        // using the canonical value here avoids unnecessary 12→13 work there.
+        val skuResult = safeCall { api.getSkuByEan(ean13).toApiResult() }
         if (skuResult !is ApiResult.Success) {
             return when (skuResult) {
                 is ApiResult.NetworkError ->
@@ -131,10 +165,10 @@ class SkuCacheRepository @Inject constructor(
         val onHand  = stockDto?.onHand  ?: 0
         val onOrder = stockDto?.onOrder ?: 0
 
-        // ── 4. Persist to Room ─────────────────────────────────────────────
+        // ── 4. Persist to Room with canonical 13-digit EAN key ─────────────
         dao.upsert(
             CachedSkuEntity(
-                ean         = ean,
+                ean         = ean13,  // always store 13-digit key for consistency
                 sku         = skuDto.sku,
                 description = skuDto.description,
                 onHand      = onHand,
@@ -293,12 +327,16 @@ class SkuCacheRepository @Inject constructor(
             Log.d(TAG, "addEanAlias: no cached row for sku=$skuCode — alias not written locally")
             return false
         }
+        // Normalise the new EAN to the canonical 13-digit form before storing
+        // in Room so that future scans (which always return 13 digits from ML Kit)
+        // hit the cache without needing a dual-key query.
+        val canonicalEan = normalizeEan13(newEan)
         val aliasEntity = template.copy(
-            ean      = newEan,
+            ean      = canonicalEan,
             cachedAt = System.currentTimeMillis(),
         )
         dao.upsert(aliasEntity)
-        Log.i(TAG, "addEanAlias: EAN '$newEan' → sku='$skuCode' added to Room cache")
+        Log.i(TAG, "addEanAlias: EAN '$canonicalEan' → sku='$skuCode' added to Room cache")
         return true
     }
 
