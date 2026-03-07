@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Query
 from ..api.auth import verify_token
 from ..api.deps import get_storage
 from ..api.errors import BadRequestError, ConflictError, NotFoundError
-from ..domain.ledger import StockCalculator, validate_ean
+from ..domain.ledger import StockCalculator, normalize_ean_13, validate_ean
 from ..schemas import (
     BindSecondaryEanRequest,
     BindSecondaryEanResponse,
@@ -66,8 +66,8 @@ def get_scanner_preload(
 
     result: list[ScannerPreloadItem] = []
     for sku_obj in all_skus:
-        primary = (sku_obj.ean or "").strip()
-        secondary = (sku_obj.ean_secondary or "").strip()
+        primary = normalize_ean_13((sku_obj.ean or "").strip())
+        secondary = normalize_ean_13((sku_obj.ean_secondary or "").strip())
 
         if not primary and not secondary:
             continue  # SKU senza nessun barcode — salta
@@ -130,11 +130,15 @@ def get_sku_by_ean(
         raise BadRequestError("EAN non può essere vuoto.")
 
     # --- 2. Lookup: linear scan over all SKUs (no EAN index yet) ---
-    # Normalise both sides: strip whitespace, compare as strings.
+    # Normalise both sides to canonical 13-digit form before comparison.
+    # This handles the common case where the stored EAN is 12 digits but ML Kit
+    # returns 13 digits (barcode encodes check digit not stored in the CSV).
+    ean_canonical = normalize_ean_13(ean)
     skus = storage.read_skus()
     hit = next(
         (s for s in skus
-         if (s.ean or "").strip() == ean or (s.ean_secondary or "").strip() == ean),
+         if normalize_ean_13((s.ean or "").strip()) == ean_canonical
+         or normalize_ean_13((s.ean_secondary or "").strip()) == ean_canonical),
         None,
     )
 

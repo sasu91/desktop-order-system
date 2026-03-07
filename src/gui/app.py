@@ -3883,6 +3883,9 @@ class DesktopOrderApp:
                     conf = page_items[row_idx]
                     sku_obj = skus_by_id.get(conf.sku)
                     description = sku_obj.description if sku_obj else "N/A"
+                    pack_size = (sku_obj.pack_size if sku_obj else 1) or 1
+                    colli = conf.qty_ordered // pack_size
+                    resto_pz = conf.qty_ordered % pack_size
 
                     # Resolve best valid EAN
                     _ean_p = sku_obj.ean if sku_obj else None
@@ -3944,10 +3947,14 @@ class DesktopOrderApp:
                     qty_cell = tk.Frame(row, bg=row_bg, width=100)
                     qty_cell.pack(side="left", fill="y")
                     qty_cell.pack_propagate(False)
-                    tk.Label(qty_cell, text=str(conf.qty_ordered),
+                    qty_inner = tk.Frame(qty_cell, bg=row_bg)
+                    qty_inner.place(relx=0.5, rely=0.5, anchor="center")
+                    tk.Label(qty_inner, text=f"{colli} colli",
                              font=("Helvetica", 11, "bold"),
-                             bg=row_bg, fg="#1a73e8", anchor="center").pack(
-                                 fill="both", expand=True)
+                             bg=row_bg, fg="#1a73e8").pack()
+                    if resto_pz:
+                        tk.Label(qty_inner, text=f"+{resto_pz} pz",
+                                 font=("Helvetica", 8), bg=row_bg, fg="#aaa").pack()
 
                 # Thin separator between rows (not after last)
                 if row_idx < ITEMS_PER_PAGE - 1:
