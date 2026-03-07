@@ -491,6 +491,26 @@ class StorageAdapter(CSVLayer):
         else:
             self.csv_layer.write_transaction(txn)
     
+    def _sync_skus_to_sqlite(self, sku_ids: List[str]) -> None:
+        """Upsert SKUs that exist in CSV but are missing from SQLite.
+
+        Called automatically when a batch transaction write fails with a
+        foreign-key error so that the missing SKUs are inserted and the
+        caller can retry without a full CSV fallback.
+        """
+        assert self.repos is not None
+        csv_skus = {s.sku: s for s in self.csv_layer.read_skus()}
+        for sku_id in sku_ids:
+            sku_obj = csv_skus.get(sku_id)
+            if sku_obj is not None:
+                try:
+                    self.repos.skus().upsert(self._sku_to_dict(sku_obj))
+                    print(f"ℹ Auto-synced missing SKU to SQLite: {sku_id}")
+                except Exception as sync_err:
+                    print(f"⚠ Could not sync SKU {sku_id} to SQLite: {sync_err}")
+            else:
+                print(f"⚠ SKU {sku_id} not found in CSV catalog — cannot auto-sync")
+
     def write_transactions_batch(self, txns: List[Transaction]):
         """Write multiple transactions (batch mode)"""
         if self.is_sqlite_mode():
@@ -508,6 +528,17 @@ class StorageAdapter(CSVLayer):
                     })
                 self.repos.ledger().append_batch(batch)
             except Exception as e:
+                from ..repositories import ForeignKeyError as _FKError
+                # If the failure is a FK constraint (missing SKUs), try to auto-sync
+                # those SKUs from CSV into SQLite and retry once before giving up.
+                if isinstance(e, _FKError):
+                    try:
+                        missing = list({txn.sku for txn in txns})
+                        self._sync_skus_to_sqlite(missing)
+                        self.repos.ledger().append_batch(batch)
+                        return  # retry succeeded
+                    except Exception as retry_err:
+                        print(f"⚠ SQLite write_transactions_batch retry failed: {retry_err}")
                 self._sqlite_degrade(e)
                 print(f"⚠ SQLite write_transactions_batch failed, falling back to CSV: {e}")
                 self.csv_layer.write_transactions_batch(txns)

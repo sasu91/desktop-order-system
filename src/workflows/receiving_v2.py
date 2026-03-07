@@ -114,10 +114,13 @@ class ReceivingWorkflow:
             qty_received = item["qty_received"]
             specified_order_ids = item.get("order_ids", [])
             
-            # Get PENDING orders for this SKU (sorted by date for FIFO)
+            # Get PENDING orders for this SKU (sorted by date for FIFO).
+            # Default status to "PENDING" to match _refresh_pending_orders behaviour,
+            # which also defaults to "PENDING" when the column is absent/empty.
             sku_orders = [
                 log for log in order_logs
-                if log.get("sku") == sku and log.get("status") in ["PENDING", "PARTIAL"]
+                if log.get("sku") == sku
+                and log.get("status", "PENDING") in ["PENDING", "PARTIAL"]
             ]
             sku_orders.sort(key=lambda x: x.get("date", ""))
             
