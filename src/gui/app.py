@@ -3828,14 +3828,13 @@ class DesktopOrderApp:
         tbl_inner = tk.Frame(tbl_canvas, bg="white")
         tbl_inner.bind("<Configure>",
                        lambda e: tbl_canvas.configure(scrollregion=tbl_canvas.bbox("all")))
-        tbl_canvas.create_window((0, 0), window=tbl_inner, anchor="nw")
+        tbl_canvas_window = tbl_canvas.create_window((0, 0), window=tbl_inner, anchor="nw")
         tbl_canvas.configure(yscrollcommand=tbl_scroll.set)
+        # Stretch tbl_inner to canvas width so rows fill horizontally
+        tbl_canvas.bind("<Configure>",
+                        lambda e: tbl_canvas.itemconfig(tbl_canvas_window, width=e.width))
         tbl_canvas.pack(side="left", fill="both", expand=True)
         tbl_scroll.pack(side="right", fill="y")
-
-        end_var = tk.StringVar()
-        tk.Label(card, textvariable=end_var, font=("Helvetica", 9),
-                 bg="white", fg="#aaa").pack(pady=(4, 2))
 
         tk.Frame(card, height=1, bg="#e0e0e0").pack(fill="x")
 
@@ -3874,7 +3873,6 @@ class DesktopOrderApp:
             count_var.set(f"Elementi {start_idx + 1}\u2013{end_idx} di {total_items} totali")
             prev_btn.config(state="normal" if page_num > 0 else "disabled")
             next_btn.config(state="normal" if page_num < total_pages - 1 else "disabled")
-            end_var.set("Fine della lista caricata per questa pagina" if end_idx >= total_items else "")
 
             for row_idx, conf in enumerate(page_items):
                 row_bg = "white" if row_idx % 2 == 0 else "#fafafa"
@@ -3913,8 +3911,11 @@ class DesktopOrderApp:
                 # ── Description cell (expands) ──
                 desc_cell = tk.Frame(row, bg=row_bg)
                 desc_cell.pack(side="left", fill="both", expand=True, padx=4, pady=10)
-                tk.Label(desc_cell, text=description, font=("Helvetica", 9),
-                         bg=row_bg, fg="#333", anchor="w", wraplength=200).pack(anchor="w")
+                desc_lbl = tk.Label(desc_cell, text=description, font=("Helvetica", 9),
+                         bg=row_bg, fg="#333", anchor="w", justify="left")
+                desc_lbl.pack(anchor="w", fill="x")
+                desc_cell.bind("<Configure>",
+                               lambda e, lbl=desc_lbl: lbl.config(wraplength=max(1, e.width - 8)))
 
                 # ── EAN / Barcode cell ──
                 ean_cell = tk.Frame(row, bg=row_bg, width=192)
@@ -3956,6 +3957,13 @@ class DesktopOrderApp:
                 tk.Label(qty_inner, text=sub, font=("Helvetica", 8),
                          bg=row_bg, fg="#aaa").pack(anchor="center")
 
+            # "End of page" message as last row in canvas
+            if end_idx >= total_items:
+                tk.Label(tbl_inner, text="Fine della lista caricata per questa pagina",
+                         font=("Helvetica", 9), bg="white", fg="#aaa").pack(pady=(8, 4))
+
+            tbl_canvas.update_idletasks()
+            tbl_canvas.configure(scrollregion=tbl_canvas.bbox("all"))
             tbl_canvas.yview_moveto(0)
 
         # ── NAVIGATION CALLBACKS ─────────────────────────────────────────────
