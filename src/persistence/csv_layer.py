@@ -178,7 +178,20 @@ class CSVLayer:
             writer.writerow(row)
     
     # ============ SKU Operations ============
-    
+
+    @staticmethod
+    def _sanitize_enum(value: str, allowed: list, field: str, sku: str) -> str:
+        """Return value if allowed, else '' with a warning.
+
+        Used to recover SKUs with stale/misspelled enum fields instead of
+        silently discarding the entire row.
+        """
+        v = value.strip() if value else ""
+        if v in allowed:
+            return v
+        print(f"Warning: SKU '{sku}' has invalid {field}='{v}' — resetting to '' (allowed: {allowed})")
+        return ""
+
     def read_skus(self) -> List[SKU]:
         """Read all SKUs from skus.csv (with backward-compatibility for legacy files)."""
         rows = self._read_csv("skus.csv")
@@ -206,7 +219,10 @@ class CSVLayer:
                     shelf_life_days=int(row.get("shelf_life_days", "0").strip() or "0"),
                     # Shelf life operational parameters (backward-compatible)
                     min_shelf_life_days=int(row.get("min_shelf_life_days", "0").strip() or "0"),
-                    waste_penalty_mode=row.get("waste_penalty_mode", "").strip(),
+                    waste_penalty_mode=self._sanitize_enum(
+                        row.get("waste_penalty_mode", ""), ["", "soft", "hard"],
+                        field="waste_penalty_mode", sku=row.get("sku", "?")
+                    ),
                     waste_penalty_factor=float(row.get("waste_penalty_factor", "0.0").strip() or "0.0"),
                     waste_risk_threshold=float(row.get("waste_risk_threshold", "0.0").strip() or "0.0"),
                     max_stock=int(row.get("max_stock", "999").strip() or "999"),

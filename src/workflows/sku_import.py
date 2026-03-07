@@ -360,8 +360,9 @@ class SKUImporter:
             
             if "forecast_method" in mapped_data and mapped_data["forecast_method"]:
                 method = mapped_data["forecast_method"].strip().lower()
-                if method not in ["", "simple", "monte_carlo"]:
-                    errors.append("forecast_method must be '', 'simple', or 'monte_carlo'")
+                _valid_fm = ["", "simple", "monte_carlo", "croston", "sba", "tsb", "intermittent_auto"]
+                if method not in _valid_fm:
+                    errors.append(f"forecast_method must be one of: {', '.join(repr(m) for m in _valid_fm)}")
             
             if "mc_distribution" in mapped_data and mapped_data["mc_distribution"]:
                 dist = mapped_data["mc_distribution"].strip().lower()

@@ -4094,6 +4094,7 @@ class DesktopOrderApp:
         # Pending qty edits dict
         self.pending_qty_edits = {}
         self.pending_expiry_edits = {}  # Per-row expiry dates for has_expiry_label SKUs
+        self._pending_item_sku_map = {}  # item_id -> original SKU str (preserves leading zeros)
         self._all_pending_item_ids = []  # All item IDs – kept for re-attach on filter change
 
         # Treeview + scrollbar
@@ -4238,7 +4239,8 @@ class DesktopOrderApp:
         visible_count = 0
         for item_id in self.pending_treeview.get_children():
             values = self.pending_treeview.item(item_id)["values"]
-            sku = str(values[1]).lower()
+            # Use the map to get the original SKU string (preserves leading zeros)
+            sku = self._pending_item_sku_map.get(item_id, str(values[1])).lower()
             description = str(values[2]).lower()
             item_date = str(values[7]) if len(values) > 7 else ""
 
@@ -4264,6 +4266,7 @@ class DesktopOrderApp:
         # Reset edits
         self.pending_qty_edits = {}
         self.pending_expiry_edits = {}  # Per-row expiry dates (keyed by treeview item_id)
+        self._pending_item_sku_map = {}  # Reset SKU map (preserves leading zeros)
         
         # Read order logs
         order_logs = self.csv_layer.read_order_logs()
@@ -4321,6 +4324,9 @@ class DesktopOrderApp:
             )
             # Pre-populate edits dict with remaining (pending) quantity in pezzi
             self.pending_qty_edits[item_id] = colli_ricevuti_prefill * pack_size
+            # Store original SKU string: Tkinter auto-casts numeric values to int on get(),
+            # which would strip leading zeros (e.g. "0450637" -> 450637).
+            self._pending_item_sku_map[item_id] = sku
 
         # Store all item IDs so _filter_pending_orders can re-attach on filter change
         self._all_pending_item_ids = list(self.pending_treeview.get_children())
@@ -4363,7 +4369,7 @@ class DesktopOrderApp:
         
         # ── Colonna "Scadenza" (#9) ──────────────────────────────────────────
         if column == "#9":
-            sku = values[1]
+            sku = self._pending_item_sku_map.get(item_id, str(values[1]))
             skus_by_id = {s.sku: s for s in self.csv_layer.read_skus()}
             sku_obj = skus_by_id.get(sku)
             if not sku_obj or not sku_obj.has_expiry_label:
@@ -4538,7 +4544,8 @@ class DesktopOrderApp:
             if new_qty_received <= 0:
                 continue
             values = self.pending_treeview.item(item_id)["values"]
-            sku = values[1]
+            # Use the map to get the original SKU string (Tkinter strips leading zeros on int cast)
+            sku = self._pending_item_sku_map.get(item_id, str(values[1]))
             expiry_date_for_item = self.pending_expiry_edits.get(item_id, "")
             items.append({
                 "sku": sku,

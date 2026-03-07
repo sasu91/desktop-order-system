@@ -68,7 +68,7 @@ class SKU:
     oos_popup_preference: str = "ask"  # OOS popup behavior: "ask", "always_yes", "always_no"
     
     # Forecast method selection
-    forecast_method: str = ""  # "simple", "monte_carlo", or "" (use global default)
+    forecast_method: str = ""  # "simple", "monte_carlo", "croston", "sba", "tsb", "intermittent_auto", or "" (use global default)
     
     # Monte Carlo override parameters (used only if forecast_method="monte_carlo")
     mc_distribution: str = ""  # "empirical", "normal", "lognormal", "residuals", or "" (use global)
@@ -135,8 +135,10 @@ class SKU:
             raise ValueError("OOS detection mode must be '', 'strict', or 'relaxed'")
         if self.oos_popup_preference not in ["ask", "always_yes", "always_no"]:
             raise ValueError("OOS popup preference must be 'ask', 'always_yes', or 'always_no'")
-        if self.forecast_method not in ["", "simple", "monte_carlo"]:
-            raise ValueError("Forecast method must be '', 'simple', or 'monte_carlo'")
+        # Includes intermittent demand methods implemented in intermittent_forecast.py
+        _valid_forecast_methods = ["", "simple", "monte_carlo", "croston", "sba", "tsb", "intermittent_auto"]
+        if self.forecast_method not in _valid_forecast_methods:
+            raise ValueError(f"Forecast method must be one of: {', '.join(repr(m) for m in _valid_forecast_methods)}")
         if self.mc_distribution not in ["", "empirical", "normal", "lognormal", "residuals"]:
             raise ValueError("MC distribution must be '', 'empirical', 'normal', 'lognormal', or 'residuals'")
         if self.mc_n_simulations < 0:
