@@ -3810,12 +3810,12 @@ class DesktopOrderApp:
         tbl_hdr_frame.pack(fill="x", padx=20, pady=(6, 0))
         for name, w, anc in COL_SPEC:
             cell = tk.Frame(tbl_hdr_frame, bg="#f5f6f7", height=30)
-            cell.pack(side="left", fill="y", expand=(w == 0))
+            cell.pack(side="left", fill="both", expand=(w == 0))
             if w:
                 cell.configure(width=w)
-                cell.pack_propagate(False)
+            cell.pack_propagate(False)
             tk.Label(cell, text=name, font=("Helvetica", 9, "bold"),
-                     bg="#f5f6f7", fg="#666", anchor=anc).pack(fill="both", padx=8, ipady=5)
+                     bg="#f5f6f7", fg="#666", anchor=anc).pack(fill="both", padx=8, ipady=5)  # type: ignore[arg-type]
 
         tk.Frame(card, height=1, bg="#d0d0d0").pack(fill="x", padx=20)
 
