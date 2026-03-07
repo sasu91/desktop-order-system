@@ -11,6 +11,7 @@ from pathlib import Path
 import tempfile
 import os
 import csv
+from io import BytesIO
 from collections import defaultdict
 import logging
 
@@ -3728,7 +3729,7 @@ class DesktopOrderApp:
             return
 
         ITEMS_PER_PAGE = 10
-        ROW_HEIGHT = 36
+        ROW_HEIGHT = 48  # barcode (30px) + EAN text (12px) + padding
 
         total_items = len(confirmations)
         total_pages = max(1, (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
@@ -3745,7 +3746,7 @@ class DesktopOrderApp:
 
         popup = tk.Toplevel(self.root)
         popup.title("Ricevuta Conferma Ordine")
-        popup.geometry("880x640")
+        popup.geometry("880x720")
         popup.resizable(False, False)
         popup.configure(bg="#e0e0e0")
         popup.transient(self.root)
@@ -3807,7 +3808,7 @@ class DesktopOrderApp:
         COL_SPEC = [
             ("SKU",                  90, "center"),
             ("Descrizione Prodotto",  0, "w"),
-            ("EAN",                 180, "center"),
+            ("EAN",                 200, "center"),
             ("Quantit\xe0",         100, "center"),
         ]
 
@@ -3908,20 +3909,36 @@ class DesktopOrderApp:
                              bg=row_bg, fg="#333", anchor="w").pack(
                                  fill="both", expand=True, padx=8)
 
-                    # EAN cell (fixed 180px, text only)
-                    ean_cell = tk.Frame(row, bg=row_bg, width=180)
+                    # EAN cell (fixed 200px — barcode + testo EAN sotto)
+                    ean_cell = tk.Frame(row, bg=row_bg, width=200)
                     ean_cell.pack(side="left", fill="y")
                     ean_cell.pack_propagate(False)
                     if ean:
                         is_valid, _ = validate_ean(ean)
-                        ean_text = ean if is_valid else "EAN non valido"
-                        ean_fg = "#555" if is_valid else "#e53935"
-                        ean_font: tuple = ("Courier", 9) if is_valid else ("Helvetica", 8)
+                        if is_valid and BARCODE_AVAILABLE:
+                            bc_img = self._generate_barcode_image(ean, size=(172, 30))
+                            if bc_img:
+                                bc_lbl = tk.Label(ean_cell, image=bc_img, bg=row_bg)
+                                bc_lbl.image = bc_img  # type: ignore[attr-defined] — prevent GC
+                                bc_lbl.pack(pady=(3, 0))
+                                tk.Label(ean_cell, text=ean, font=("Courier", 7),
+                                         bg=row_bg, fg="#888").pack()
+                            else:
+                                tk.Label(ean_cell, text=ean, font=("Courier", 9),
+                                         bg=row_bg, fg="#555", anchor="center").pack(
+                                             fill="both", expand=True)
+                        elif is_valid:
+                            tk.Label(ean_cell, text=ean, font=("Courier", 9),
+                                     bg=row_bg, fg="#555", anchor="center").pack(
+                                         fill="both", expand=True)
+                        else:
+                            tk.Label(ean_cell, text="EAN non valido", font=("Helvetica", 8),
+                                     bg=row_bg, fg="#e53935", anchor="center").pack(
+                                         fill="both", expand=True)
                     else:
-                        ean_text, ean_fg, ean_font = "\u2014", "#aaa", ("Helvetica", 9)
-                    tk.Label(ean_cell, text=ean_text, font=ean_font,
-                             bg=row_bg, fg=ean_fg, anchor="center").pack(
-                                 fill="both", expand=True)
+                        tk.Label(ean_cell, text="\u2014", font=("Helvetica", 9),
+                                 bg=row_bg, fg="#aaa", anchor="center").pack(
+                                     fill="both", expand=True)
 
                     # Quantità cell (fixed 100px)
                     qty_cell = tk.Frame(row, bg=row_bg, width=100)
@@ -3958,39 +3975,29 @@ class DesktopOrderApp:
         popup.bind("<Escape>", lambda e: popup.destroy())
         popup.focus_set()
 
-    def _generate_barcode_image(self, ean):
-        """Generate barcode image from EAN."""
+    def _generate_barcode_image(self, ean, size=(250, 100)):
+        """Generate barcode image from EAN.
+
+        Args:
+            ean: EAN string (12 or 13 digits).
+            size: (width, height) of the output image in pixels.
+        """
         if not BARCODE_AVAILABLE:
             return None
-        
         try:
-            # Determine barcode type
             if len(ean) == 13:
                 barcode_class = barcode.get_barcode_class('ean13')
             elif len(ean) == 12:
                 barcode_class = barcode.get_barcode_class('ean')
             else:
                 return None
-            
-            # Generate barcode
-            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmpfile:
-                tmpfile_path = tmpfile.name
-            
-            ean_barcode = barcode_class(ean, writer=ImageWriter())
-            ean_barcode.save(tmpfile_path.replace('.png', ''))  # Library adds .png
-            
-            # Load image
-            img = Image.open(tmpfile_path)
-            img = img.resize((250, 100), Image.Resampling.LANCZOS)
-            photo = ImageTk.PhotoImage(img)
-            
-            # Cleanup temp file
-            try:
-                os.unlink(tmpfile_path)
-            except:
-                pass
-            
-            return photo
+            buf = BytesIO()
+            bc_obj = barcode_class(ean, writer=ImageWriter())
+            bc_obj.write(buf)
+            buf.seek(0)
+            img = Image.open(buf)
+            img = img.resize(size, Image.Resampling.LANCZOS)
+            return ImageTk.PhotoImage(img)
         except Exception as e:
             print(f"Warning: Failed to generate barcode for {ean}: {e}")
             return None
