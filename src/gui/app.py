@@ -7752,10 +7752,12 @@ class DesktopOrderApp:
         transactions = self.csv_layer.read_transactions()
         sales_records = self.csv_layer.read_sales()
         
-        # Calculate stock for each SKU
+        # Calculate stock for each SKU.
+        # Pass asof_date + 1 day so that events recorded ON asof_date are included
+        # (the rule is date < asof_date, strictly less-than, so +1 makes it inclusive).
         stocks = StockCalculator.calculate_all_skus(
             sku_ids,
-            self.asof_date,
+            self.asof_date + timedelta(days=1),
             transactions,
             sales_records,
         )
