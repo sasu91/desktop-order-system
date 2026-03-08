@@ -18,22 +18,20 @@ import javax.inject.Singleton
 private const val TAG = "SkuCacheRepo"
 
 /**
- * Normalise a barcode string to canonical EAN-13 format (13 digits).
+ * Normalise a 12-digit UPC-A barcode to its 13-digit EAN-13 equivalent.
  *
- * ML Kit always returns the full EAN-13 (13 digits including check digit).
- * Some SKUs are stored with a 12-digit EAN (content only, no check digit).
- * This function appends the EAN-13 check digit when the input is exactly
- * 12 digits; any other length (including already-13-digit codes) is returned
- * unchanged.
+ * ML Kit may return UPC-A barcodes as 12 digits (FORMAT_EAN_13 / FORMAT_CODE_128).
+ * The correct EAN-13 form is obtained by **prepending '0'** (the EAN number-system
+ * digit), NOT by appending a newly computed check digit — the existing 12th digit
+ * is already the check digit and must not be moved.
+ *
+ * Example: '000045063411' (UPC-A) → '0000045063411' (EAN-13).
+ *
+ * @return 13-digit string when input is exactly 12 digits; original value otherwise.
  */
 private fun normalizeEan13(ean: String): String {
     if (ean.length == 13 || ean.length != 12 || !ean.all { it.isDigit() }) return ean
-    // EAN-13 check digit algorithm: alternating weights 1 (odd pos) and 3 (even pos), 0-indexed
-    val total = ean.indices.sumOf { i ->
-        val digit = ean[i].digitToInt()
-        if (i % 2 == 0) digit else digit * 3
-    }
-    return ean + ((10 - total % 10) % 10).toString()
+    return "0" + ean  // UPC-A (12 digits) → EAN-13: prepend number-system digit 0
 }
 
 /**
@@ -124,8 +122,12 @@ class SkuCacheRepository @Inject constructor(
         // handle stale cache rows written before this normalisation fix.
         // For other formats (EAN-8, Code128, etc.): ean13 == ean (unchanged),
         // so just use a plain lookup — no dual-key probe needed.
+        //
+        // Stale 12-digit entries use the UPC-A form = ean13 without the leading
+        // '0' = ean13.drop(1).  NOT dropLast(1) which would remove the check
+        // digit instead of the leading country-code digit.
         val cached = if (ean13.length == 13)
-            dao.getByEanOrShort(ean13 = ean13, ean12 = ean13.dropLast(1))
+            dao.getByEanOrShort(ean13 = ean13, ean12 = ean13.drop(1))
         else
             dao.getByEan(ean13)
         if (cached != null) {
