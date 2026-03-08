@@ -132,7 +132,7 @@ fun ReceivingScreen(
                 }
 
                 Text(
-                    text  = "Scadi scansiona gli articoli ricevuti ↑",
+                    text  = "Scansiona gli articoli ricevuti con la fotocamera ↑",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline,
                 )
