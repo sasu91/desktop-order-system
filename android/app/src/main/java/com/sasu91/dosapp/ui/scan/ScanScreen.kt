@@ -4,14 +4,6 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import android.util.Log
-import androidx.annotation.OptIn
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ExperimentalGetImage
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageProxy
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -28,27 +20,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import com.google.accompanist.permissions.shouldShowRationale
-import com.google.mlkit.vision.barcode.BarcodeScannerOptions
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.common.InputImage
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
+import com.sasu91.dosapp.ui.common.BarcodeCameraPanel
 
 @Composable
 fun ScanScreen(
@@ -177,107 +161,17 @@ fun ScanScreen(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Camera preview + ML Kit analyser
-// ---------------------------------------------------------------------------
-
+// CameraPreview delegates to the shared BarcodeCameraPanel component.
 @Composable
 private fun CameraPreview(
     onBarcodeDetected: (String) -> Unit,
     paused: Boolean,
     modifier: Modifier = Modifier,
-) {
-    val lifecycleOwner = LocalLifecycleOwner.current
-
-    val analyserExecutor = remember { Executors.newSingleThreadExecutor() }
-
-    // ── Thread-safe pause bridge ──────────────────────────────────────────
-    // `factory` runs once; the lambda it captures must remain current.
-    // AtomicBoolean is safe to read from the analyser's background thread.
-    // SideEffect fires after every successful composition on the main thread,
-    // keeping the flag in sync with the Compose state.
-    val pausedRef = remember { AtomicBoolean(paused) }
-    SideEffect { pausedRef.set(paused) }
-
-    // rememberUpdatedState gives a stable State<T> whose .value always holds
-    // the latest lambda, safe to read from the ML Kit callback (main thread).
-    val currentOnBarcodeDetected = rememberUpdatedState(onBarcodeDetected)
-
-    AndroidView(
-        factory = { ctx ->
-            PreviewView(ctx).also { previewView ->
-                val future = ProcessCameraProvider.getInstance(ctx)
-                future.addListener({
-                    val provider = future.get()
-                    val preview = Preview.Builder().build()
-                        .also { it.setSurfaceProvider(previewView.surfaceProvider) }
-
-                    val analyser = BarcodeImageAnalyser(
-                        // Lambda called on the analyser background thread.
-                        // AtomicBoolean.get() is lock-free and always current.
-                        isPaused  = { pausedRef.get() },
-                        onDetected = { ean -> currentOnBarcodeDetected.value(ean) },
-                    )
-
-                    val analysis = ImageAnalysis.Builder()
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .build()
-                        .also { it.setAnalyzer(analyserExecutor, analyser) }
-
-                    try {
-                        provider.unbindAll()
-                        provider.bindToLifecycle(
-                            lifecycleOwner,
-                            CameraSelector.DEFAULT_BACK_CAMERA,
-                            preview,
-                            analysis,
-                        )
-                    } catch (e: Exception) {
-                        Log.e("ScanScreen", "Camera bind failed", e)
-                    }
-                }, ContextCompat.getMainExecutor(ctx))
-            }
-        },
-        modifier = modifier,
-    )
-}
-
-/** ML Kit barcode analyser for EAN-13 / EAN-8 / Code 128. */
-private class BarcodeImageAnalyser(
-    /**
-     * Called on the analyser background thread before any ML Kit work.
-     * Must be thread-safe — should read an [AtomicBoolean] or similar.
-     */
-    private val isPaused: () -> Boolean,
-    private val onDetected: (String) -> Unit,
-) : ImageAnalysis.Analyzer {
-
-    private val scanner = BarcodeScanning.getClient(
-        BarcodeScannerOptions.Builder()
-            .setBarcodeFormats(Barcode.FORMAT_EAN_13, Barcode.FORMAT_EAN_8, Barcode.FORMAT_CODE_128, Barcode.FORMAT_QR_CODE)
-            .build()
-    )
-
-    @OptIn(ExperimentalGetImage::class)
-    override fun analyze(imageProxy: ImageProxy) {
-        // ── Early exit: paused ───────────────────────────────────────────
-        // Check BEFORE acquiring the image or starting ML Kit processing.
-        // STRATEGY_KEEP_ONLY_LATEST drops queued frames automatically, so
-        // this just closes the one frame CameraX passed to us — zero GPU/CPU
-        // work for the ML Kit pipeline while the result card is on screen.
-        if (isPaused()) {
-            imageProxy.close()
-            return
-        }
-        val mediaImage = imageProxy.image ?: run { imageProxy.close(); return }
-        val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-        scanner.process(image)
-            .addOnSuccessListener { barcodes ->
-                barcodes.firstNotNullOfOrNull { it.rawValue }?.let(onDetected)
-            }
-            .addOnCompleteListener { imageProxy.close() }
-    }
-}
+) = BarcodeCameraPanel(
+    onBarcodeDetected = onBarcodeDetected,
+    paused            = paused,
+    modifier          = modifier,
+)
 
 // ---------------------------------------------------------------------------
 // Result overlay

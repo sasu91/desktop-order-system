@@ -150,7 +150,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): DosDatabase =
         Room.databaseBuilder(ctx, DosDatabase::class.java, "dos_offline.db")
-            .addMigrations(DosDatabase.MIGRATION_1_2, DosDatabase.MIGRATION_2_3, DosDatabase.MIGRATION_3_4, DosDatabase.MIGRATION_4_5)
+            .addMigrations(DosDatabase.MIGRATION_1_2, DosDatabase.MIGRATION_2_3, DosDatabase.MIGRATION_3_4, DosDatabase.MIGRATION_4_5, DosDatabase.MIGRATION_5_6)
             .fallbackToDestructiveMigration()            // safety net for dev builds
             .build()
 

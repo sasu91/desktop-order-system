@@ -79,6 +79,7 @@ class SKUResponse(BaseModel):
     lead_time_days: int = 7
     safety_stock: int = 0
     shelf_life_days: int = 0
+    has_expiry_label: bool = False
     in_assortment: bool = True
     category: str = ""
     department: str = ""
@@ -100,6 +101,7 @@ class ScannerPreloadItem(BaseModel):
     pack_size: int = 1
     on_hand: int = 0
     on_order: int = 0
+    has_expiry_label: bool = False
 
 
 # ---------------------------------------------------------------------------

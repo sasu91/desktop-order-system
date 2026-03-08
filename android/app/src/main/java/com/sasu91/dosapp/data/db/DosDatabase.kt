@@ -28,6 +28,7 @@ import com.sasu91.dosapp.data.db.entity.PendingRequestEntity
  * | 3       | Added `draft_eod` table                                   |
  * | 4       | Added `cached_skus` table (offline EAN→SKU+stock cache)   |
  * | 5       | Added `pending_binds` table (offline EAN bind queue)      |
+ * | 6       | Added `requires_expiry` column to `cached_skus`           |
  *
  * ## Accessing the singleton
  * Inject [DosDatabase] via Hilt (see `AppModule`).  Never instantiate directly.
@@ -47,7 +48,7 @@ import com.sasu91.dosapp.data.db.entity.PendingRequestEntity
         CachedSkuEntity::class,
         PendingBindEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class DosDatabase : RoomDatabase() {
@@ -170,6 +171,21 @@ abstract class DosDatabase : RoomDatabase() {
                         PRIMARY KEY(`client_bind_id`)
                     )
                 """.trimIndent())
+            }
+        }
+
+        /**
+         * Migration 5 → 6: add `requires_expiry` column to `cached_skus`.
+         *
+         * DEFAULT 0 = false — existing rows are treated as non-expiry-label SKUs,
+         * which is the correct safe default.  The cache will carry the correct flag
+         * on the next full preload or EAN scan.
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `cached_skus` ADD COLUMN `requires_expiry` INTEGER NOT NULL DEFAULT 0"
+                )
             }
         }
     }

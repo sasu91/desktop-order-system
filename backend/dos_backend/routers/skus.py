@@ -76,6 +76,8 @@ def get_scanner_preload(
         on_hand = stock.on_hand if stock else 0
         on_order = stock.on_order if stock else 0
 
+        expiry_flag = getattr(sku_obj, "has_expiry_label", False) or False
+
         if primary:
             result.append(ScannerPreloadItem(
                 ean=primary,
@@ -84,6 +86,7 @@ def get_scanner_preload(
                 pack_size=getattr(sku_obj, "pack_size", 1) or 1,
                 on_hand=on_hand,
                 on_order=on_order,
+                has_expiry_label=expiry_flag,
             ))
 
         if secondary and secondary != primary:
@@ -94,6 +97,7 @@ def get_scanner_preload(
                 pack_size=getattr(sku_obj, "pack_size", 1) or 1,
                 on_hand=on_hand,
                 on_order=on_order,
+                has_expiry_label=expiry_flag,
             ))
 
     return result
@@ -159,6 +163,7 @@ def get_sku_by_ean(
         lead_time_days=hit.lead_time_days,
         safety_stock=hit.safety_stock,
         shelf_life_days=hit.shelf_life_days,
+        has_expiry_label=getattr(hit, "has_expiry_label", False) or False,
         in_assortment=hit.in_assortment,
         category=hit.category or "",
         department=hit.department or "",

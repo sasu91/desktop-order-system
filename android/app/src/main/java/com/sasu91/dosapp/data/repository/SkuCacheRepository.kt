@@ -170,13 +170,14 @@ class SkuCacheRepository @Inject constructor(
         // ── 4. Persist to Room with canonical 13-digit EAN key ─────────────
         dao.upsert(
             CachedSkuEntity(
-                ean         = ean13,  // always store 13-digit key for consistency
-                sku         = skuDto.sku,
-                description = skuDto.description,
-                onHand      = onHand,
-                onOrder     = onOrder,
-                packSize    = skuDto.packSize,
-                cachedAt    = System.currentTimeMillis(),
+                ean            = ean13,  // always store 13-digit key for consistency
+                sku            = skuDto.sku,
+                description    = skuDto.description,
+                onHand         = onHand,
+                onOrder        = onOrder,
+                packSize       = skuDto.packSize,
+                requiresExpiry = skuDto.hasExpiryLabel,
+                cachedAt       = System.currentTimeMillis(),
             )
         )
 
@@ -236,13 +237,14 @@ class SkuCacheRepository @Inject constructor(
         val now = System.currentTimeMillis()
         val entities = items.map { item ->
             CachedSkuEntity(
-                ean         = item.ean,
-                sku         = item.sku,
-                description = item.description,
-                packSize    = item.packSize,
-                onHand      = item.onHand,
-                onOrder     = item.onOrder,
-                cachedAt    = now,
+                ean            = item.ean,
+                sku            = item.sku,
+                description    = item.description,
+                packSize       = item.packSize,
+                onHand         = item.onHand,
+                onOrder        = item.onOrder,
+                requiresExpiry = item.hasExpiryLabel,
+                cachedAt       = now,
             )
         }
 
@@ -347,10 +349,11 @@ class SkuCacheRepository @Inject constructor(
     // -----------------------------------------------------------------------
 
     private fun CachedSkuEntity.toSkuDto() = SkuDto(
-        sku         = sku,
-        description = description,
-        ean         = ean,
-        packSize    = packSize,
+        sku            = sku,
+        description    = description,
+        ean            = ean,
+        packSize       = packSize,
+        hasExpiryLabel = requiresExpiry,
     )
 
     private fun CachedSkuEntity.toStockDetailDto(asof: String) = StockDetailDto(

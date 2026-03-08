@@ -95,6 +95,21 @@ class ReceivingRepository @Inject constructor(
     /** Purge SENT drafts (housekeeping). */
     suspend fun deleteSent() = dao.deleteSent()
 
+    /**
+     * Queue-first submit: always persist locally without attempting a live API call.
+     *
+     * Use this when the UI design guarantees queue-first semantics (e.g. ReceivingScreen).
+     * The [com.sasu91.dosapp.ui.queue.OfflineQueueViewModel] retry loop will deliver the
+     * item once the device comes back online.
+     */
+    suspend fun enqueueOnly(request: ReceiptsCloseRequestDto): PostResult.OfflineEnqueued {
+        val uuid = request.clientReceiptId?.takeIf { it.isNotBlank() }
+            ?: UUID.randomUUID().toString()
+        val stamped = request.copy(clientReceiptId = uuid)
+        enqueue(stamped)
+        return PostResult.OfflineEnqueued(uuid)
+    }
+
     // -----------------------------------------------------------------------
 
     private suspend fun enqueue(request: ReceiptsCloseRequestDto) {

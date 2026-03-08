@@ -11,10 +11,12 @@ import com.google.gson.annotations.SerializedName
  * in Room so that either barcode resolves immediately offline.
  */
 data class ScannerPreloadItemDto(
-    @SerializedName("ean")          val ean: String,
-    @SerializedName("sku")          val sku: String,
-    @SerializedName("description")  val description: String,
-    @SerializedName("pack_size")    val packSize: Int = 1,
-    @SerializedName("on_hand")      val onHand: Int = 0,
-    @SerializedName("on_order")     val onOrder: Int = 0,
+    @SerializedName("ean")              val ean: String,
+    @SerializedName("sku")              val sku: String,
+    @SerializedName("description")      val description: String,
+    @SerializedName("pack_size")        val packSize: Int = 1,
+    @SerializedName("on_hand")          val onHand: Int = 0,
+    @SerializedName("on_order")         val onOrder: Int = 0,
+    /** true = expiry date mandatory when receiving this SKU. */
+    @SerializedName("has_expiry_label") val hasExpiryLabel: Boolean = false,
 )

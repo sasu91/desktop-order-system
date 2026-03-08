@@ -31,6 +31,8 @@ data class SkuDto(
     @SerializedName("safety_stock")     val safetyStock: Int = 0,
     /** Shelf life in days; 0 = not applicable. */
     @SerializedName("shelf_life_days")  val shelfLifeDays: Int = 0,
+    /** true = expiry date must be provided when receiving this SKU. */
+    @SerializedName("has_expiry_label") val hasExpiryLabel: Boolean = false,
     /** false = SKU is discontinued / out of assortment. */
     @SerializedName("in_assortment")    val inAssortment: Boolean = true,
     @SerializedName("category")         val category: String = "",

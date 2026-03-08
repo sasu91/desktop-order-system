@@ -44,6 +44,10 @@ data class CachedSkuEntity(
     @ColumnInfo(name = "pack_size")
     val packSize: Int = 1,
 
+    /** true = expiry date is mandatory when receiving this SKU (has_expiry_label). */
+    @ColumnInfo(name = "requires_expiry")
+    val requiresExpiry: Boolean = false,
+
     /** Epoch-millis of the last time this row was written/updated from the API. */
     @ColumnInfo(name = "cached_at")
     val cachedAt: Long = System.currentTimeMillis(),
