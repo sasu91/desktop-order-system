@@ -784,6 +784,11 @@
             "title": "Ean Valid",
             "type": "boolean"
           },
+          "has_expiry_label": {
+            "default": false,
+            "title": "Has Expiry Label",
+            "type": "boolean"
+          },
           "in_assortment": {
             "default": true,
             "title": "In Assortment",
@@ -836,6 +841,11 @@
           "ean": {
             "title": "Ean",
             "type": "string"
+          },
+          "has_expiry_label": {
+            "default": false,
+            "title": "Has Expiry Label",
+            "type": "boolean"
           },
           "on_hand": {
             "default": 0,
