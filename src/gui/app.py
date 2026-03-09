@@ -2584,10 +2584,11 @@ class DesktopOrderApp:
         sales_records = self.csv_layer.read_sales()
         
         # Calculate stock for each SKU.
-        # Use self.asof_date rather than date.today() so that after an EOD close
-        # (which advances asof_date to eod_date+1) the proposal immediately reflects
-        # the stock that includes today's EOD sales.
-        proposal_asof = self.asof_date if self.asof_date > date.today() else date.today()
+        # Use asof_date+1 (same logic as the Stock tab) so that EOD events recorded
+        # ON today are always included (calculate_asof rule is date < asof_date,
+        # strictly less-than).  If asof_date was already advanced to >today by an
+        # EOD close in the current session, keep it as-is to avoid double-advancing.
+        proposal_asof = self.asof_date if self.asof_date > date.today() else date.today() + timedelta(days=1)
         stocks = StockCalculator.calculate_all_skus(
             sku_ids,
             proposal_asof,
