@@ -1442,7 +1442,15 @@ class DesktopOrderApp:
         row_order.pack(side="top", fill="x", pady=2)
         ttk.Label(row_order, text="Data Ordine:", width=22).pack(side="left", padx=(0, 5))
         self.order_date_var = tk.StringVar(value=date.today().isoformat())
-        ttk.Entry(row_order, textvariable=self.order_date_var, width=12).pack(side="left", padx=(0, 5))
+        if TKCALENDAR_AVAILABLE:
+            DateEntry(  # type: ignore[misc]
+                row_order,
+                textvariable=self.order_date_var,
+                width=12,
+                date_pattern="yyyy-mm-dd",
+            ).pack(side="left", padx=(0, 5))
+        else:
+            ttk.Entry(row_order, textvariable=self.order_date_var, width=12).pack(side="left", padx=(0, 5))
         ttk.Label(row_order, text="(YYYY-MM-DD, default = oggi)", font=("Helvetica", 8), foreground="gray").pack(side="left")
 
         # ── Row 2: Corsia Logistica ──────────────────────────────────────────
@@ -2695,11 +2703,13 @@ class DesktopOrderApp:
                                 })
 
                     # Update progress bar on main thread
+                    # Throttle UI updates to every 10 SKUs (+ last) to avoid flooding
+                    # the Tk event queue with 200 root.after() callbacks for 200 SKUs.
                     _count = i + 1
-                    self.root.after(0, lambda c=_count, d=description:
-                        (_prog_lbl.config(text=f"SKU {c}/{len(sku_ids)}: {d[:40]}"),
-                         _prog_bar.config(value=c),
-                         _prog.update_idletasks()))
+                    if _count % 10 == 0 or i == len(sku_ids) - 1:
+                        self.root.after(0, lambda c=_count, d=description:
+                            (_prog_lbl.config(text=f"SKU {c}/{len(sku_ids)}: {d[:40]}"),
+                             _prog_bar.config(value=c)))
 
                 _pass_a_result["sku_oos_data"] = sku_oos_data_local
                 _pass_a_result["oos_candidates"] = oos_candidates_local
@@ -2882,7 +2892,7 @@ class DesktopOrderApp:
         if not candidates:
             return {}
 
-        PAGE_SIZE = 50
+        PAGE_SIZE = 20   # 20 rows → ~200 widgets on first render vs ~500 with 50
         n_total = len(candidates)
         n_pages = max(1, (n_total + PAGE_SIZE - 1) // PAGE_SIZE)
 
@@ -2978,114 +2988,191 @@ class DesktopOrderApp:
         # current_page mutable state
         _page = [0]
         _page_lbl = tk.StringVar(value="")
+        # Pre-allocated widget pool (built on first _render_page call, reused on every
+        # subsequent page change).  Mutable lists allow inner functions to modify them
+        # without 'nonlocal' declarations.
+        _pool: list = []           # list of row-widget dicts, one per pool slot
+        _pool_sku_map: list = []   # pool-index → sku_id for the visible page
 
         # ── Page renderer ────────────────────────────────────────────────────
         def _render_page(page_num: int):
-            """Destroy all current inner widgets and render only this page's rows."""
-            for child in inner.winfo_children():
-                child.destroy()
-
-            # Column headers
-            for c, hdr in enumerate(headers):
-                ttk.Label(inner, text=hdr, **hdr_style).grid(
-                    row=0, column=c, sticky="w", padx=(4, 2), pady=(0, 4)
-                )
-            ttk.Separator(inner, orient="horizontal").grid(
-                row=1, column=0, columnspan=len(headers), sticky="ew", pady=(0, 4)
-            )
-
+            """
+            First call: build a fixed pool of PAGE_SIZE row-widget bundles and attach
+            them to the grid.  Subsequent calls (page navigation, set-all): update the
+            text/button state in existing widgets and show/hide pool rows as needed.
+            No widgets are ever destroyed; this is the primary latency fix.
+            """
             page_candidates = candidates[page_num * PAGE_SIZE:(page_num + 1) * PAGE_SIZE]
 
-            for idx, cand in enumerate(page_candidates):
+            def _make_select(sid, key, pi_idx):
+                """Factory: returns a callback that updates _store and button visuals."""
+                def _select():
+                    _store[sid]["choice"] = key
+                    for k, b in _pool[pi_idx]["btns"].items():
+                        if k == key:
+                            b.config(relief="sunken", bg=SEL_BG[k], fg=SEL_FG)
+                        else:
+                            b.config(relief="flat", bg="SystemButtonFace", fg=UNSEL_FG)
+                return _select
+
+            # ── Build pool once on first call ────────────────────────────────
+            if not _pool:
+                # Static header (created once)
+                for c, hdr in enumerate(headers):
+                    ttk.Label(inner, text=hdr, **hdr_style).grid(
+                        row=0, column=c, sticky="w", padx=(4, 2), pady=(0, 4)
+                    )
+                ttk.Separator(inner, orient="horizontal").grid(
+                    row=1, column=0, columnspan=len(headers), sticky="ew", pady=(0, 4)
+                )
+
+                for i in range(PAGE_SIZE):
+                    base_row = i * 2 + 2
+                    date_var  = tk.StringVar()
+                    colli_var = tk.StringVar()
+
+                    sku_lbl  = ttk.Label(inner, wraplength=130)
+                    desc_lbl = ttk.Label(inner, wraplength=190)
+                    oos_lbl  = ttk.Label(inner, anchor="center")
+
+                    btn_refs: dict = {}
+                    for col, choice_key in CHOICE_COLS.items():
+                        btn = tk.Button(
+                            inner,
+                            text=btn_labels[col],
+                            width=6,
+                            font=("Helvetica", 8),
+                            relief="flat",
+                            bg="SystemButtonFace",
+                            fg=UNSEL_FG,
+                            cursor="hand2",
+                            pady=1,
+                        )
+                        btn.grid(row=base_row, column=col, padx=(3, 2), pady=2)
+                        btn_refs[choice_key] = btn
+
+                    if TKCALENDAR_AVAILABLE:
+                        date_widget = DateEntry(  # type: ignore[misc]
+                            inner, textvariable=date_var, width=12,
+                            date_pattern="yyyy-mm-dd",
+                        )
+                    else:
+                        date_widget = ttk.Entry(inner, textvariable=date_var, width=13)
+                    colli_entry = ttk.Entry(inner, textvariable=colli_var, width=9)
+                    sep = ttk.Separator(inner, orient="horizontal")
+
+                    sku_lbl.grid( row=base_row, column=0, sticky="w",  padx=(4, 2), pady=2)
+                    desc_lbl.grid(row=base_row, column=1, sticky="w",  padx=(4, 2), pady=2)
+                    oos_lbl.grid( row=base_row, column=2, sticky="ew", padx=(4, 2), pady=2)
+                    date_widget.grid( row=base_row, column=7, sticky="ew", padx=(4, 2), pady=2)
+                    colli_entry.grid( row=base_row, column=8, sticky="ew", padx=(4, 2), pady=2)
+                    sep.grid(row=base_row + 1, column=0,
+                             columnspan=len(headers), sticky="ew", padx=4)
+
+                    # FocusOut / Return bindings instead of trace_add: avoids a
+                    # per-keystroke dict write for every one of the 200+ Entry fields.
+                    def _commit_date(event=None, _pi=i):
+                        sid = _pool_sku_map[_pi] if _pi < len(_pool_sku_map) else None
+                        if sid:
+                            _store[sid]["estimate_date_str"] = _pool[_pi]["date_var"].get()
+
+                    def _commit_colli(event=None, _pi=i):
+                        sid = _pool_sku_map[_pi] if _pi < len(_pool_sku_map) else None
+                        if sid:
+                            _store[sid]["estimate_colli_str"] = _pool[_pi]["colli_var"].get()
+
+                    date_widget.bind("<FocusOut>", _commit_date)
+                    date_widget.bind("<Return>",   _commit_date)
+                    if TKCALENDAR_AVAILABLE:
+                        date_widget.bind("<<DateEntrySelected>>", _commit_date)
+                    colli_entry.bind("<FocusOut>", _commit_colli)
+                    colli_entry.bind("<Return>",   _commit_colli)
+
+                    _pool.append({
+                        "sku_lbl":     sku_lbl,
+                        "desc_lbl":    desc_lbl,
+                        "oos_lbl":     oos_lbl,
+                        "btns":        btn_refs,
+                        "date_var":    date_var,
+                        "date_widget": date_widget,
+                        "colli_var":   colli_var,
+                        "colli_entry": colli_entry,
+                        "sep":         sep,
+                    })
+
+            # ── Update pool values for the requested page ─────────────────────
+            _pool_sku_map[:] = [None] * PAGE_SIZE   # reset before filling
+
+            for i, cand in enumerate(page_candidates):
                 sku_id = cand["sku"]
-                base_row = idx * 2 + 2
+                _pool_sku_map[i] = sku_id
+                row = _pool[i]
 
-                ttk.Label(inner, text=sku_id, wraplength=130).grid(
-                    row=base_row, column=0, sticky="w", padx=(4, 2), pady=2
-                )
-                ttk.Label(inner, text=cand["description"][:32], wraplength=190).grid(
-                    row=base_row, column=1, sticky="w", padx=(4, 2), pady=2
-                )
-                ttk.Label(inner, text=str(cand["oos_days_count"]), anchor="center").grid(
-                    row=base_row, column=2, sticky="ew", padx=(4, 2), pady=2
-                )
+                row["sku_lbl"].config( text=sku_id)
+                row["desc_lbl"].config(text=cand["description"][:32])
+                row["oos_lbl"].config( text=str(cand["oos_days_count"]))
 
-                # Restore from backing store
                 current_choice = _store[sku_id]["choice"]
-                btn_refs: dict = {}
-
-                def _make_select(sid, key, btns_dict):
-                    def _select():
-                        _store[sid]["choice"] = key
-                        for k, b in btns_dict.items():
-                            if k == key:
-                                b.config(relief="sunken", bg=SEL_BG[k], fg=SEL_FG)
-                            else:
-                                b.config(relief="flat", bg="SystemButtonFace", fg=UNSEL_FG)
-                    return _select
-
-                for col, choice_key in CHOICE_COLS.items():
+                for choice_key, btn in row["btns"].items():
                     is_sel = (choice_key == current_choice)
-                    btn = tk.Button(
-                        inner,
-                        text=btn_labels[col],
-                        width=6,
-                        font=("Helvetica", 8),
+                    btn.config(
                         relief="sunken" if is_sel else "flat",
                         bg=SEL_BG[choice_key] if is_sel else "SystemButtonFace",
                         fg=SEL_FG if is_sel else UNSEL_FG,
-                        cursor="hand2",
-                        pady=1,
-                    )
-                    btn.grid(row=base_row, column=col, padx=(3, 2), pady=2)
-                    btn_refs[choice_key] = btn
-
-                for col, choice_key in CHOICE_COLS.items():
-                    btn_refs[choice_key].config(
-                        command=_make_select(sku_id, choice_key, btn_refs)
+                        command=_make_select(sku_id, choice_key, i),
                     )
 
-                date_var = tk.StringVar(value=_store[sku_id]["estimate_date_str"])
-                date_var.trace_add("write", lambda *a, sv=date_var, sid=sku_id:
-                    _store[sid].update(estimate_date_str=sv.get()))
-                if TKCALENDAR_AVAILABLE:
-                    date_widget = DateEntry(  # type: ignore[misc]
-                        inner, textvariable=date_var, width=12, date_pattern="yyyy-mm-dd",
-                    )
-                else:
-                    date_widget = ttk.Entry(inner, textvariable=date_var, width=13)
-                date_widget.grid(row=base_row, column=7, sticky="ew", padx=(4, 2), pady=2)
+                # set() does not fire FocusOut, so no accidental _store write here
+                row["date_var"].set( _store[sku_id]["estimate_date_str"])
+                row["colli_var"].set(_store[sku_id]["estimate_colli_str"])
 
-                colli_var = tk.StringVar(value=_store[sku_id]["estimate_colli_str"])
-                colli_var.trace_add("write", lambda *a, sv=colli_var, sid=sku_id:
-                    _store[sid].update(estimate_colli_str=sv.get()))
-                ttk.Entry(inner, textvariable=colli_var, width=9).grid(
-                    row=base_row, column=8, sticky="ew", padx=(4, 2), pady=2
-                )
+                # Re-show row (no-op if already visible; restores after grid_remove)
+                for w in (row["sku_lbl"], row["desc_lbl"], row["oos_lbl"],
+                          row["date_widget"], row["colli_entry"], row["sep"]):
+                    w.grid()
+                for btn in row["btns"].values():
+                    btn.grid()
 
-                ttk.Separator(inner, orient="horizontal").grid(
-                    row=base_row + 1, column=0, columnspan=len(headers), sticky="ew", padx=4
-                )
+            # Hide unused pool slots when page has fewer than PAGE_SIZE candidates
+            for i in range(len(page_candidates), PAGE_SIZE):
+                row = _pool[i]
+                for w in (row["sku_lbl"], row["desc_lbl"], row["oos_lbl"],
+                          row["date_widget"], row["colli_entry"], row["sep"]):
+                    w.grid_remove()
+                for btn in row["btns"].values():
+                    btn.grid_remove()
 
-            # Force geometry resolution so scrollregion is correct even on first render
-            inner.update_idletasks()
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            canvas.yview_moveto(0)  # scroll to top on page change
+            # Geometry update deferred so it never blocks the main loop
+            inner.after_idle(lambda: canvas.configure(scrollregion=canvas.bbox("all")))
+            inner.after_idle(lambda: canvas.yview_moveto(0))
             _page_lbl.set(f"Pagina {page_num + 1} / {n_pages}  ({n_total} SKU)")
+
+        def _flush_pool_to_store():
+            """Sync current Entry/DateEntry values to backing store.
+            Must be called before any page change or confirm to capture values
+            that were typed but not yet committed via FocusOut/Return.
+            """
+            for pi, sku_id in enumerate(_pool_sku_map):
+                if sku_id and pi < len(_pool):
+                    _store[sku_id]["estimate_date_str"]  = _pool[pi]["date_var"].get()
+                    _store[sku_id]["estimate_colli_str"] = _pool[pi]["colli_var"].get()
 
         def _go_prev():
             if _page[0] > 0:
+                _flush_pool_to_store()
                 _page[0] -= 1
                 _render_page(_page[0])
 
         def _go_next():
             if _page[0] < n_pages - 1:
+                _flush_pool_to_store()
                 _page[0] += 1
                 _render_page(_page[0])
 
         # ── Populate btn_frame ───────────────────────────────────────────────
         def _set_all(choice_key: str):
             """Set ALL candidates (all pages) to choice_key, update visible widgets."""
+            _flush_pool_to_store()  # save any in-progress entry before re-rendering
             for cand in candidates:
                 _store[cand["sku"]]["choice"] = choice_key
             # Refresh visible page button states
@@ -3112,6 +3199,7 @@ class DesktopOrderApp:
             ttk.Button(nav_frame, text="▶", width=3, command=_go_next).pack(side="left")
 
         def _confirm():
+            _flush_pool_to_store()  # capture any value typed but not yet committed
             for cand in candidates:
                 s = _store[cand["sku"]]
                 choice_key = s["choice"]
@@ -3157,7 +3245,9 @@ class DesktopOrderApp:
         popup.geometry(f"{popup_w}x{min(popup_h, 700)}+{px}+{py}")
         popup.update_idletasks()  # flush layout so canvas has real pixel dimensions
 
-        _render_page(0)
+        # Defer first page render so the popup shell (header, buttons) appears
+        # immediately — visible instant feedback before rows are populated.
+        popup.after_idle(_render_page, 0)
 
         popup.wait_window()
         return decisions
