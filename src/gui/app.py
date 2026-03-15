@@ -3895,14 +3895,16 @@ class DesktopOrderApp:
         tk.Label(bc_right, text=" Confermato", font=("Helvetica", 9, "bold"), bg="white", fg="#34a853").pack(side="left")
 
         # ── TABLE HEADER ────────────────────────────────────────────────────
-        # Fixed widths in px for ID, SKU, EAN/Barcode, Quantità; Descrizione expands
+        # Colonne: SKU | Descrizione (expand) | EAN/Barcode | Quantità
         COL_SPEC = [
-            ("ID",                  72, "center"),
             ("SKU",                 84, "center"),
             ("Descrizione Prodotto", 0, "w"),      # 0 = expand
             ("EAN / Barcode",      192, "center"),
             ("Quantità",           128, "center"),
         ]
+        # Somma colonne fisse – riusata per calcolo wraplength dinamico e minsize.
+        _FIXED_COLS_W = 84 + 192 + 128  # SKU + EAN + Qty
+        popup.minsize(max(640, _FIXED_COLS_W + 200), 300)
 
         tbl_hdr_frame = tk.Frame(card, bg="#f5f6f7")
         tbl_hdr_frame.pack(fill="x", padx=20, pady=(6, 0))
@@ -3926,10 +3928,21 @@ class DesktopOrderApp:
         tbl_inner = tk.Frame(tbl_canvas, bg="white")
         tbl_inner.bind("<Configure>",
                        lambda e: tbl_canvas.configure(scrollregion=tbl_canvas.bbox("all")))
-        tbl_canvas.create_window((0, 0), window=tbl_inner, anchor="nw")
+        _canvas_win_id = tbl_canvas.create_window((0, 0), window=tbl_inner, anchor="nw")
         tbl_canvas.configure(yscrollcommand=tbl_scroll.set)
         tbl_canvas.pack(side="left", fill="both", expand=True)
         tbl_scroll.pack(side="right", fill="y")
+
+        # Sync tbl_inner width = canvas viewport on every resize so that the
+        # fixed-width EAN/Quantità cells (pack side="left") are never pushed off-screen.
+        _last_canvas_w = [0]
+        def _on_tbl_canvas_resize(e):
+            if abs(e.width - _last_canvas_w[0]) > 8:
+                _last_canvas_w[0] = e.width
+                tbl_canvas.itemconfig(_canvas_win_id, width=e.width)
+                if tbl_inner.winfo_children():   # only re-render if page already painted
+                    render_page(current_page[0])
+        tbl_canvas.bind("<Configure>", _on_tbl_canvas_resize)
 
         end_var = tk.StringVar()
         tk.Label(card, textvariable=end_var, font=("Helvetica", 9),
@@ -3996,15 +4009,6 @@ class DesktopOrderApp:
                 colli = conf.qty_ordered // pack_size
                 resto_pz = conf.qty_ordered % pack_size
 
-                # ── ID cell ──
-                # Nessun padx sul frame: le larghezze devono coincidere con COL_SPEC per
-                # allineare perfettamente le celle del body all'intestazione della tabella.
-                id_cell = tk.Frame(row, bg=row_bg, width=72)
-                id_cell.pack(side="left", pady=10)
-                id_cell.pack_propagate(False)
-                tk.Label(id_cell, text=f"#{_short_id(conf.order_id)}", font=("Helvetica", 9),
-                         bg="#e8f0fe", fg="#1a73e8", padx=4, pady=2).pack(anchor="center")
-
                 # ── SKU cell ──
                 sku_cell = tk.Frame(row, bg=row_bg, width=84)
                 sku_cell.pack(side="left", pady=10)
@@ -4013,10 +4017,15 @@ class DesktopOrderApp:
                          bg=row_bg, fg="#555").pack(anchor="center")
 
                 # ── Description cell (expands) ──
+                # Calcola wraplength in base alla larghezza effettiva del canvas meno
+                # le colonne fisse, così in resize non si spingono fuori EAN o Quantità.
+                _cw = tbl_canvas.winfo_width()
+                _cw = _cw if _cw > 100 else (920 - 40 - 20)  # fallback prima del primo Configure
+                _desc_wrap = max(80, _cw - _FIXED_COLS_W - 24)
                 desc_cell = tk.Frame(row, bg=row_bg)
                 desc_cell.pack(side="left", fill="both", expand=True, pady=10)
                 tk.Label(desc_cell, text=description, font=("Helvetica", 9),
-                         bg=row_bg, fg="#333", anchor="w", padx=8, wraplength=200).pack(anchor="w")
+                         bg=row_bg, fg="#333", anchor="w", padx=8, wraplength=_desc_wrap).pack(anchor="w")
 
                 # ── EAN / Barcode cell ──
                 ean_cell = tk.Frame(row, bg=row_bg, width=192)
