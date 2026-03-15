@@ -3820,16 +3820,22 @@ class DesktopOrderApp:
 
         popup = tk.Toplevel(self.root)
         popup.title("Ricevuta Conferma Ordine")
-        popup.geometry("920x680")
         popup.configure(bg="#e0e0e0")
         popup.transient(self.root)
         popup.grab_set()
 
         # ── page state ──────────────────────────────────────────────────────
         ITEMS_PER_PAGE = 5
+        # Altezza adattiva: stima altezza per riga in funzione della disponibilità barcode,
+        # così con 1 solo SKU il popup non apre una finestra semi-vuota di 680px.
+        ROW_H  = 92 if BARCODE_AVAILABLE else 62   # px stimati per riga
+        CHROME = 275                                # header+breadcrumb+col-header+footer
         total_items = len(confirmations)
         total_pages = max(1, (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
         current_page = [0]
+        items_first_page = min(ITEMS_PER_PAGE, total_items)
+        popup_h = max(380, min(CHROME + items_first_page * ROW_H, 720))
+        popup.geometry(f"920x{popup_h}")
 
         skus_by_id = {s.sku: s for s in self.csv_layer.read_skus()}
         first_conf = confirmations[0]
@@ -3861,7 +3867,8 @@ class DesktopOrderApp:
 
         hdr_right = tk.Frame(hdr, bg="white")
         hdr_right.pack(side="right")
-        tk.Label(hdr_right, text="print/download", font=("Helvetica", 10), bg="white", fg="#555", cursor="hand2").pack(side="left", padx=(0, 14))
+        # print/download: non ancora implementato, testo in grigio chiaro senza affordance cliccabile
+        tk.Label(hdr_right, text="print/download", font=("Helvetica", 10), bg="white", fg="#bbb").pack(side="left", padx=(0, 14))
         tk.Button(hdr_right, text="Chiudi", font=("Helvetica", 10), bg="#1a73e8", fg="white",
                   relief="flat", padx=16, pady=5, bd=0, cursor="hand2",
                   activebackground="#1558b0", activeforeground="white",
@@ -3935,11 +3942,13 @@ class DesktopOrderApp:
         nav.pack(fill="x", padx=20, pady=10)
 
         prev_btn = tk.Button(nav, text="\u276e  Precedente", font=("Helvetica", 10),
-                             bg="white", relief="solid", bd=1, padx=12, pady=5, cursor="hand2")
+                             bg="white", fg="#333", relief="solid", bd=1, padx=12, pady=5,
+                             cursor="hand2", disabledforeground="#bbb")
         prev_btn.pack(side="left", padx=(0, 6))
 
         next_btn = tk.Button(nav, text="Successiva  \u276f", font=("Helvetica", 10),
-                             bg="white", relief="solid", bd=1, padx=12, pady=5, cursor="hand2")
+                             bg="white", fg="#333", relief="solid", bd=1, padx=12, pady=5,
+                             cursor="hand2", disabledforeground="#bbb")
         next_btn.pack(side="left")
 
         count_var = tk.StringVar()
@@ -3988,28 +3997,30 @@ class DesktopOrderApp:
                 resto_pz = conf.qty_ordered % pack_size
 
                 # ── ID cell ──
+                # Nessun padx sul frame: le larghezze devono coincidere con COL_SPEC per
+                # allineare perfettamente le celle del body all'intestazione della tabella.
                 id_cell = tk.Frame(row, bg=row_bg, width=72)
-                id_cell.pack(side="left", padx=4, pady=10)
+                id_cell.pack(side="left", pady=10)
                 id_cell.pack_propagate(False)
                 tk.Label(id_cell, text=f"#{_short_id(conf.order_id)}", font=("Helvetica", 9),
                          bg="#e8f0fe", fg="#1a73e8", padx=4, pady=2).pack(anchor="center")
 
                 # ── SKU cell ──
                 sku_cell = tk.Frame(row, bg=row_bg, width=84)
-                sku_cell.pack(side="left", padx=4, pady=10)
+                sku_cell.pack(side="left", pady=10)
                 sku_cell.pack_propagate(False)
                 tk.Label(sku_cell, text=conf.sku, font=("Courier", 9),
                          bg=row_bg, fg="#555").pack(anchor="center")
 
                 # ── Description cell (expands) ──
                 desc_cell = tk.Frame(row, bg=row_bg)
-                desc_cell.pack(side="left", fill="both", expand=True, padx=4, pady=10)
+                desc_cell.pack(side="left", fill="both", expand=True, pady=10)
                 tk.Label(desc_cell, text=description, font=("Helvetica", 9),
-                         bg=row_bg, fg="#333", anchor="w", wraplength=200).pack(anchor="w")
+                         bg=row_bg, fg="#333", anchor="w", padx=8, wraplength=200).pack(anchor="w")
 
                 # ── EAN / Barcode cell ──
                 ean_cell = tk.Frame(row, bg=row_bg, width=192)
-                ean_cell.pack(side="left", padx=4, pady=8)
+                ean_cell.pack(side="left", pady=8)
                 ean_cell.pack_propagate(False)
                 if ean:
                     is_valid, err = validate_ean(ean)
@@ -4036,7 +4047,7 @@ class DesktopOrderApp:
 
                 # ── Quantità cell ──
                 qty_cell = tk.Frame(row, bg=row_bg, width=128)
-                qty_cell.pack(side="left", padx=4, pady=10)
+                qty_cell.pack(side="left", pady=10)
                 qty_cell.pack_propagate(False)
                 qty_inner = tk.Frame(qty_cell, bg=row_bg)
                 qty_inner.pack(anchor="center")
@@ -4094,8 +4105,10 @@ class DesktopOrderApp:
             ean_barcode.save(tmpfile_path.replace('.png', ''))  # Library adds .png
             
             # Load image
+            # Dimensione adattata alla colonna EAN (192px): max 178px larghezza con margini,
+            # altezza proporzionale. Precedente (250×100) causava overflow e clipping.
             img = Image.open(tmpfile_path)
-            img = img.resize((250, 100), Image.Resampling.LANCZOS)
+            img = img.resize((178, 66), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(img)
             
             # Cleanup temp file
