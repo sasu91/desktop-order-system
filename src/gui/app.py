@@ -3814,343 +3814,282 @@ class DesktopOrderApp:
             messagebox.showerror("Errore", f"Impossibile confermare ordini: {str(e)}")
     
     def _show_receipt_window(self, confirmations):
-        """Show receipt window with order confirmations.
+        """Show receipt window - V3 rebuild.
 
-        Layout: table with 4 columns (SKU, Descrizione, EAN/Barcode, Quantità).
-        items_per_page is computed dynamically from the popup height; resize
-        triggers a debounced re-render.  Spacebar advances to the next page and
-        closes the window on the last page.
+        UI essenziale: titolo + tabella 4 colonne + footer nav.
+        Nessun Canvas / Scrollbar interno. Paginazione dinamica su resize finestra.
+        Spazio e tasto Next avanzano; su ultima pagina chiudono la finestra.
         """
         if not confirmations:
             return
 
         popup = tk.Toplevel(self.root)
         popup.title("Ricevuta Conferma Ordine")
-        popup.configure(bg="#e0e0e0")
+        popup.configure(bg="#f0f0f0")
         popup.transient(self.root)
         popup.grab_set()
 
-        # ── Layout constants ─────────────────────────────────────────────────
-        ROW_H    = 92 if BARCODE_AVAILABLE else 62  # px per row (with or without barcode)
-        CHROME_H = 265                              # non-table area: header+bc+col-hdr+footer
-        COL_SPEC = [
-            ("SKU",                  84, "center"),
-            ("Descrizione Prodotto",  0, "w"),      # 0 → expand
-            ("EAN / Barcode",       192, "center"),
-            ("Quantità",            128, "center"),
-        ]
-        _FIXED_COLS_W = 84 + 192 + 128             # SKU + EAN + Qty (for wraplength calc)
-        popup.minsize(max(640, _FIXED_COLS_W + 200), 300)
+        # ── Geometry constants ────────────────────────────────────────────────
+        # Widths for fixed columns; description takes all remaining horizontal space.
+        SKU_W  = 90
+        EAN_W  = 200
+        QTY_W  = 130
+        FIXED_W = SKU_W + EAN_W + QTY_W          # 420 px
+        # Height for each data row (fixed; content positioned with place).
+        ROW_H  = 90 if BARCODE_AVAILABLE else 58
+        # Chrome height = everything that is NOT table body rows.
+        # header(52) + sep(1) + col-hdr(34) + sep(1) + sep(1) + footer(50) +
+        # card pady(24) + internal vgaps(30) = ~193 → use 210 for safety.
+        CHROME_H = 210
+        popup.geometry("920x620")
+        popup.minsize(FIXED_W + 260, 320)
 
-        # ── Pre-compute view-model rows (once at open) ────────────────────────
+        # ── Pre-compute per-row display data (once, at popup open) ────────────
         skus_by_id = {s.sku: s for s in self.csv_layer.read_skus()}
 
-        def _select_ean(sku_obj):
+        def _pick_ean(sku_obj):
             if not sku_obj:
                 return None
-            ean_p = sku_obj.ean
-            ean_s = getattr(sku_obj, "ean_secondary", None)
-            if ean_p and validate_ean(ean_p)[0]:
-                return ean_p
-            if ean_s and validate_ean(ean_s)[0]:
-                return ean_s
-            return ean_p  # keep primary even if invalid, for display
+            ep = sku_obj.ean
+            es = getattr(sku_obj, "ean_secondary", None)
+            if ep and validate_ean(ep)[0]:
+                return ep
+            if es and validate_ean(es)[0]:
+                return es
+            return ep  # keep even if invalid; renderer marks it red
 
         rows = []
         for conf in confirmations:
-            sku_obj  = skus_by_id.get(conf.sku)
-            pack_size = (sku_obj.pack_size if sku_obj else 1) or 1
-            colli     = conf.qty_ordered // pack_size
-            resto_pz  = conf.qty_ordered % pack_size
+            s  = skus_by_id.get(conf.sku)
+            ps = (s.pack_size if s else 1) or 1
+            colli, resto = divmod(conf.qty_ordered, ps)
             rows.append({
-                "sku":         conf.sku,
-                "description": sku_obj.description if sku_obj else "N/A",
-                "ean":         _select_ean(sku_obj),
-                "qty_ordered": conf.qty_ordered,
-                "colli":       colli,
-                "resto_pz":    resto_pz,
+                "sku":   conf.sku,
+                "desc":  s.description if s else "N/A",
+                "ean":   _pick_ean(s),
+                "qty":   conf.qty_ordered,
+                "colli": colli,
+                "resto": resto,
             })
 
-        # ── Barcode cache: generate all images once ───────────────────────────
-        barcode_cache: dict = {}
+        # ── Barcode cache (PhotoImage refs kept alive in this dict) ───────────
+        bc_cache: dict = {}
         if BARCODE_AVAILABLE:
-            seen_eans: set = set()
-            for r in rows:
-                ean = r["ean"]
-                if ean and ean not in seen_eans:
-                    seen_eans.add(ean)
-                    if validate_ean(ean)[0]:
+            for rd in rows:
+                ean = rd["ean"]
+                if ean and ean not in bc_cache and validate_ean(ean)[0]:
+                    try:
                         img = self._generate_barcode_image(ean)
                         if img:
-                            barcode_cache[ean] = img
+                            bc_cache[ean] = img
+                    except Exception:
+                        pass
 
-        # ── Mutable page state ────────────────────────────────────────────────
-        total_items = len(rows)
-        state = {"page": 0, "items_per_page": 5}
+        # ── Page state ────────────────────────────────────────────────────────
+        total = len(rows)
+        state = {"page": 0, "ipp": 5}
 
-        first_conf = confirmations[0]
-        def _short_id(oid):
-            return oid.split("_")[-1] if "_" in oid else oid[-8:]
-        first_receipt_date_str = first_conf.receipt_date.strftime("%d/%m/%Y")
-        display_order_id = _short_id(first_conf.order_id)
-
-        def _compute_items_per_page() -> int:
+        def _calc_ipp() -> int:
             h = popup.winfo_height()
-            available = max(ROW_H * 3, h - CHROME_H)
-            return max(3, min(20, available // ROW_H))
+            avail = max(ROW_H * 2, h - CHROME_H)
+            return max(2, min(20, avail // ROW_H))
 
         def _total_pages() -> int:
-            ipp = state["items_per_page"]
-            return max(1, (total_items + ipp - 1) // ipp)
+            return max(1, (total + state["ipp"] - 1) // state["ipp"])
 
-        # Initial geometry: estimate based on default items_per_page
-        popup_h = max(380, min(CHROME_H + state["items_per_page"] * ROW_H, 720))
-        popup.geometry(f"920x{popup_h}")
+        # ── Static skeleton: card → header | sep | col-hdr | sep | body | sep | footer ──
+        card = tk.Frame(popup, bg="white")
+        card.pack(fill="both", expand=True, padx=12, pady=12)
 
-        # ── Outer white card ──────────────────────────────────────────────────
-        card = tk.Frame(popup, bg="white", relief="flat")
-        card.pack(fill="both", expand=True, padx=18, pady=18)
-
-        # ── HEADER ───────────────────────────────────────────────────────────
+        # Header: title (left) + page indicator (left) + Chiudi (right)
         hdr = tk.Frame(card, bg="white")
-        hdr.pack(fill="x", padx=20, pady=(16, 0))
-
-        icon_box = tk.Frame(hdr, bg="#e8f0fe", width=46, height=46)
-        icon_box.pack(side="left", padx=(0, 12))
-        icon_box.pack_propagate(False)
-        tk.Label(icon_box, text="\u2261", font=("Helvetica", 22),
-                 bg="#e8f0fe", fg="#1a73e8").place(relx=0.5, rely=0.5, anchor="center")
-
-        title_col = tk.Frame(hdr, bg="white")
-        title_col.pack(side="left")
-        tk.Label(title_col, text="Ricevuta Conferma Ordine",
-                 font=("Helvetica", 13, "bold"), bg="white", fg="#111").pack(anchor="w")
-        page_subtitle_var = tk.StringVar(value="PAGINA 1 DI 1")
-        tk.Label(title_col, textvariable=page_subtitle_var,
-                 font=("Helvetica", 8), bg="white", fg="#999").pack(anchor="w")
-
-        hdr_right = tk.Frame(hdr, bg="white")
-        hdr_right.pack(side="right")
-        tk.Label(hdr_right, text="print/download",
-                 font=("Helvetica", 10), bg="white", fg="#bbb").pack(side="left", padx=(0, 14))
-        tk.Button(hdr_right, text="Chiudi", font=("Helvetica", 10),
-                  bg="#1a73e8", fg="white", relief="flat", padx=16, pady=5, bd=0,
+        hdr.pack(fill="x", padx=16, pady=(12, 0))
+        tk.Label(hdr, text="Ricevuta Conferma Ordine",
+                 font=("Helvetica", 13, "bold"), bg="white", fg="#111").pack(side="left")
+        pg_var = tk.StringVar()
+        tk.Label(hdr, textvariable=pg_var, font=("Helvetica", 9),
+                 bg="white", fg="#888").pack(side="left", padx=12)
+        tk.Button(hdr, text="Chiudi", font=("Helvetica", 10),
+                  bg="#1a73e8", fg="white", relief="flat", padx=14, pady=4, bd=0,
                   cursor="hand2", activebackground="#1558b0", activeforeground="white",
-                  command=popup.destroy).pack(side="left")
+                  command=popup.destroy).pack(side="right")
 
-        tk.Frame(card, height=1, bg="#e0e0e0").pack(fill="x", pady=(14, 0))
+        tk.Frame(card, height=1, bg="#dee2e6").pack(fill="x", padx=12, pady=(8, 0))
 
-        # ── BREADCRUMB ────────────────────────────────────────────────────────
-        bc = tk.Frame(card, bg="white")
-        bc.pack(fill="x", padx=20, pady=(8, 4))
-
-        bc_left = tk.Frame(bc, bg="white")
-        bc_left.pack(side="left")
-        tk.Label(bc_left, text="Ordini",
-                 font=("Helvetica", 9), bg="white", fg="#1a73e8").pack(side="left")
-        tk.Label(bc_left, text=" / ",
-                 font=("Helvetica", 9), bg="white", fg="#aaa").pack(side="left")
-        tk.Label(bc_left, text=f"Conferma Ricevuta #{display_order_id}",
-                 font=("Helvetica", 9), bg="white", fg="#555").pack(side="left")
-
-        bc_right = tk.Frame(bc, bg="white")
-        bc_right.pack(side="right")
-        tk.Label(bc_right, text=f"\U0001f4c5 DATA RICEVUTA: {first_receipt_date_str}",
-                 font=("Helvetica", 9), bg="white", fg="#555").pack(side="left", padx=(0, 16))
-        tk.Label(bc_right, text="\u25cf",
-                 font=("Helvetica", 9), bg="white", fg="#34a853").pack(side="left")
-        tk.Label(bc_right, text=" Confermato",
-                 font=("Helvetica", 9, "bold"), bg="white", fg="#34a853").pack(side="left")
-
-        # ── TABLE HEADER ──────────────────────────────────────────────────────
-        tbl_hdr_frame = tk.Frame(card, bg="#f5f6f7")
-        tbl_hdr_frame.pack(fill="x", padx=20, pady=(6, 0))
-        for name, w, anc in COL_SPEC:
-            cell = tk.Frame(tbl_hdr_frame, bg="#f5f6f7", height=30)
-            cell.pack(side="left", fill="both", expand=(w == 0))
+        # Column headers (fixed widths matching data rows)
+        col_hdr = tk.Frame(card, bg="#f8f9fa")
+        col_hdr.pack(fill="x", padx=12)
+        for lbl, w, anc in [
+            ("SKU",                  SKU_W, "center"),
+            ("Descrizione Prodotto",  0,    "w"),
+            ("EAN / Barcode",        EAN_W, "center"),
+            ("Quantità",             QTY_W, "center"),
+        ]:
+            c = tk.Frame(col_hdr, bg="#f8f9fa", height=34)
+            c.pack(side="left", fill="both", expand=(w == 0))
             if w:
-                cell.configure(width=w)
-            cell.pack_propagate(False)
-            tk.Label(cell, text=name, font=("Helvetica", 9, "bold"),
-                     bg="#f5f6f7", fg="#666", anchor=anc).pack(fill="both", padx=8, ipady=5)  # type: ignore[arg-type]
+                c.configure(width=w)
+            c.pack_propagate(False)
+            tk.Label(c, text=lbl, font=("Helvetica", 9, "bold"),
+                     bg="#f8f9fa", fg="#555", anchor=anc,  # type: ignore[arg-type]
+                     padx=8).pack(fill="both", ipady=5)
 
-        tk.Frame(card, height=1, bg="#d0d0d0").pack(fill="x", padx=20)
+        tk.Frame(card, height=1, bg="#dee2e6").pack(fill="x", padx=12)
 
-        # ── SCROLLABLE TABLE BODY ─────────────────────────────────────────────
-        tbl_outer = tk.Frame(card, bg="white")
-        tbl_outer.pack(fill="both", expand=True, padx=20)
+        # Body: plain Frame, fully rebuilt on each page change (NO Canvas / Scrollbar)
+        body = tk.Frame(card, bg="white")
+        body.pack(fill="both", expand=True, padx=12)
 
-        tbl_canvas = tk.Canvas(tbl_outer, bg="white", highlightthickness=0)
-        tbl_scroll = ttk.Scrollbar(tbl_outer, orient="vertical", command=tbl_canvas.yview)
-        tbl_inner = tk.Frame(tbl_canvas, bg="white")
-        tbl_inner.bind("<Configure>",
-                       lambda e: tbl_canvas.configure(scrollregion=tbl_canvas.bbox("all")))
-        _canvas_win_id = tbl_canvas.create_window((0, 0), window=tbl_inner, anchor="nw")
-        tbl_canvas.configure(yscrollcommand=tbl_scroll.set)
-        tbl_canvas.pack(side="left", fill="both", expand=True)
-        tbl_scroll.pack(side="right", fill="y")
+        tk.Frame(card, height=1, bg="#dee2e6").pack(fill="x")
 
-        end_var = tk.StringVar()
-        tk.Label(card, textvariable=end_var, font=("Helvetica", 9),
-                 bg="white", fg="#aaa").pack(pady=(4, 2))
+        # Footer navigation
+        footer = tk.Frame(card, bg="white")
+        footer.pack(fill="x", padx=16, pady=(6, 12))
 
-        tk.Frame(card, height=1, bg="#e0e0e0").pack(fill="x")
-
-        # ── FOOTER NAV ────────────────────────────────────────────────────────
-        nav = tk.Frame(card, bg="white")
-        nav.pack(fill="x", padx=20, pady=10)
-
-        prev_btn = tk.Button(nav, text="\u276e  Precedente", font=("Helvetica", 10),
-                             bg="white", fg="#333", relief="solid", bd=1, padx=12, pady=5,
-                             cursor="hand2", disabledforeground="#bbb")
+        prev_btn = tk.Button(footer, text="\u276e  Precedente", font=("Helvetica", 10),
+                             bg="white", fg="#333", relief="solid", bd=1,
+                             padx=12, pady=4, cursor="hand2", disabledforeground="#bbb")
         prev_btn.pack(side="left", padx=(0, 6))
 
-        next_btn = tk.Button(nav, text="Successiva  \u276f", font=("Helvetica", 10),
-                             bg="white", fg="#333", relief="solid", bd=1, padx=12, pady=5,
-                             cursor="hand2", disabledforeground="#bbb")
+        next_btn = tk.Button(footer, text="Successiva  \u276f", font=("Helvetica", 10),
+                             bg="white", fg="#333", relief="solid", bd=1,
+                             padx=12, pady=4, cursor="hand2", disabledforeground="#bbb")
         next_btn.pack(side="left")
 
-        count_var = tk.StringVar()
-        tk.Label(nav, textvariable=count_var, font=("Helvetica", 9),
-                 bg="white", fg="#555").pack(side="left", padx=20)
+        cnt_lbl = tk.Label(footer, text="", font=("Helvetica", 9), bg="white", fg="#666")
+        cnt_lbl.pack(side="left", padx=16)
 
-        tk.Button(nav, text="Conferma Tutto", font=("Helvetica", 10, "bold"),
-                  bg="#1a73e8", fg="white", relief="flat", padx=16, pady=5, bd=0,
-                  cursor="hand2", state="disabled",
-                  activebackground="#1558b0", activeforeground="white").pack(side="right")
+        # ── render_page: pure rebuild of body children ────────────────────────
+        def render_page(page: int) -> None:
+            tp   = _total_pages()
+            page = max(0, min(page, tp - 1))
+            state["page"] = page
+            ipp   = state["ipp"]
+            start = page * ipp
+            end   = min(start + ipp, total)
 
-        # ── RENDERER ──────────────────────────────────────────────────────────
-        def render_page(page_num: int) -> None:
-            """Destroy all body widgets and rebuild the given page from pre-computed rows."""
-            tp  = _total_pages()
-            ipp = state["items_per_page"]
+            # Update header indicator and nav buttons
+            pg_var.set(f"— pagina {page + 1} di {tp}")
+            cnt_lbl.config(text=f"Righe {start + 1}–{end} di {total}")
+            prev_btn.config(state="normal" if page > 0 else "disabled")
+            # Next stays enabled even on last page (click = close, same as Space)
+            next_btn.config(state="normal" if total > 0 else "disabled")
 
-            page_subtitle_var.set(f"PAGINA {page_num + 1} DI {tp}")
-
-            for w in tbl_inner.winfo_children():
+            # Destroy previous body content
+            for w in body.winfo_children():
                 w.destroy()
 
-            start_idx = page_num * ipp
-            end_idx   = min(start_idx + ipp, total_items)
-            page_rows = rows[start_idx:end_idx]
+            # Description column wraplength: derive from current popup width
+            popup.update_idletasks()
+            pw = popup.winfo_width()
+            pw = pw if pw > 300 else 920
+            # card padx(12×2) + body padx(12×2) + col margins(~16) = ~64 px overhead
+            desc_wrap = max(120, pw - FIXED_W - 64)
 
-            count_var.set(f"Elementi {start_idx + 1}\u2013{end_idx} di {total_items} totali")
-            prev_btn.config(state="normal" if page_num > 0 else "disabled")
-            next_btn.config(state="normal" if page_num < tp - 1 else "disabled")
-            end_var.set("Fine della lista" if end_idx >= total_items else "")
+            for i, rd in enumerate(rows[start:end]):
+                bg = "white" if i % 2 == 0 else "#f8f9fa"
 
-            # Wraplength for the expanding description column
-            cw = tbl_canvas.winfo_width()
-            cw = cw if cw > 100 else (920 - 40 - 20)
-            desc_wrap = max(80, cw - _FIXED_COLS_W - 24)
-
-            for row_idx, row_data in enumerate(page_rows):
-                row_bg = "white" if row_idx % 2 == 0 else "#fafafa"
-                row = tk.Frame(tbl_inner, bg=row_bg)
+                row = tk.Frame(body, bg=bg)
                 row.pack(fill="x")
-                tk.Frame(tbl_inner, height=1, bg="#ececec").pack(fill="x")
+                tk.Frame(body, height=1, bg="#e8e8e8").pack(fill="x")
 
-                # SKU
-                sku_cell = tk.Frame(row, bg=row_bg, width=84)
-                sku_cell.pack(side="left", pady=10)
-                sku_cell.pack_propagate(False)
-                tk.Label(sku_cell, text=row_data["sku"], font=("Courier", 9),
-                         bg=row_bg, fg="#555").pack(anchor="center")
+                # ── SKU cell (fixed width × ROW_H, content centred with place) ──
+                c = tk.Frame(row, bg=bg, width=SKU_W, height=ROW_H)
+                c.pack(side="left")
+                c.pack_propagate(False)
+                tk.Label(c, text=rd["sku"], font=("Courier", 9),
+                         bg=bg, fg="#444").place(relx=0.5, rely=0.5, anchor="center")
 
-                # Description (expands)
-                desc_cell = tk.Frame(row, bg=row_bg)
-                desc_cell.pack(side="left", fill="both", expand=True, pady=10)
-                tk.Label(desc_cell, text=row_data["description"], font=("Helvetica", 9),
-                         bg=row_bg, fg="#333", anchor="w", padx=8,
-                         wraplength=desc_wrap).pack(anchor="w")
+                # ── Description cell (fills remaining width, fixed height) ──────
+                c = tk.Frame(row, bg=bg, height=ROW_H)
+                c.pack(side="left", fill="x", expand=True)
+                c.pack_propagate(False)
+                tk.Label(c, text=rd["desc"], font=("Helvetica", 9),
+                         bg=bg, fg="#222", wraplength=desc_wrap,
+                         justify="left").place(x=10, rely=0.5, anchor="w")
 
-                # EAN / Barcode — use pre-computed cache
-                ean = row_data["ean"]
-                ean_cell = tk.Frame(row, bg=row_bg, width=192)
-                ean_cell.pack(side="left", pady=8)
-                ean_cell.pack_propagate(False)
+                # ── EAN / Barcode cell (fixed width × ROW_H) ─────────────────
+                ean = rd["ean"]
+                c = tk.Frame(row, bg=bg, width=EAN_W, height=ROW_H)
+                c.pack(side="left")
+                c.pack_propagate(False)
                 if ean:
-                    is_valid, _ = validate_ean(ean)
-                    if is_valid:
-                        bc_img = barcode_cache.get(ean)
-                        if bc_img:
-                            bc_lbl = tk.Label(ean_cell, image=bc_img, bg=row_bg)
-                            bc_lbl.image = bc_img  # type: ignore[attr-defined]
-                            bc_lbl.pack(anchor="center")
-                        tk.Label(ean_cell, text=ean, font=("Courier", 8),
-                                 bg=row_bg, fg="#888").pack(anchor="center")
+                    ok, _ = validate_ean(ean)
+                    if ok:
+                        img = bc_cache.get(ean)
+                        if img:
+                            # Barcode image placed at top-centre; EAN digits below
+                            lbl = tk.Label(c, image=img, bg=bg)
+                            lbl.image = img  # type: ignore[attr-defined]
+                            lbl.place(relx=0.5, y=4, anchor="n")
+                            tk.Label(c, text=ean, font=("Courier", 8),
+                                     bg=bg, fg="#888").place(relx=0.5, y=ROW_H - 6, anchor="s")
+                        else:
+                            # Valid EAN, no barcode lib: show text prominently
+                            tk.Label(c, text=ean, font=("Courier", 9, "bold"),
+                                     bg=bg, fg="#333").place(relx=0.5, rely=0.5, anchor="center")
                     else:
-                        tk.Label(ean_cell, text="EAN non valido", font=("Helvetica", 8),
-                                 bg=row_bg, fg="red").pack(anchor="center")
+                        tk.Label(c, text="EAN non valido", font=("Helvetica", 8),
+                                 bg=bg, fg="#d32f2f").place(relx=0.5, rely=0.5, anchor="center")
                 else:
-                    tk.Label(ean_cell, text="\u2014", font=("Helvetica", 9),
-                             bg=row_bg, fg="#aaa").pack(anchor="center")
+                    tk.Label(c, text="\u2014", font=("Helvetica", 10),
+                             bg=bg, fg="#aaa").place(relx=0.5, rely=0.5, anchor="center")
 
-                # Quantità
-                qty_cell = tk.Frame(row, bg=row_bg, width=128)
-                qty_cell.pack(side="left", pady=10)
-                qty_cell.pack_propagate(False)
-                qty_inner = tk.Frame(qty_cell, bg=row_bg)
-                qty_inner.pack(anchor="center")
-                tk.Label(qty_inner, text=f"{row_data['colli']} colli",
-                         font=("Helvetica", 12, "bold"),
-                         bg=row_bg, fg="#1a73e8").pack(anchor="center")
-                sub = (f"+ {row_data['resto_pz']} pz  ({row_data['qty_ordered']} tot)"
-                       if row_data["resto_pz"] else f"{row_data['qty_ordered']} pz totali")
-                tk.Label(qty_inner, text=sub, font=("Helvetica", 8),
-                         bg=row_bg, fg="#aaa").pack(anchor="center")
+                # ── Quantità cell (fixed width × ROW_H) ───────────────────────
+                c = tk.Frame(row, bg=bg, width=QTY_W, height=ROW_H)
+                c.pack(side="left")
+                c.pack_propagate(False)
+                tk.Label(c, text=f"{rd['colli']} colli",
+                         font=("Helvetica", 11, "bold"),
+                         bg=bg, fg="#1a73e8").place(relx=0.5, rely=0.38, anchor="center")
+                sub = (f"+ {rd['resto']} pz  ({rd['qty']} tot)"
+                       if rd["resto"] else f"{rd['qty']} pz totali")
+                tk.Label(c, text=sub, font=("Helvetica", 8),
+                         bg=bg, fg="#999").place(relx=0.5, rely=0.65, anchor="center")
 
-            tbl_canvas.yview_moveto(0)
-
-        # ── NAVIGATION ────────────────────────────────────────────────────────
-        def go_next(event=None) -> None:
-            """Advance to next page; close the popup when on the last page."""
+        # ── Navigation callbacks ───────────────────────────────────────────────
+        def go_next(e=None) -> None:
+            """Next page, or close on last page (same behaviour as Space)."""
             if state["page"] < _total_pages() - 1:
-                state["page"] += 1
-                render_page(state["page"])
+                render_page(state["page"] + 1)
             else:
                 popup.destroy()
 
-        def go_prev(event=None) -> None:
-            if state["page"] > 0:
-                state["page"] -= 1
-                render_page(state["page"])
+        def go_prev(e=None) -> None:
+            render_page(state["page"] - 1)
 
         next_btn.config(command=go_next)
         prev_btn.config(command=go_prev)
 
-        # ── RESIZE HANDLER (debounced) ────────────────────────────────────────
-        # Separate canvas-width sync (immediate) from expensive re-render (debounced).
-        _resize_job: list = [None]
-        _last_canvas_w: list = [0]
+        # ── Resize handler: bound to popup window <Configure> ─────────────────
+        # We block events during initial startup to avoid redundant renders.
+        _rjob: list     = [None]
+        _init_done: list = [False]
 
-        def _on_canvas_resize(e) -> None:
-            cw = e.width
-            if abs(cw - _last_canvas_w[0]) > 8:
-                _last_canvas_w[0] = cw
-                tbl_canvas.itemconfig(_canvas_win_id, width=cw)
-            # Debounce the full re-render (height change may also need items_per_page update)
-            if _resize_job[0]:
-                popup.after_cancel(_resize_job[0])
-            _resize_job[0] = popup.after(80, _do_resize)
+        def _on_popup_resize(e) -> None:
+            # Only react to the top-level window itself being resized
+            if e.widget is not popup or not _init_done[0]:
+                return
+            if _rjob[0]:
+                popup.after_cancel(_rjob[0])
+            _rjob[0] = popup.after(60, _do_resize)
 
         def _do_resize() -> None:
-            new_ipp = _compute_items_per_page()
-            if new_ipp != state["items_per_page"]:
-                state["items_per_page"] = new_ipp
-                # Clamp current page to valid range after items_per_page change
-                tp = _total_pages()
-                state["page"] = min(state["page"], max(0, tp - 1))
+            new_ipp = _calc_ipp()
+            state["ipp"] = new_ipp
+            tp = _total_pages()
+            state["page"] = min(state["page"], max(0, tp - 1))
             render_page(state["page"])
 
-        tbl_canvas.bind("<Configure>", _on_canvas_resize)
+        popup.bind("<Configure>", _on_popup_resize)
 
         # ── Initial render ────────────────────────────────────────────────────
         popup.update_idletasks()
-        state["items_per_page"] = _compute_items_per_page()
+        state["ipp"] = _calc_ipp()
         render_page(0)
+        _init_done[0] = True  # start responding to resize events
 
-        popup.bind("<space>", go_next)
+        popup.bind("<space>",  go_next)
         popup.bind("<Escape>", lambda e: popup.destroy())
         popup.focus_set()
     
