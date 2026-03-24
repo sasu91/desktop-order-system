@@ -110,17 +110,19 @@ class ReceivingWorkflow:
         
         # 3. Process each item
         for item in items:
-            sku = item["sku"]
+            # Normalize sku to string (guards against int keys from external callers)
+            sku = str(item["sku"]).strip()
             qty_received = item["qty_received"]
             specified_order_ids = item.get("order_ids", [])
             
             # Get PENDING orders for this SKU (sorted by date for FIFO).
-            # Default status to "PENDING" to match _refresh_pending_orders behaviour,
-            # which also defaults to "PENDING" when the column is absent/empty.
+            # Both sku and status are normalised (strip + upper) so that
+            # minor formatting differences (int SKU, lowercase status) never
+            # cause a false "no matching orders" result.
             sku_orders = [
                 log for log in order_logs
-                if log.get("sku") == sku
-                and log.get("status", "PENDING") in ["PENDING", "PARTIAL"]
+                if str(log.get("sku", "")).strip() == sku
+                and log.get("status", "PENDING").upper().strip() in ["PENDING", "PARTIAL"]
             ]
             sku_orders.sort(key=lambda x: x.get("date", ""))
             

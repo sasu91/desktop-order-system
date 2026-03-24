@@ -499,9 +499,11 @@ class StorageAdapter(CSVLayer):
         caller can retry without a full CSV fallback.
         """
         assert self.repos is not None
-        csv_skus = {s.sku: s for s in self.csv_layer.read_skus()}
+        # Normalize keys so int SKU codes or SKUs with spaces still resolve.
+        csv_skus = {str(s.sku).strip(): s for s in self.csv_layer.read_skus()}
         for sku_id in sku_ids:
-            sku_obj = csv_skus.get(sku_id)
+            sku_id_normalized = str(sku_id).strip()
+            sku_obj = csv_skus.get(sku_id_normalized)
             if sku_obj is not None:
                 try:
                     self.repos.skus().upsert(self._sku_to_dict(sku_obj))
@@ -532,8 +534,22 @@ class StorageAdapter(CSVLayer):
                 # If the failure is a FK constraint (missing SKUs), try to auto-sync
                 # those SKUs from CSV into SQLite and retry once before giving up.
                 if isinstance(e, _FKError):
+                    # Diagnostica: identifica esattamente quali SKU mancano in SQLite
+                    batch_skus = {str(txn.sku).strip() for txn in txns}
                     try:
-                        missing = list({txn.sku for txn in txns})
+                        sqlite_skus = {
+                            str(r['sku']).strip()
+                            for r in self.repos.skus().list()
+                        }
+                        truly_missing = sorted(batch_skus - sqlite_skus)
+                        if truly_missing:
+                            print(f"⚠ SKU mancanti in SQLite (FK): {truly_missing}")
+                    except Exception:
+                        truly_missing = sorted(batch_skus)
+                    try:
+                        # Normalize SKU values before attempting the sync so that
+                        # int codes or values with surrounding spaces are handled.
+                        missing = list(batch_skus)
                         self._sync_skus_to_sqlite(missing)
                         self.repos.ledger().append_batch(batch)
                         return  # retry succeeded

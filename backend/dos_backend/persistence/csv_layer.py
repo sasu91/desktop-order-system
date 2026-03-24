@@ -1387,7 +1387,7 @@ class CSVLayer:
         
         orders = self.read_order_logs()
         updated = False
-        
+
         for order in orders:
             if order.get("order_id") == order_id:
                 order["qty_received"] = str(qty_received)
@@ -1395,11 +1395,13 @@ class CSVLayer:
                 updated = True
                 logger.info(f"Updated order {order_id}: qty_received={qty_received}, status={status}")
                 break
-        
+
         if not updated:
-            logger.warning(f"Order {order_id} not found for update")
-            return
-        
+            raise ValueError(
+                f"Order {order_id} not found in order_logs.csv "
+                f"— cannot update qty_received={qty_received}, status={status}"
+            )
+
         # Rewrite file with updated data (atomic)
         self._write_csv_atomic("order_logs.csv", orders)
     

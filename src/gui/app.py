@@ -4688,6 +4688,7 @@ class DesktopOrderApp:
             messagebox.showwarning("Nessun Articolo", "Nessun articolo da ricevere (tutte le quantità sono 0).")
             return
         
+        _workflow_invoked = False
         try:
             # Usa il nuovo metodo con tracciabilità documento
             transactions, already_processed, order_updates = self.receiving_workflow.close_receipt_by_document(
@@ -4696,7 +4697,8 @@ class DesktopOrderApp:
                 items=items,
                 notes=self.receiving_notes_var.get().strip() or "Bulk receiving via GUI",
             )
-            
+            _workflow_invoked = True
+
             if already_processed:
                 messagebox.showwarning(
                     "Documento Già Processato",
@@ -4705,35 +4707,50 @@ class DesktopOrderApp:
                 )
             else:
                 # Mostra riepilogo
-                summary = f"✅ Ricevimento completato con successo!\n\n"
+                summary = "✅ Ricevimento completato con successo!\n\n"
                 summary += f"📄 Documento: {document_id}\n"
                 summary += f"📦 Articoli ricevuti: {len(items)}\n"
                 summary += f"📝 Transazioni create: {len(transactions)}\n"
                 summary += f"📋 Ordini aggiornati: {len(order_updates)}\n\n"
-                
+
                 if order_updates:
                     summary += "Stato ordini:\n"
                     for order_id, update in list(order_updates.items())[:5]:  # Max 5
                         summary += f"  • {order_id}: {update['qty_received_total']}/{update['qty_ordered']} pz → {update['new_status']}\n"
-                    
+
                     if len(order_updates) > 5:
                         summary += f"  ... e altri {len(order_updates) - 5} ordini\n"
-                
+                elif transactions:
+                    # Transazioni scritte ma nessun ordine PENDING/PARTIAL trovato per questi SKU.
+                    # Il carico è stato registrato come entrata generica (senza collegamento ordine).
+                    summary += (
+                        "⚠️ Nessun ordine in sospeso trovato per gli SKU ricevuti.\n"
+                        "La merce è stata registrata come carico generico\n"
+                        "(senza collegamento a un ordine specifico).\n"
+                    )
+
                 messagebox.showinfo("Successo", summary)
-                
-                logger.info(f"Bulk receiving completed: document_id={document_id}, items={len(items)}, orders_updated={len(order_updates)}")
-        
+
+                logger.info(
+                    f"Bulk receiving completed: document_id={document_id}, "
+                    f"items={len(items)}, transactions={len(transactions)}, "
+                    f"orders_updated={len(order_updates)}"
+                )
+
         except Exception as e:
+            _workflow_invoked = True  # il workflow era stato invocato; aggiorna UI
             logger.error(f"Bulk receiving failed: {str(e)}", exc_info=True)
             messagebox.showerror(
                 "Errore durante ricevimento",
                 f"Errore durante l'elaborazione del documento '{document_id}':\n\n{str(e)}",
             )
-            return
-        
-        # Refresh views
-        self._refresh_pending_orders()
-        self._refresh_receiving_history()
+
+        finally:
+            # Refresh sempre eseguito dopo invocazione del workflow, indipendentemente
+            # da successo, idempotenza o eccezione, così la UI riflette lo stato reale.
+            if _workflow_invoked:
+                self._refresh_pending_orders()
+                self._refresh_receiving_history()
     
     def _refresh_receiving_history(self):
         """Refresh receiving history table with document traceability."""

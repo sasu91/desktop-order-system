@@ -234,13 +234,31 @@ class CSVLayer:
                     oos_detection_mode=row.get("oos_detection_mode", "").strip(),
                     oos_popup_preference=row.get("oos_popup_preference", "ask").strip() or "ask",
                     # Monte Carlo forecast parameters
-                    forecast_method=row.get("forecast_method", "").strip(),
-                    mc_distribution=row.get("mc_distribution", "").strip(),
+                    # Use _sanitize_enum so an invalid value resets to '' instead of
+                    # raising ValueError and discarding the entire SKU row.
+                    forecast_method=self._sanitize_enum(
+                        row.get("forecast_method", ""),
+                        ["", "simple", "monte_carlo", "croston", "sba", "tsb", "intermittent_auto"],
+                        field="forecast_method", sku=row.get("sku", "?")
+                    ),
+                    mc_distribution=self._sanitize_enum(
+                        row.get("mc_distribution", ""),
+                        ["", "empirical", "normal", "lognormal", "residuals"],
+                        field="mc_distribution", sku=row.get("sku", "?")
+                    ),
                     mc_n_simulations=int(row.get("mc_n_simulations", "0").strip() or "0"),
                     mc_random_seed=int(row.get("mc_random_seed", "0").strip() or "0"),
-                    mc_output_stat=row.get("mc_output_stat", "").strip(),
+                    mc_output_stat=self._sanitize_enum(
+                        row.get("mc_output_stat", ""),
+                        ["", "mean", "percentile"],
+                        field="mc_output_stat", sku=row.get("sku", "?")
+                    ),
                     mc_output_percentile=int(row.get("mc_output_percentile", "0").strip() or "0"),
-                    mc_horizon_mode=row.get("mc_horizon_mode", "").strip(),
+                    mc_horizon_mode=self._sanitize_enum(
+                        row.get("mc_horizon_mode", ""),
+                        ["", "auto", "custom"],
+                        field="mc_horizon_mode", sku=row.get("sku", "?")
+                    ),
                     mc_horizon_days=int(row.get("mc_horizon_days", "0").strip() or "0"),
                     # Assortment status (backward-compatible: missing → True)
                     in_assortment=row.get("in_assortment", "true").strip().lower() in ("true", "1", "yes", "t"),
@@ -1405,7 +1423,7 @@ class CSVLayer:
         
         orders = self.read_order_logs()
         updated = False
-        
+
         for order in orders:
             if order.get("order_id") == order_id:
                 order["qty_received"] = str(qty_received)
@@ -1413,11 +1431,16 @@ class CSVLayer:
                 updated = True
                 logger.info(f"Updated order {order_id}: qty_received={qty_received}, status={status}")
                 break
-        
+
         if not updated:
-            logger.warning(f"Order {order_id} not found for update")
-            return
-        
+            # Non esiste l'ordine: l'eccezione permette al chiamante di accorgersi
+            # del disallineamento (es. order_id non ancora in order_logs.csv) invece
+            # di procedere in silenzio con la pending list invariata.
+            raise ValueError(
+                f"Order {order_id} not found in order_logs.csv "
+                f"— cannot update qty_received={qty_received}, status={status}"
+            )
+
         # Rewrite file with updated data (atomic)
         self._write_csv_atomic("order_logs.csv", orders)
     
