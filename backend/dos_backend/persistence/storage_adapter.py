@@ -486,15 +486,29 @@ class StorageAdapter(CSVLayer):
                 self.repos.skus().delete(sku_id)
                 return True
             except Exception as e:
+                from ..repositories import ForeignKeyError as _FKError
+                if isinstance(e, _FKError):
+                    # Business constraint — SKU has ledger history. Never fall back to CSV:
+                    # that would delete the SKU from CSV silently, breaking the ledger.
+                    raise
                 self._sqlite_degrade(e)
                 print(f"⚠ SQLite delete_sku failed, falling back to CSV: {e}")
                 return self.csv_layer.delete_sku(sku_id)
         else:
             return self.csv_layer.delete_sku(sku_id)
-    
+
     def can_delete_sku(self, sku_id: str) -> tuple[bool, str]:
         """Check if SKU can be deleted (no dependent transactions)"""
-        # Always check in CSV (SQLite FK constraints will enforce)
+        if self.is_sqlite_mode() and self.repos is not None:
+            try:
+                # In SQLite mode, check the SQLite ledger (authoritative source of truth).
+                # The CSV ledger may be stale if transactions were written via SQLite.
+                txn_count = self.repos.ledger().count_by_sku(sku_id)
+                if txn_count > 0:
+                    return False, f"SKU {sku_id} ha {txn_count} transazioni nel ledger"
+                return True, ""
+            except Exception:
+                pass  # SQLite check failed — fall through to CSV check
         return self.csv_layer.can_delete_sku(sku_id)
     
     # ============================================================

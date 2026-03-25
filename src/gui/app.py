@@ -6723,7 +6723,12 @@ class DesktopOrderApp:
         succeeded = []
         failed = []
         for sku_code in deletable:
-            success = self.csv_layer.delete_sku(sku_code)
+            try:
+                success = self.csv_layer.delete_sku(sku_code)
+            except Exception as _del_err:
+                # ForeignKeyError or other business constraint — treat as non-deletable
+                not_deletable.append((sku_code, str(_del_err)))
+                continue
             if success:
                 self.csv_layer.log_audit(
                     operation="SKU_DELETE",
