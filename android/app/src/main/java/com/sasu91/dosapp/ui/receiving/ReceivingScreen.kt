@@ -68,9 +68,10 @@ fun ReceivingScreen(
             // 1. Camera panel
             // ----------------------------------------------------------------
             BarcodeCameraPanel(
-                onBarcodeDetected = viewModel::onBarcodeDetected,
-                paused            = !state.isCameraActive,
-                modifier          = Modifier
+                onBarcodeDetected  = viewModel::onBarcodeDetected,
+                paused             = !state.isCameraActive,
+                onOcrTextAvailable = viewModel::onOcrText,
+                modifier           = Modifier
                     .fillMaxWidth()
                     .height(200.dp),
             )
@@ -121,13 +122,10 @@ fun ReceivingScreen(
                         modifier      = Modifier.weight(1f),
                         singleLine    = true,
                     )
-                    OutlinedTextField(
+                    ReceiptDatePickerField(
                         value         = state.receiptDate,
                         onValueChange = viewModel::onReceiptDateChange,
-                        label         = { Text("Data") },
                         modifier      = Modifier.weight(1f),
-                        singleLine    = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
                     )
                 }
 
@@ -172,11 +170,13 @@ fun ReceivingScreen(
                 ) {
                     items(state.lines, key = { it.id }) { line ->
                         ReceivingLineCard(
-                            line          = line,
-                            onQtyChange   = { viewModel.onLineQtyChange(line.id, it) },
+                            line           = line,
+                            onQtyChange    = { viewModel.onLineQtyChange(line.id, it) },
                             onExpiryChange = { viewModel.onLineExpiryChange(line.id, it) },
-                            onNoteChange  = { viewModel.onLineNoteChange(line.id, it) },
-                            onRemove      = { viewModel.removeLine(line.id) },
+                            onNoteChange   = { viewModel.onLineNoteChange(line.id, it) },
+                            onRemove       = { viewModel.removeLine(line.id) },
+                            onAcceptOcr    = { viewModel.acceptExpiryOcr(line.id) },
+                            onDismissOcr   = { viewModel.dismissExpiryOcr(line.id) },
                         )
                     }
                 }
@@ -217,6 +217,8 @@ private fun ReceivingLineCard(
     onExpiryChange: (String) -> Unit,
     onNoteChange: (String) -> Unit,
     onRemove: () -> Unit,
+    onAcceptOcr: () -> Unit,
+    onDismissOcr: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -289,13 +291,16 @@ private fun ReceivingLineCard(
                 }
             }
 
-            // Expiry date picker (only for SKUs that require it)
-            if (line.requiresExpiry) {
-                ExpiryDatePickerRow(
-                    value    = line.expiryDate,
-                    onSelect = onExpiryChange,
-                )
-            }
+            // Expiry date picker — always visible; required flag drives validation styling
+            ExpiryDatePickerRow(
+                value        = line.expiryDate,
+                onSelect     = onExpiryChange,
+                required     = line.requiresExpiry,
+                onClear      = if (line.expiryDate.isNotBlank()) ({ onExpiryChange("") }) else null,
+                ocrProposal  = line.expiryOcrProposal,
+                onAcceptOcr  = onAcceptOcr,
+                onDismissOcr = onDismissOcr,
+            )
 
             // Note (optional)
             OutlinedTextField(
@@ -316,21 +321,79 @@ private fun ReceivingLineCard(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ExpiryDatePickerRow(
-    value: String,          // YYYY-MM-DD or blank
+    value: String,              // YYYY-MM-DD or blank
     onSelect: (String) -> Unit,
+    required: Boolean = true,   // true = obbligatorio (stile errore se vuoto)
+    onClear: (() -> Unit)? = null,
+    ocrProposal: String? = null,
+    onAcceptOcr: () -> Unit = {},
+    onDismissOcr: () -> Unit = {},
 ) {
     var showDialog by remember { mutableStateOf(false) }
 
-    OutlinedButton(
-        onClick  = { showDialog = true },
-        modifier = Modifier.fillMaxWidth(),
+    Row(
+        verticalAlignment     = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier              = Modifier.fillMaxWidth(),
     ) {
-        Icon(Icons.Default.DateRange, contentDescription = null)
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = if (value.isBlank()) "Seleziona data di scadenza *" else "Scadenza: $value",
-            color = if (value.isBlank()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-        )
+        OutlinedButton(
+            onClick  = { showDialog = true },
+            modifier = Modifier.weight(1f),
+        ) {
+            Icon(Icons.Default.DateRange, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = when {
+                    value.isNotBlank() -> "Scadenza: $value"
+                    required           -> "Seleziona data di scadenza *"
+                    else               -> "Scadenza (opz.)"
+                },
+                color = if (value.isBlank() && required)
+                    MaterialTheme.colorScheme.error
+                else
+                    MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        // Pulsante rimuovi — visibile solo se la data è impostata
+        if (value.isNotBlank() && onClear != null) {
+            IconButton(onClick = onClear) {
+                Icon(
+                    imageVector        = Icons.Default.Delete,
+                    contentDescription = "Rimuovi data scadenza",
+                    tint               = MaterialTheme.colorScheme.outline,
+                )
+            }
+        }
+    }
+
+    // OCR proposal banner — shown when the camera detected a candidate expiry date
+    if (ocrProposal != null) {
+        Card(
+            colors   = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                modifier              = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text  = "📷 Data rilevata",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                    Text(
+                        text       = ocrProposal,
+                        style      = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color      = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
+                TextButton(onClick = onAcceptOcr)  { Text("Usa") }
+                TextButton(onClick = onDismissOcr) { Text("Ignora") }
+            }
+        }
     }
 
     if (showDialog) {
@@ -357,6 +420,64 @@ private fun ExpiryDatePickerRow(
                 }) { Text("OK") }
             },
             dismissButton = {
+                TextButton(onClick = { showDialog = false }) { Text("Annulla") }
+            },
+        ) {
+            DatePicker(state = pickerState)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Receipt date field with inline calendar picker
+// ---------------------------------------------------------------------------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ReceiptDatePickerField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var showDialog by remember { mutableStateOf(false) }
+
+    OutlinedTextField(
+        value           = value,
+        onValueChange   = onValueChange,
+        label           = { Text("Data") },
+        modifier        = modifier,
+        singleLine      = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+        trailingIcon    = {
+            IconButton(onClick = { showDialog = true }) {
+                Icon(Icons.Default.DateRange, contentDescription = "Scegli data")
+            }
+        },
+    )
+
+    if (showDialog) {
+        val initMillis = if (value.isNotBlank()) {
+            runCatching {
+                LocalDate.parse(value).atStartOfDay(ZoneId.of("UTC")).toInstant().toEpochMilli()
+            }.getOrNull()
+        } else null
+
+        val pickerState = rememberDatePickerState(initialSelectedDateMillis = initMillis)
+
+        DatePickerDialog(
+            onDismissRequest = { showDialog = false },
+            confirmButton    = {
+                TextButton(onClick = {
+                    pickerState.selectedDateMillis?.let { ms ->
+                        val date = Instant.ofEpochMilli(ms)
+                            .atZone(ZoneId.of("UTC"))
+                            .toLocalDate()
+                        onValueChange(date.toString())
+                    }
+                    showDialog = false
+                }) { Text("OK") }
+            },
+            dismissButton    = {
                 TextButton(onClick = { showDialog = false }) { Text("Annulla") }
             },
         ) {

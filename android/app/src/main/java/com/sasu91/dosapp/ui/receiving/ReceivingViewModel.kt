@@ -41,7 +41,8 @@ data class ReceivingLine(
     val onOrderPezzi: Int = 0,
     val qtyColliInput: Int = 0,
     val requiresExpiry: Boolean = false,
-    val expiryDate: String = "",        // YYYY-MM-DD, blank = not set
+    val expiryDate: String = "",            // YYYY-MM-DD, blank = not set
+    val expiryOcrProposal: String? = null,  // OCR-detected date awaiting operator confirmation
     val note: String = "",
     val fromCache: Boolean = false,
 ) {
@@ -65,6 +66,8 @@ data class ReceivingUiState(
     /** Scanned lines ready for confirmation. */
     val lines: List<ReceivingLine> = emptyList(),
     val nextLineId: Int = 0,
+    /** Id of the most recently scanned line — used to route OCR expiry proposals. */
+    val lastScannedLineId: Int? = null,
 
     /** Non-null while resolving an EAN (brief spinner under camera). */
     val isResolving: Boolean = false,
@@ -152,10 +155,11 @@ class ReceivingViewModel @Inject constructor(
                             state.lines + newLine
                         }
                         state.copy(
-                            lines        = newLines,
-                            nextLineId   = if (existing < 0) state.nextLineId + 1 else state.nextLineId,
-                            isResolving  = false,
-                            isCameraActive = true,
+                            lines             = newLines,
+                            nextLineId        = if (existing < 0) state.nextLineId + 1 else state.nextLineId,
+                            isResolving       = false,
+                            isCameraActive    = true,
+                            lastScannedLineId = if (existing < 0) state.nextLineId else state.lastScannedLineId,
                         )
                     }
                 }
@@ -196,6 +200,41 @@ class ReceivingViewModel @Inject constructor(
         _state.update { s ->
             s.copy(lines = s.lines.map { if (it.id == lineId) it.block() else it })
         }
+
+    // -----------------------------------------------------------------------
+    // OCR expiry-date proposals
+    // -----------------------------------------------------------------------
+
+    /**
+     * Called by the camera OCR pass with raw text recognised from a frame.
+     * Parses a date candidate from [rawText] via [ExpiryDateParser], then proposes it on
+     * [ReceivingUiState.lastScannedLineId] when:
+     *   - the line still needs an expiry date ([ReceivingLine.expiryDate] is blank), AND
+     *   - no proposal is already pending ([ReceivingLine.expiryOcrProposal] is null).
+     * Silently ignored otherwise (no state change).
+     */
+    fun onOcrText(rawText: String) {
+        val isoDate  = ExpiryDateParser.parse(rawText) ?: return
+        val s        = _state.value
+        val targetId = s.lastScannedLineId ?: return
+        val line     = s.lines.find { it.id == targetId } ?: return
+        if (line.expiryDate.isNotBlank() || line.expiryOcrProposal != null) return
+        _state.update { state ->
+            state.copy(lines = state.lines.map {
+                if (it.id == targetId) it.copy(expiryOcrProposal = isoDate) else it
+            })
+        }
+    }
+
+    /** Operator confirms the OCR proposal — moves it into [ReceivingLine.expiryDate]. */
+    fun acceptExpiryOcr(lineId: Int) = updateLine(lineId) {
+        copy(expiryDate = expiryOcrProposal ?: expiryDate, expiryOcrProposal = null)
+    }
+
+    /** Operator dismisses the OCR proposal — clears it without touching [ReceivingLine.expiryDate]. */
+    fun dismissExpiryOcr(lineId: Int) = updateLine(lineId) {
+        copy(expiryOcrProposal = null)
+    }
 
     // -----------------------------------------------------------------------
     // Submit — always queue-first

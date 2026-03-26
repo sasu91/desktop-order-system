@@ -90,6 +90,8 @@ dependencies {
 
     // ML Kit barcode scanning
     implementation(libs.mlkit.barcode)
+    // ML Kit text recognition (OCR) — expiry-date reading in Ricevimento DDT
+    implementation(libs.mlkit.text.recognition)
 
     // Permissions (Accompanist)
     implementation(libs.accompanist.permissions)
