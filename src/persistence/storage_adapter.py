@@ -437,7 +437,54 @@ class StorageAdapter(CSVLayer):
             except Exception:
                 pass  # SQLite check failed — fall through to CSV check
         return self.csv_layer.can_delete_sku(sku_id)
-    
+
+    def get_sku_impact_counts(self, sku_id: str) -> dict:
+        """
+        Return row counts per table for the given SKU — used by the purge UI preview.
+
+        In SQLite mode queries the database directly. Falls back to CSV counts
+        only on infrastructure error (never for business reasons).
+        """
+        if self.is_sqlite_mode() and self.repos is not None:
+            try:
+                return self.repos.skus().get_impact_counts(sku_id)
+            except Exception as e:
+                print(f"⚠ SQLite get_sku_impact_counts failed, falling back to CSV: {e}")
+        return self.csv_layer.get_sku_impact_counts(sku_id)
+
+    def purge_sku_completely(self, sku_id: str) -> dict:
+        """
+        Permanently delete the SKU and ALL associated data (transactions, sales,
+        orders, receipts, lots, KPI…).
+
+        In SQLite mode this is a single atomic transaction. There is NO fallback
+        to CSV on business errors — a partial purge would leave data inconsistent.
+        In CSV-only mode delegates to CSVLayer which handles all files atomically.
+
+        Returns:
+            dict with deleted row counts per table.
+
+        Raises:
+            NotFoundError / ValueError: if the SKU does not exist.
+            RuntimeError: if SQLite is unavailable and no purge service is present.
+        """
+        if self.is_sqlite_mode():
+            assert self.repos is not None
+            try:
+                # Atomic SQLite purge — no CSV fallback for business errors.
+                return self.repos.skus().purge_complete(sku_id)
+            except Exception as e:
+                from ..repositories import NotFoundError as _NFE
+                if isinstance(e, _NFE):
+                    raise
+                # Infrastructure failure: do NOT fall back to CSV silently;
+                # a partial purge would leave SQLite/CSV inconsistent.
+                raise RuntimeError(
+                    f"Purge SKU {sku_id} fallito (SQLite error): {e}"
+                ) from e
+        else:
+            return self.csv_layer.purge_sku_completely(sku_id)
+
     # ============================================================
     # Transaction Operations
     # ============================================================

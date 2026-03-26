@@ -280,6 +280,42 @@ class SKURepository:
                 ) from e
             raise
 
+    def get_impact_counts(self, sku: str) -> dict:
+        """Return row counts per table for the given SKU (purge preview)."""
+        cursor = self.conn.cursor()
+        tables = [
+            ("transactions",   "sku"),
+            ("sales",          "sku"),
+            ("order_logs",     "sku"),
+            ("receiving_logs", "sku"),
+            ("lots",           "sku"),
+            ("kpi_daily",      "sku"),
+            ("promo_calendar", "sku"),
+        ]
+        counts = {}
+        for table, col in tables:
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} = ?", (sku,))
+                counts[table] = cursor.fetchone()[0]
+            except Exception:
+                counts[table] = 0
+        return counts
+
+    def purge_complete(self, sku: str) -> dict:
+        """Permanently delete a SKU and ALL associated data in one atomic transaction."""
+        if not self.exists(sku):
+            raise NotFoundError(f"SKU {sku} non trovato.")
+
+        counts = self.get_impact_counts(sku)
+
+        with transaction(self.conn) as cur:
+            # Transactions use ON DELETE RESTRICT → must be removed explicitly first.
+            cur.execute("DELETE FROM transactions WHERE sku = ?", (sku,))
+            # All other child tables use ON DELETE CASCADE.
+            cur.execute("DELETE FROM skus WHERE sku = ?", (sku,))
+
+        return counts
+
 
 # ============================================================
 # Ledger Repository

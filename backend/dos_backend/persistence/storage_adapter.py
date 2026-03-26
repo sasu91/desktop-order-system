@@ -510,7 +510,32 @@ class StorageAdapter(CSVLayer):
             except Exception:
                 pass  # SQLite check failed — fall through to CSV check
         return self.csv_layer.can_delete_sku(sku_id)
-    
+
+    def get_sku_impact_counts(self, sku_id: str) -> dict:
+        """Return row counts per table for the given SKU (purge preview)."""
+        if self.is_sqlite_mode() and self.repos is not None:
+            try:
+                return self.repos.skus().get_impact_counts(sku_id)
+            except Exception as e:
+                print(f"⚠ SQLite get_sku_impact_counts failed, falling back to CSV: {e}")
+        return self.csv_layer.get_sku_impact_counts(sku_id)
+
+    def purge_sku_completely(self, sku_id: str) -> dict:
+        """Permanently delete the SKU and ALL associated data."""
+        if self.is_sqlite_mode():
+            assert self.repos is not None
+            try:
+                return self.repos.skus().purge_complete(sku_id)
+            except Exception as e:
+                from ..repositories import NotFoundError as _NFE
+                if isinstance(e, _NFE):
+                    raise
+                raise RuntimeError(
+                    f"Purge SKU {sku_id} fallito (SQLite error): {e}"
+                ) from e
+        else:
+            return self.csv_layer.purge_sku_completely(sku_id)
+
     # ============================================================
     # Transaction Operations
     # ============================================================

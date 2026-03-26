@@ -281,6 +281,62 @@ class SKURepository:
                 ) from e
             raise
 
+    def get_impact_counts(self, sku: str) -> dict:
+        """
+        Return row counts across all tables for the given SKU.
+        Used by the GUI to show an impact preview before a purge.
+
+        Returns a dict with keys: transactions, sales, order_logs,
+        receiving_logs, lots, kpi_daily, promo_calendar.
+        Returns all-zero dict if SKU does not exist.
+        """
+        cursor = self.conn.cursor()
+        tables = [
+            ("transactions",   "sku"),
+            ("sales",          "sku"),
+            ("order_logs",     "sku"),
+            ("receiving_logs", "sku"),
+            ("lots",           "sku"),
+            ("kpi_daily",      "sku"),
+            ("promo_calendar", "sku"),
+        ]
+        counts = {}
+        for table, col in tables:
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} = ?", (sku,))
+                counts[table] = cursor.fetchone()[0]
+            except Exception:
+                counts[table] = 0
+        return counts
+
+    def purge_complete(self, sku: str) -> dict:
+        """
+        Permanently delete a SKU and ALL associated data in one atomic transaction.
+
+        The ledger (transactions) uses ON DELETE RESTRICT so it must be deleted
+        explicitly before the SKU row; all other child tables use ON DELETE CASCADE
+        and are cleaned automatically by SQLite.
+
+        Returns:
+            dict with deleted row counts per table (same keys as get_impact_counts).
+
+        Raises:
+            NotFoundError: if the SKU does not exist.
+        """
+        if not self.exists(sku):
+            raise NotFoundError(f"SKU {sku} non trovato.")
+
+        counts = self.get_impact_counts(sku)
+
+        with transaction(self.conn) as cur:
+            # 1. Transactions have ON DELETE RESTRICT → must be removed first.
+            cur.execute("DELETE FROM transactions WHERE sku = ?", (sku,))
+            # 2. Deleting the SKU row cascades to sales, order_logs, receiving_logs,
+            #    lots, kpi_daily, promo_calendar, and NULLs audit_log.sku.
+            cur.execute("DELETE FROM skus WHERE sku = ?", (sku,))
+
+        return counts
+
 
 # ============================================================
 # Ledger Repository

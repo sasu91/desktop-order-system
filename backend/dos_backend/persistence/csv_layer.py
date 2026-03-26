@@ -759,7 +759,53 @@ class CSVLayer:
             return False, f"SKU {sku_id} has receiving history"
         
         return True, ""
-    
+
+    def get_sku_impact_counts(self, sku_id: str) -> dict:
+        """Return row counts per CSV file that reference this SKU (purge preview)."""
+        sid = str(sku_id).strip()
+        return {
+            "transactions":   sum(1 for t in self.read_transactions()  if str(t.sku).strip() == sid),
+            "sales":          sum(1 for s in self.read_sales()          if str(s.sku).strip() == sid),
+            "order_logs":     sum(1 for o in self.read_order_logs()     if str(o.get("sku","")).strip() == sid),
+            "receiving_logs": sum(1 for r in self.read_receiving_logs() if str(r.get("sku","")).strip() == sid),
+        }
+
+    def purge_sku_completely(self, sku_id: str) -> dict:
+        """Permanently delete a SKU and ALL associated data from every CSV file."""
+        sid = str(sku_id).strip()
+
+        skus_rows = self._read_csv("skus.csv")
+        if not any(str(r.get("sku", "")).strip() == sid for r in skus_rows):
+            raise ValueError(f"SKU {sku_id} non trovato in skus.csv.")
+
+        counts: dict = {}
+
+        txn_rows = self._read_csv("transactions.csv")
+        filtered_txn = [r for r in txn_rows if str(r.get("sku", "")).strip() != sid]
+        counts["transactions"] = len(txn_rows) - len(filtered_txn)
+        self._write_csv("transactions.csv", filtered_txn)
+
+        sales_rows = self._read_csv("sales.csv")
+        filtered_sales = [r for r in sales_rows if str(r.get("sku", "")).strip() != sid]
+        counts["sales"] = len(sales_rows) - len(filtered_sales)
+        self._write_csv("sales.csv", filtered_sales)
+
+        order_rows = self._read_csv("order_logs.csv")
+        filtered_orders = [r for r in order_rows if str(r.get("sku", "")).strip() != sid]
+        counts["order_logs"] = len(order_rows) - len(filtered_orders)
+        self._write_csv("order_logs.csv", filtered_orders)
+
+        recv_rows = self._read_csv("receiving_logs.csv")
+        filtered_recv = [r for r in recv_rows if str(r.get("sku", "")).strip() != sid]
+        counts["receiving_logs"] = len(recv_rows) - len(filtered_recv)
+        self._write_csv("receiving_logs.csv", filtered_recv)
+
+        filtered_skus = [r for r in skus_rows if str(r.get("sku", "")).strip() != sid]
+        counts["skus"] = len(skus_rows) - len(filtered_skus)
+        self._write_csv("skus.csv", filtered_skus)
+
+        return counts
+
     def _update_sku_references_in_ledger(self, old_sku: str, new_sku: str):
         """
         Update all references to old SKU with new SKU in ledger files.

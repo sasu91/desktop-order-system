@@ -6535,8 +6535,9 @@ class DesktopOrderApp:
         
         ttk.Button(toolbar_frame, text="➕ Nuovo SKU", command=self._new_sku).pack(side="left", padx=5)
         ttk.Button(toolbar_frame, text="✏️ Modifica SKU", command=self._edit_sku).pack(side="left", padx=5)
-        ttk.Button(toolbar_frame, text="� Modifica in batch", command=self._edit_sku_batch).pack(side="left", padx=5)
-        ttk.Button(toolbar_frame, text="�🗑️ Elimina SKU", command=self._delete_sku).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="🗂 Modifica in batch", command=self._edit_sku_batch).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="🗑️ Elimina SKU", command=self._delete_sku).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="⚠️ Purge completo", command=self._purge_sku).pack(side="left", padx=5)
         ttk.Button(toolbar_frame, text="🔄 Aggiorna", command=self._refresh_admin_tab).pack(side="left", padx=5)
         
         # Toggle for showing out-of-assortment SKUs
@@ -6754,6 +6755,91 @@ class DesktopOrderApp:
             messagebox.showwarning("Eliminazione completata con errori", summary)
         else:
             messagebox.showinfo("Eliminazione completata", summary)
+
+        self._refresh_admin_tab()
+
+    def _purge_sku(self):
+        """Permanently purge selected SKU(s) and ALL associated data.
+
+        Two-step confirmation:
+          1. Show row-count impact per table.
+          2. Require explicit re-confirmation that the action is irreversible.
+        """
+        sku_codes = self._get_selected_admin_sku_codes()
+        if not sku_codes:
+            messagebox.showwarning("Nessuna Selezione", "Seleziona uno o più SKU da eliminare completamente.")
+            return
+
+        # --- Step 1: impact preview ---
+        impact_lines = []
+        for sku_code in sku_codes:
+            try:
+                counts = self.csv_layer.get_sku_impact_counts(sku_code)
+                detail = ", ".join(f"{k}: {v}" for k, v in counts.items() if v > 0)
+                impact_lines.append(f"• {sku_code}: {detail or 'nessun dato correlato'}")
+            except Exception as e:
+                impact_lines.append(f"• {sku_code}: impossibile calcolare impatto ({e})")
+
+        impact_text = "\n".join(impact_lines)
+        first_confirm = messagebox.askyesno(
+            "⚠️ Purge completo — Anteprima impatto",
+            f"Stai per eliminare DEFINITIVAMENTE {len(sku_codes)} SKU e TUTTI i dati correlati:\n\n"
+            f"{impact_text}\n\n"
+            "Questo include transazioni, vendite, ordini, ricezioni e lotti.\n"
+            "L'operazione NON è reversibile.\n\nContinuare?",
+            icon="warning",
+        )
+        if not first_confirm:
+            return
+
+        # --- Step 2: final explicit confirmation ---
+        sku_list = ", ".join(sku_codes)
+        second_confirm = messagebox.askyesno(
+            "⚠️ CONFERMA FINALE — Operazione irreversibile",
+            f"Sei ASSOLUTAMENTE SICURO di voler eliminare:\n\n{sku_list}\n\n"
+            "Tutti i dati storici (ledger, vendite, ordini, ricezioni) verranno cancellati.\n"
+            "Non esiste un'operazione di recupero.\n\nProcedere?",
+            icon="warning",
+        )
+        if not second_confirm:
+            return
+
+        # --- Execute purge ---
+        succeeded = []
+        failed = []
+        for sku_code in sku_codes:
+            try:
+                counts = self.csv_layer.purge_sku_completely(sku_code)
+                self.csv_layer.log_audit(
+                    operation="SKU_PURGE_DONE",
+                    details=(
+                        f"Purged SKU {sku_code}: "
+                        + ", ".join(f"{k}={v}" for k, v in counts.items())
+                    ),
+                    sku=sku_code,
+                )
+                succeeded.append(sku_code)
+            except Exception as e:
+                self.csv_layer.log_audit(
+                    operation="SKU_PURGE_FAILED",
+                    details=f"Purge SKU {sku_code} failed: {e}",
+                    sku=sku_code,
+                )
+                failed.append((sku_code, str(e)))
+
+        # --- Result summary ---
+        parts = []
+        if succeeded:
+            parts.append(f"✅ Eliminati ({len(succeeded)}): {', '.join(succeeded)}")
+        if failed:
+            detail = "\n".join(f"• {s}: {r}" for s, r in failed)
+            parts.append(f"❌ Errori ({len(failed)}):\n{detail}")
+
+        summary = "\n".join(parts)
+        if failed:
+            messagebox.showwarning("Purge completato con errori", summary)
+        else:
+            messagebox.showinfo("Purge completato", summary)
 
         self._refresh_admin_tab()
 
