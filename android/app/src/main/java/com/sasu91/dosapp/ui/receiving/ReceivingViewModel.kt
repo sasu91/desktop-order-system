@@ -58,7 +58,6 @@ data class ReceivingUiState(
     /** Stable idempotency key for this receipt session. */
     val clientReceiptId: String = UUID.randomUUID().toString(),
     val receiptDate: String = LocalDate.now().toString(),   // YYYY-MM-DD
-    val supplierName: String = "",
 
     /** Whether the camera analyser should actively detect barcodes. */
     val isCameraActive: Boolean = true,
@@ -97,7 +96,6 @@ class ReceivingViewModel @Inject constructor(
     // Header
     // -----------------------------------------------------------------------
 
-    fun onSupplierNameChange(v: String) = _state.update { it.copy(supplierName = v) }
     fun onReceiptDateChange(v: String) = _state.update { it.copy(receiptDate = v) }
 
     // -----------------------------------------------------------------------
@@ -291,13 +289,12 @@ class ReceivingViewModel @Inject constructor(
 
             repo.enqueueOnly(request)
 
-            // Reset to a fresh session for the next DDT; keep today's date and supplier.
+            // Reset to a fresh session for the next DDT; keep today's date.
             val today = LocalDate.now().toString()
             _state.value = ReceivingUiState(
-                supplierName  = s.supplierName,   // keep supplier across DDTs
-                receiptDate   = today,
+                receiptDate     = today,
                 offlineEnqueued = true,
-                successMessage = "🕐 Ricezione salvata — verrà inviata al prossimo retry",
+                successMessage  = "🕐 Ricezione salvata — verrà inviata al prossimo retry",
             )
         }
     }

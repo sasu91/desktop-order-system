@@ -28,7 +28,7 @@ import java.time.ZoneId
  *  1. Camera panel (200 dp) — always visible; paused during EAN resolution.
  *  2. Scan-error banner — dismissible; appears when last scan failed.
  *  3. Loading indicator — visible while resolving a barcode.
- *  4. Header row: fornitore + data ricezione.
+ *  4. Header row: data ricezione.
  *  5. Lines list (LazyColumn).
  *  6. Confirm button.
  */
@@ -56,8 +56,22 @@ fun ReceivingScreen(
         )
     }
 
+    val hasEmptyExpiry = state.lines.any { it.requiresExpiry && it.expiryDate.isBlank() }
+    val canSubmit = state.lines.isNotEmpty() && !hasEmptyExpiry
+
     Scaffold(
         topBar = { TopAppBar(title = { Text("Ricevimento DDT") }) },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                onClick        = { if (canSubmit) viewModel.submit() },
+                containerColor = if (canSubmit) MaterialTheme.colorScheme.primary
+                                 else           MaterialTheme.colorScheme.surfaceVariant,
+                contentColor   = if (canSubmit) MaterialTheme.colorScheme.onPrimary
+                                 else           MaterialTheme.colorScheme.onSurfaceVariant,
+            ) {
+                Text("Conferma (${state.lines.size})")
+            }
+        },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -114,20 +128,11 @@ fun ReceivingScreen(
                 // ----------------------------------------------------------------
                 // 4. Header
                 // ----------------------------------------------------------------
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedTextField(
-                        value         = state.supplierName,
-                        onValueChange = viewModel::onSupplierNameChange,
-                        label         = { Text("Fornitore") },
-                        modifier      = Modifier.weight(1f),
-                        singleLine    = true,
-                    )
-                    ReceiptDatePickerField(
-                        value         = state.receiptDate,
-                        onValueChange = viewModel::onReceiptDateChange,
-                        modifier      = Modifier.weight(1f),
-                    )
-                }
+                ReceiptDatePickerField(
+                    value         = state.receiptDate,
+                    onValueChange = viewModel::onReceiptDateChange,
+                    modifier      = Modifier.fillMaxWidth(),
+                )
 
                 Text(
                     text  = "Scansiona gli articoli ricevuti con la fotocamera ↑",
@@ -163,10 +168,19 @@ fun ReceivingScreen(
                     }
                 }
 
+                // Expiry validation warning — above the list so the CTA stays accessible
+                if (hasEmptyExpiry) {
+                    Text(
+                        text  = "⚠ Inserisci la data di scadenza per tutti gli articoli richiesti.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+
                 LazyColumn(
                     modifier            = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding      = PaddingValues(bottom = 8.dp),
+                    contentPadding      = PaddingValues(bottom = 88.dp),
                 ) {
                     items(state.lines, key = { it.id }) { line ->
                         ReceivingLineCard(
@@ -179,27 +193,6 @@ fun ReceivingScreen(
                             onDismissOcr   = { viewModel.dismissExpiryOcr(line.id) },
                         )
                     }
-                }
-
-                // ----------------------------------------------------------------
-                // 6. Confirm button
-                // ----------------------------------------------------------------
-                val hasEmptyExpiry = state.lines.any { it.requiresExpiry && it.expiryDate.isBlank() }
-                Button(
-                    onClick  = viewModel::submit,
-                    enabled  = state.lines.isNotEmpty() && !hasEmptyExpiry,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp),
-                ) {
-                    Text("Conferma ricevimento (${state.lines.size})")
-                }
-                if (hasEmptyExpiry) {
-                    Text(
-                        text  = "⚠ Inserisci la data di scadenza per tutti gli articoli richiesti.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
                 }
             }
         }
@@ -222,8 +215,8 @@ private fun ReceivingLineCard(
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             // Title row
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -260,9 +253,9 @@ private fun ReceivingLineCard(
             // Colli quantity stepper
             Row(
                 verticalAlignment    = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text("Colli:", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(48.dp))
+                Text("Colli:", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(40.dp))
                 IconButton(
                     onClick  = { onQtyChange(line.qtyColliInput - 1) },
                     enabled  = line.qtyColliInput > 0,
@@ -271,7 +264,7 @@ private fun ReceivingLineCard(
                 OutlinedTextField(
                     value         = line.qtyColliInput.toString(),
                     onValueChange = { onQtyChange(it.toIntOrNull()?.coerceAtLeast(0) ?: 0) },
-                    modifier      = Modifier.width(72.dp),
+                    modifier      = Modifier.width(60.dp),
                     singleLine    = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     textStyle     = MaterialTheme.typography.titleMedium,
@@ -302,14 +295,25 @@ private fun ReceivingLineCard(
                 onDismissOcr = onDismissOcr,
             )
 
-            // Note (optional)
-            OutlinedTextField(
-                value         = line.note,
-                onValueChange = onNoteChange,
-                label         = { Text("Note (opz.)") },
-                modifier      = Modifier.fillMaxWidth(),
-                singleLine    = true,
-            )
+            // Note (optional) — hidden by default to save vertical space
+            var showNote by remember(line.id) { mutableStateOf(line.note.isNotBlank()) }
+            if (showNote) {
+                OutlinedTextField(
+                    value         = line.note,
+                    onValueChange = onNoteChange,
+                    label         = { Text("Note (opz.)") },
+                    modifier      = Modifier.fillMaxWidth(),
+                    singleLine    = true,
+                )
+            } else {
+                TextButton(onClick = { showNote = true }) {
+                    Text(
+                        text  = "+ Note",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+            }
         }
     }
 }
