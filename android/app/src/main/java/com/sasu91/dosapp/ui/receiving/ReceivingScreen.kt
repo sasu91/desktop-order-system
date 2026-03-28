@@ -7,6 +7,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -58,6 +60,12 @@ fun ReceivingScreen(
 
     val hasEmptyExpiry = state.lines.any { it.requiresExpiry && it.expiryDate.isBlank() }
     val canSubmit = state.lines.isNotEmpty() && !hasEmptyExpiry
+    var cameraExpanded by remember { mutableStateOf(true) }
+    val cameraHeight = when {
+        state.lines.isNotEmpty() && !cameraExpanded -> 0.dp
+        state.lines.isNotEmpty()                   -> 140.dp
+        else                                       -> 200.dp
+    }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Ricevimento DDT") }) },
@@ -81,14 +89,39 @@ fun ReceivingScreen(
             // ----------------------------------------------------------------
             // 1. Camera panel
             // ----------------------------------------------------------------
-            BarcodeCameraPanel(
-                onBarcodeDetected  = viewModel::onBarcodeDetected,
-                paused             = !state.isCameraActive,
-                onOcrTextAvailable = viewModel::onOcrText,
-                modifier           = Modifier
-                    .fillMaxWidth()
-                    .height(200.dp),
-            )
+            if (cameraHeight > 0.dp) {
+                BarcodeCameraPanel(
+                    onBarcodeDetected  = viewModel::onBarcodeDetected,
+                    paused             = !state.isCameraActive,
+                    onOcrTextAvailable = viewModel::onOcrText,
+                    modifier           = Modifier
+                        .fillMaxWidth()
+                        .height(cameraHeight),
+                )
+            }
+
+            // Camera expand/collapse toggle — visible only after first scan
+            if (state.lines.isNotEmpty()) {
+                Row(
+                    modifier              = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment     = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = { cameraExpanded = !cameraExpanded }) {
+                        Icon(
+                            imageVector        = if (cameraExpanded) Icons.Default.KeyboardArrowUp
+                                                 else               Icons.Default.KeyboardArrowDown,
+                            contentDescription = if (cameraExpanded) "Comprimi camera" else "Espandi camera",
+                        )
+                        Text(
+                            text  = if (cameraExpanded) "Nascondi camera" else "Scansiona altro",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            }
 
             // ----------------------------------------------------------------
             // 2. Scan-error banner
