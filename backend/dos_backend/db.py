@@ -16,6 +16,7 @@ Design Principles:
 
 import sqlite3
 import os
+import re
 import shutil
 import time
 import threading
@@ -986,19 +987,31 @@ def apply_migrations(conn: Optional[sqlite3.Connection] = None, dry_run: bool = 
                     statements.append(s)
 
                 skipped_idempotent = 0
-                # SQLite ignores PRAGMA foreign_keys inside a transaction.
-                # Hoist all PRAGMA statements out of the statement list and
-                # execute them directly on the connection before BEGIN EXCLUSIVE.
-                pragma_stmts = [s for s in statements if s.upper().lstrip().startswith("PRAGMA")]
-                statements = [s for s in statements if not s.upper().lstrip().startswith("PRAGMA")]
-                for stmt in pragma_stmts:
-                    conn.execute(stmt)
+                # SQLite silently ignores PRAGMA foreign_keys inside any open
+                # transaction.  We must execute it BEFORE BEGIN EXCLUSIVE.
+                # Strategy:
+                #   1. Remove ALL PRAGMA statements from the execution list.
+                #   2. If any of them disables FK enforcement, apply that pragma
+                #      now (before the transaction) so it actually takes effect.
+                #   3. In the finally block, always restore FK = ON.
+                needs_fk_off = any(
+                    re.search(r"foreign_keys\s*=\s*off", s, re.IGNORECASE)
+                    for s in statements
+                )
+                statements = [
+                    s for s in statements
+                    if not s.upper().lstrip().startswith("PRAGMA")
+                ]
 
                 # Switch to manual transaction mode to keep full control.
                 # Commit any implicit transaction Python may have open first.
                 prev_isolation = conn.isolation_level
                 conn.commit()
                 conn.isolation_level = None  # autocommit; we manage BEGIN/COMMIT ourselves
+
+                if needs_fk_off:
+                    conn.execute("PRAGMA foreign_keys = OFF")
+
                 try:
                     conn.execute("BEGIN EXCLUSIVE")
                     try:
@@ -1023,10 +1036,10 @@ def apply_migrations(conn: Optional[sqlite3.Connection] = None, dry_run: bool = 
                         raise
                 finally:
                     conn.isolation_level = prev_isolation  # restore original mode
-                    # Re-enable FK enforcement if it was disabled by migrations PRAGMAs.
-                    # The connection-level setting persists after the transaction ends.
-                    if any("foreign_keys" in s.lower() and "off" in s.lower() for s in pragma_stmts):
-                        conn.execute("PRAGMA foreign_keys = ON")
+                    # Always re-enable FK enforcement — the migration may have
+                    # disabled it (needs_fk_off) and SQLite keeps the pragma
+                    # setting after the transaction ends.
+                    conn.execute("PRAGMA foreign_keys = ON")
 
                 if skipped_idempotent:
                     print(f"✓ Migration {version} applied (idempotent: {skipped_idempotent} statement(s) already present)")
