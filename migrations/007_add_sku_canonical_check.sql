@@ -1,16 +1,14 @@
--- Migration 007: Add CHECK constraints to enforce canonical SKU format (exactly 7 numeric digits)
--- on all tables where sku is an operational column.
+-- Migration 007: Rebuild tables to add missing columns (category, in_assortment,
+-- created_at, updated_at for skus; run_id for transactions; created_at for
+-- receiving_logs) and fix column alignment after migrations 001-006.
 --
--- Canonical format: string matching ^\d{7}$ (e.g. '0450663').
--- CHECK constraints apply to new rows only (existing rows are NOT re-validated by SQLite
--- when the constraint is added via ADD COLUMN or table rebuild).
---
--- Strategy: recreate each table with the CHECK constraint added.
--- Existing rows that violate the constraint will cause the migration to fail,
--- so run scripts/audit_sku_canonical.py first and remediate non-canonical rows.
+-- NOTE: DB-level CHECK constraints for canonical SKU format are intentionally
+-- omitted — existing production data contains non-canonical SKU codes
+-- (e.g. 'BIRRA_LAGER', 'ACQUA_FRIZZANTE'). Format enforcement is handled
+-- at the application layer (ReceiptLine.sku_must_be_canonical in schemas.py).
 --
 -- SQLite does not support ADD CONSTRAINT on existing tables. We use CREATE TABLE ...
--- with the new constraint + INSERT INTO ... SELECT ... + rename approach.
+-- with INSERT INTO ... SELECT ... + rename approach.
 -- IMPORTANT: Foreign key checks are disabled during migration to avoid ordering issues.
 
 PRAGMA foreign_keys = OFF;
@@ -20,8 +18,7 @@ BEGIN TRANSACTION;
 -- 1. skus
 -- ============================================================
 CREATE TABLE IF NOT EXISTS skus_new (
-    sku                         TEXT PRIMARY KEY NOT NULL
-                                    CHECK(sku GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9]'),
+    sku                         TEXT PRIMARY KEY NOT NULL,
     description                 TEXT NOT NULL DEFAULT '',
     ean                         TEXT NOT NULL DEFAULT '',
     ean_secondary               TEXT NOT NULL DEFAULT '',
@@ -88,8 +85,7 @@ ALTER TABLE skus_new RENAME TO skus;
 CREATE TABLE IF NOT EXISTS transactions_new (
     transaction_id  INTEGER PRIMARY KEY AUTOINCREMENT,
     date            TEXT    NOT NULL,
-    sku             TEXT    NOT NULL
-                        CHECK(sku GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9]'),
+    sku             TEXT    NOT NULL,
     event           TEXT    NOT NULL,
     qty             INTEGER NOT NULL,
     receipt_date    TEXT    NOT NULL DEFAULT '',
@@ -115,8 +111,7 @@ ALTER TABLE transactions_new RENAME TO transactions;
 CREATE TABLE IF NOT EXISTS order_logs_new (
     order_id                    TEXT    NOT NULL,
     date                        TEXT    NOT NULL,
-    sku                         TEXT    NOT NULL
-                                    CHECK(sku GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9]'),
+    sku                         TEXT    NOT NULL,
     qty_ordered                 INTEGER NOT NULL DEFAULT 0,
     qty_received                INTEGER NOT NULL DEFAULT 0,
     status                      TEXT    NOT NULL DEFAULT 'PENDING',
@@ -174,8 +169,7 @@ CREATE TABLE IF NOT EXISTS receiving_logs_new (
     document_id     TEXT    NOT NULL,
     receipt_id      TEXT,
     date            TEXT    NOT NULL,
-    sku             TEXT    NOT NULL
-                        CHECK(sku GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9]'),
+    sku             TEXT    NOT NULL,
     qty_received    INTEGER NOT NULL DEFAULT 0,
     receipt_date    TEXT    NOT NULL DEFAULT '',
     order_ids       TEXT    NOT NULL DEFAULT '',
