@@ -1,6 +1,8 @@
--- Migration 007: Rebuild tables to add missing columns (category, in_assortment,
--- created_at, updated_at for skus; run_id for transactions; created_at for
--- receiving_logs) and fix column alignment after migrations 001-006.
+-- Migration 007: Rebuild tables to add missing columns:
+--   skus: category, in_assortment, created_at, updated_at
+--   transactions: run_id (new col, DEFAULT '')
+--   receiving_logs: created_at
+-- Also fixes column alignment after migrations 001-006.
 --
 -- NOTE: DB-level CHECK constraints for canonical SKU format are intentionally
 -- omitted — existing production data contains non-canonical SKU codes
