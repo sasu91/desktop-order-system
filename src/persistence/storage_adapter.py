@@ -24,6 +24,7 @@ from ..domain.models import (
     DemandVariability, Lot, PromoWindow, EventUpliftRule
 )
 from .csv_layer import CSVLayer
+from ..utils.sku_validation import validate_sku_canonical, is_sku_canonical, SkuFormatError
 
 # Import config from project root
 import sys
@@ -564,6 +565,11 @@ class StorageAdapter(CSVLayer):
         csv_skus = {str(s.sku).strip(): s for s in self.csv_layer.read_skus()}
         for sku_id in sku_ids:
             sku_id_normalized = str(sku_id).strip()
+            # Warn early if the SKU itself is not canonical (7-digit zero-padded).
+            # A non-canonical SKU at this point indicates data entered without
+            # validation upstream and should be investigated rather than silently synced.
+            if not is_sku_canonical(sku_id_normalized):
+                print(f"⚠ SKU non canonico durante sync SQLite (atteso 7 cifre): '{sku_id_normalized}'")
             sku_obj = csv_skus.get(sku_id_normalized)
             if sku_obj is not None:
                 try:
@@ -576,6 +582,12 @@ class StorageAdapter(CSVLayer):
 
     def write_transactions_batch(self, txns: List[Transaction]):
         """Write multiple transactions (batch mode)"""
+        # Validate all SKUs are canonical (7-digit zero-padded) before touching any
+        # storage.  A non-canonical SKU (e.g. '450663' vs '0450663') would trigger
+        # silent FK / catalog mismatches further down the chain.
+        for txn in txns:
+            validate_sku_canonical(txn.sku, context="write_transactions_batch")
+
         if self.is_sqlite_mode():
             assert self.repos is not None
             try:

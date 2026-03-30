@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Any
 
 from ..domain.models import Transaction, EventType, SKU, SalesRecord, AuditLog, DemandVariability, Lot, PromoWindow, EventUpliftRule
+from ..utils.sku_validation import validate_sku_canonical, SkuFormatError  # noqa: F401
 
 
 class CSVLayer:
@@ -1391,6 +1392,7 @@ class CSVLayer:
             event_m_i: Final multiplier (m_i = 1 + (U - 1) * beta)
             event_explain_short: Short explanation string
         """
+        validate_sku_canonical(sku, context="write_order_log")
         self._append_csv("order_logs.csv", {
             "order_id": order_id,
             "date": date_str,
@@ -1506,6 +1508,7 @@ class CSVLayer:
             order_ids: Comma-separated list of order_ids fulfilled by this receipt
             receipt_id: Legacy receipt_id (for backward compatibility)
         """
+        validate_sku_canonical(sku, context="write_receiving_log")
         self._append_csv("receiving_logs.csv", {
             "document_id": document_id,
             "receipt_id": receipt_id or document_id,  # Backward compat

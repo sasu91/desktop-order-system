@@ -19,6 +19,7 @@ from datetime import datetime
 
 from src.domain.models import SKU, DemandVariability
 from src.domain.ledger import validate_ean
+from src.utils.sku_validation import validate_sku_canonical, SkuFormatError
 
 
 logger = logging.getLogger(__name__)
@@ -287,6 +288,14 @@ class SKUImporter:
         
         # If critical fields missing, skip further validation
         if errors:
+            return errors, warnings
+
+        # Canonical SKU format: exactly 7 numeric digits (leading-zero mandatory)
+        sku_value = mapped_data.get("sku", "").strip()
+        try:
+            validate_sku_canonical(sku_value, context="sku_import._validate_row")
+        except SkuFormatError as exc:
+            errors.append(str(exc))
             return errors, warnings
         
         # Type and range validations

@@ -14,6 +14,7 @@ import logging
 
 from ..domain.models import Transaction, EventType
 from ..persistence.csv_layer import CSVLayer
+from ..utils.sku_validation import validate_sku_canonical, SkuFormatError
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,15 @@ class ReceivingWorkflow:
         for item in items:
             # Normalize sku to string (guards against int keys from external callers)
             sku = str(item["sku"]).strip()
+
+            # Strict canonical validation: must be exactly 7 numeric digits.
+            # A non-canonical SKU (e.g. '450663' instead of '0450663') can never
+            # match order logs and would silently produce FK/catalog errors.  Fail
+            # fast here with an actionable message instead.
+            try:
+                validate_sku_canonical(sku, context=f"document {document_id}")
+            except SkuFormatError as exc:
+                raise SkuFormatError(sku, context=f"document {document_id}") from exc
             qty_received = item["qty_received"]
             specified_order_ids = item.get("order_ids", [])
             

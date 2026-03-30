@@ -64,6 +64,7 @@ from .. import promo_calendar
 from .widgets import AutocompleteEntry
 from .collapsible_frame import CollapsibleFrame
 from ..utils.logging_config import setup_logging, get_logger
+from ..utils.sku_validation import is_sku_canonical
 
 # Initialize logging — uses frozen-aware path (next to .exe or project root/logs)
 setup_logging(app_name="desktop_order_system")
@@ -4670,19 +4671,32 @@ class DesktopOrderApp:
 
         # Build items from visible (date-filtered) rows only
         items = []
+        invalid_skus = []
         for item_id in visible_item_ids:
             new_qty_received = self.pending_qty_edits.get(item_id, 0)
             if new_qty_received <= 0:
                 continue
             values = self.pending_treeview.item(item_id)["values"]
-            sku = values[1]
+            sku = str(values[1]).strip()
             expiry_date_for_item = self.pending_expiry_edits.get(item_id, "")
+            if not is_sku_canonical(sku):
+                invalid_skus.append(sku)
+                continue
             items.append({
                 "sku": sku,
                 "qty_received": new_qty_received,
                 "order_ids": [],  # FIFO allocation automatica
                 "expiry_date": expiry_date_for_item,
             })
+
+        if invalid_skus:
+            messagebox.showerror(
+                "SKU Non Canonici",
+                f"I seguenti SKU non sono nel formato canonico atteso (7 cifre con zero iniziale):\n\n"
+                + "\n".join(f"  • {s}" for s in invalid_skus)
+                + "\n\nCorreggi i dati nel catalogo prima di procedere.",
+            )
+            return
         
         if not items:
             messagebox.showwarning("Nessun Articolo", "Nessun articolo da ricevere (tutte le quantità sono 0).")

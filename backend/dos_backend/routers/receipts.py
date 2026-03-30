@@ -90,7 +90,18 @@ def _validate_lines(
         raw_ean = (line.ean or "").strip()
 
         if raw_sku:
-            # sku takes priority
+            # sku takes priority — canonical format already enforced by schema validator,
+            # but guard here too in case the model is called without Pydantic (e.g. tests).
+            import re as _re
+            if not _re.fullmatch(r'\d{7}', raw_sku):
+                errors.append(ErrorDetail(
+                    field=f"{prefix}.sku",
+                    issue=(
+                        f"SKU non canonico (atteso stringa di esattamente 7 cifre numeriche): "
+                        f"ricevuto {raw_sku!r}"
+                    ),
+                ))
+                continue
             sku_code = raw_sku
             sku_obj = sku_map.get(sku_code)
             if sku_obj is None:

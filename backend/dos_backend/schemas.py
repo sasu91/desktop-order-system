@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Stock mode
@@ -287,6 +287,23 @@ class ReceiptLine(BaseModel):
         default=None,
         description="Codice SKU (case-sensitive). Obbligatorio se ean non è fornito.",
     )
+
+    @field_validator("sku")
+    @classmethod
+    def sku_must_be_canonical(cls, v: Optional[str]) -> Optional[str]:
+        """Enforce canonical 7-digit zero-padded SKU format at schema boundary.
+
+        If ``sku`` is provided it must be exactly 7 numeric digits (e.g. '0450663').
+        Numeric-equivalent values without the leading zero ('450663') are rejected
+        with an explicit error so the data problem is surfaced before touching the
+        ledger or order logs.
+        """
+        import re
+        if v is not None and not re.fullmatch(r'\d{7}', v):
+            raise ValueError(
+                f"SKU non canonico (atteso stringa di esattamente 7 cifre numeriche): ricevuto {v!r}"
+            )
+        return v
     ean: Optional[str] = Field(
         default=None,
         description="EAN-12 o EAN-13. Alternativa a sku (lookup server-side).",

@@ -18,6 +18,7 @@ import pytest
 from src.persistence.csv_layer import CSVLayer
 from src.workflows.receiving_v2 import ReceivingWorkflow
 from src.domain.models import EventType, SKU, DemandVariability
+from src.utils.sku_validation import validate_sku_canonical, is_sku_canonical, SkuFormatError
 
 
 # ---------------------------------------------------------------------------
@@ -195,19 +196,17 @@ class TestReceivingSkuNormalization:
              "status": "PENDING", "receipt_date": "2026-03-24"},
         ])
 
-    def test_receiving_with_int_sku_matches_orders(self, data_dir, csv_layer):
+    def test_receiving_with_canonical_str_sku_matches_orders(self, data_dir, csv_layer):
         """
-        Regression: SKU stored as integer ('450633') must match order logs
-        even when passed as int to close_receipt_by_document.
-        Previously produced false 'No PENDING/PARTIAL orders found'.
+        Normal case: canonical 7-digit str sku (e.g. '0450633') matches order.
         """
-        self._setup_sku_and_order(data_dir, csv_layer, "450633")
+        self._setup_sku_and_order(data_dir, csv_layer, "0450633")
         workflow = ReceivingWorkflow(csv_layer)
 
         txns, already_processed, order_updates = workflow.close_receipt_by_document(
             document_id="DDT-20260324",
             receipt_date=date(2026, 3, 24),
-            items=[{"sku": 450633, "qty_received": 30}],  # int sku
+            items=[{"sku": "0450633", "qty_received": 30}],
         )
 
         assert not already_processed
@@ -215,24 +214,39 @@ class TestReceivingSkuNormalization:
         assert txns[0].event == EventType.RECEIPT
         assert txns[0].qty == 30
         assert len(order_updates) == 1, (
-            "Order must be found and updated even when sku is passed as int"
+            "Canonical SKU must match the order and produce an order update"
         )
 
-    def test_receiving_with_str_sku_matches_orders(self, data_dir, csv_layer):
-        """Normal case: str sku still works correctly after normalization."""
-        self._setup_sku_and_order(data_dir, csv_layer, "450634")
+    def test_receiving_with_non_canonical_int_sku_raises(self, data_dir, csv_layer):
+        """
+        Strict mode: passing int SKU (e.g. 450633) is rejected with SkuFormatError.
+        Previously (tolerance mode) this would be silently converted to string.
+        An int cannot represent a zero-padded SKU, so it is always non-canonical.
+        """
+        self._setup_sku_and_order(data_dir, csv_layer, "0450633")
         workflow = ReceivingWorkflow(csv_layer)
 
-        txns, already_processed, order_updates = workflow.close_receipt_by_document(
-            document_id="DDT-20260324-B",
-            receipt_date=date(2026, 3, 24),
-            items=[{"sku": "450634", "qty_received": 6}],
-        )
+        with pytest.raises(SkuFormatError):
+            workflow.close_receipt_by_document(
+                document_id="DDT-20260324B",
+                receipt_date=date(2026, 3, 24),
+                items=[{"sku": 450633, "qty_received": 30}],  # int — non-canonical
+            )
 
-        assert not already_processed
-        assert len(txns) == 1
-        assert txns[0].qty == 6
-        assert len(order_updates) == 1
+    def test_receiving_with_non_canonical_str_sku_raises(self, data_dir, csv_layer):
+        """
+        Strict mode: str SKU without leading zero ('450633') is rejected.
+        This is the exact production scenario: '0450663' → lost leading zero → '450663'.
+        """
+        self._setup_sku_and_order(data_dir, csv_layer, "0450634")
+        workflow = ReceivingWorkflow(csv_layer)
+
+        with pytest.raises(SkuFormatError):
+            workflow.close_receipt_by_document(
+                document_id="DDT-20260324C",
+                receipt_date=date(2026, 3, 24),
+                items=[{"sku": "450634", "qty_received": 6}],  # missing leading zero
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -246,11 +260,11 @@ class TestReceivingStatusNormalization:
         Orders with status='pending' (lowercase) must be found by receiving.
         """
         _write_raw_skus_csv(data_dir, [
-            {"sku": "SKU_LOW", "description": "SKU lowercase status"},
+            {"sku": "0000001", "description": "SKU lowercase status"},
         ])
         _write_raw_order_logs(data_dir, [
             {"order_id": "ORD_LOW_1", "date": "2026-03-20",
-             "sku": "SKU_LOW", "qty_ordered": "10", "qty_received": "0",
+             "sku": "0000001", "qty_ordered": "10", "qty_received": "0",
              "status": "pending"},  # lowercase — non-standard
         ])
 
@@ -258,7 +272,7 @@ class TestReceivingStatusNormalization:
         txns, _, order_updates = workflow.close_receipt_by_document(
             document_id="DDT-TEST-LOW",
             receipt_date=date(2026, 3, 24),
-            items=[{"sku": "SKU_LOW", "qty_received": 10}],
+            items=[{"sku": "0000001", "qty_received": 10}],
         )
 
         assert len(txns) == 1
@@ -267,11 +281,11 @@ class TestReceivingStatusNormalization:
     def test_partial_lowercase_status_matched(self, data_dir, csv_layer):
         """Orders with status='partial' (lowercase) must be found."""
         _write_raw_skus_csv(data_dir, [
-            {"sku": "SKU_PART", "description": "SKU partial lower"},
+            {"sku": "0000002", "description": "SKU partial lower"},
         ])
         _write_raw_order_logs(data_dir, [
             {"order_id": "ORD_PART_1", "date": "2026-03-20",
-             "sku": "SKU_PART", "qty_ordered": "20", "qty_received": "5",
+             "sku": "0000002", "qty_ordered": "20", "qty_received": "5",
              "status": "partial"},  # lowercase
         ])
 
@@ -279,7 +293,7 @@ class TestReceivingStatusNormalization:
         txns, _, order_updates = workflow.close_receipt_by_document(
             document_id="DDT-TEST-PART",
             receipt_date=date(2026, 3, 24),
-            items=[{"sku": "SKU_PART", "qty_received": 15}],
+            items=[{"sku": "0000002", "qty_received": 15}],
         )
 
         assert len(txns) == 1
@@ -291,11 +305,11 @@ class TestReceivingStatusNormalization:
         A new RECEIPT event without order linkage is still created.
         """
         _write_raw_skus_csv(data_dir, [
-            {"sku": "SKU_DONE", "description": "SKU already received"},
+            {"sku": "0000003", "description": "SKU already received"},
         ])
         _write_raw_order_logs(data_dir, [
             {"order_id": "ORD_DONE_1", "date": "2026-03-10",
-             "sku": "SKU_DONE", "qty_ordered": "50", "qty_received": "50",
+             "sku": "0000003", "qty_ordered": "50", "qty_received": "50",
              "status": "RECEIVED"},
         ])
 
@@ -303,10 +317,244 @@ class TestReceivingStatusNormalization:
         txns, _, order_updates = workflow.close_receipt_by_document(
             document_id="DDT-TEST-DONE",
             receipt_date=date(2026, 3, 24),
-            items=[{"sku": "SKU_DONE", "qty_received": 10}],
+            items=[{"sku": "0000003", "qty_received": 10}],
         )
 
         # RECEIPT event is still created (manual stock-in), but no order is updated
         assert len(txns) == 1
         assert txns[0].event == EventType.RECEIPT
         assert len(order_updates) == 0, "RECEIVED orders must not be re-opened"
+
+
+# ---------------------------------------------------------------------------
+# 5. SKU canonical-format validator unit tests
+# ---------------------------------------------------------------------------
+
+class TestSkuCanonicalValidator:
+    """Unit tests for src/utils/sku_validation – no I/O required."""
+
+    # ---- validate_sku_canonical ----
+
+    def test_canonical_7_digit_accepted(self):
+        """'0450663' is canonical (leading zero, 7 digits)."""
+        assert validate_sku_canonical("0450663") == "0450663"
+
+    def test_canonical_all_zeros_accepted(self):
+        """'0000000' is technically canonical (edge case)."""
+        assert validate_sku_canonical("0000000") == "0000000"
+
+    def test_canonical_no_leading_zero_accepted(self):
+        """'1234567' has no leading zero but is still 7 numeric digits → canonical."""
+        assert validate_sku_canonical("1234567") == "1234567"
+
+    def test_non_canonical_6_digits_raises(self):
+        """'450663' (6 digits) is non-canonical — the exact production failure case."""
+        with pytest.raises(SkuFormatError) as exc_info:
+            validate_sku_canonical("450663")
+        assert "450663" in str(exc_info.value)
+
+    def test_non_canonical_8_digits_raises(self):
+        """'04506630' (8 digits) is non-canonical."""
+        with pytest.raises(SkuFormatError):
+            validate_sku_canonical("04506630")
+
+    def test_non_canonical_alpha_raises(self):
+        """'SKU_001' is not numeric — must be rejected."""
+        with pytest.raises(SkuFormatError):
+            validate_sku_canonical("SKU_001")
+
+    def test_non_canonical_with_spaces_raises(self):
+        """' 0450663 ' (with surrounding spaces) is non-canonical in strict mode."""
+        with pytest.raises(SkuFormatError):
+            validate_sku_canonical(" 0450663 ")
+
+    def test_non_canonical_int_raises(self):
+        """int 450663 is not a str — must be rejected."""
+        with pytest.raises(SkuFormatError):
+            validate_sku_canonical(450663)  # type: ignore[arg-type]
+
+    def test_non_canonical_none_raises(self):
+        """None is not a str — must be rejected."""
+        with pytest.raises(SkuFormatError):
+            validate_sku_canonical(None)  # type: ignore[arg-type]
+
+    def test_context_included_in_error_message(self):
+        """Error message must include the provided context for diagnostics."""
+        with pytest.raises(SkuFormatError) as exc_info:
+            validate_sku_canonical("450663", context="document DDT-20260328")
+        assert "DDT-20260328" in str(exc_info.value)
+
+    # ---- is_sku_canonical ----
+
+    def test_is_canonical_true(self):
+        assert is_sku_canonical("0450663") is True
+
+    def test_is_canonical_false_short(self):
+        assert is_sku_canonical("450663") is False
+
+    def test_is_canonical_false_int(self):
+        assert is_sku_canonical(450663) is False  # type: ignore[arg-type]
+
+    def test_is_canonical_false_alpha(self):
+        assert is_sku_canonical("ABC1234") is False
+
+
+# ---------------------------------------------------------------------------
+# 6. write_order_log rejects non-canonical SKUs at persistence boundary
+# ---------------------------------------------------------------------------
+
+class TestCsvLayerWriteOrderLogCanonical:
+    """write_order_log must raise SkuFormatError before writing to order_logs.csv."""
+
+    def test_canonical_sku_is_written(self, data_dir, csv_layer):
+        csv_layer.write_order_log(
+            order_id="ORD-001",
+            date_str="2026-03-30",
+            sku="0450663",
+            qty=10,
+            status="PENDING",
+        )
+        rows = csv_layer.read_order_logs()
+        assert len(rows) == 1
+        assert rows[0]["sku"] == "0450663"
+
+    def test_non_canonical_int_raises_before_write(self, data_dir, csv_layer):
+        with pytest.raises(SkuFormatError):
+            csv_layer.write_order_log(
+                order_id="ORD-002",
+                date_str="2026-03-30",
+                sku=450663,  # type: ignore[arg-type]  # integer — must be rejected
+                qty=10,
+                status="PENDING",
+            )
+        # Nothing must have been written
+        assert csv_layer.read_order_logs() == []
+
+    def test_non_canonical_6_digit_str_raises_before_write(self, data_dir, csv_layer):
+        with pytest.raises(SkuFormatError):
+            csv_layer.write_order_log(
+                order_id="ORD-003",
+                date_str="2026-03-30",
+                sku="450663",  # 6 digits — missing leading zero
+                qty=10,
+                status="PENDING",
+            )
+        assert csv_layer.read_order_logs() == []
+
+    def test_non_canonical_empty_raises_before_write(self, data_dir, csv_layer):
+        with pytest.raises(SkuFormatError):
+            csv_layer.write_order_log(
+                order_id="ORD-004",
+                date_str="2026-03-30",
+                sku="",
+                qty=10,
+                status="PENDING",
+            )
+        assert csv_layer.read_order_logs() == []
+
+
+# ---------------------------------------------------------------------------
+# 7. write_receiving_log rejects non-canonical SKUs at persistence boundary
+# ---------------------------------------------------------------------------
+
+class TestCsvLayerWriteReceivingLogCanonical:
+    """write_receiving_log must raise SkuFormatError before writing to receiving_logs.csv."""
+
+    def test_canonical_sku_is_written(self, data_dir, csv_layer):
+        csv_layer.write_receiving_log(
+            document_id="DDT-001",
+            date_str="2026-03-30",
+            sku="0450663",
+            qty=5,
+            receipt_date="2026-03-30",
+        )
+        rows = csv_layer.read_receiving_logs()
+        assert len(rows) == 1
+        assert rows[0]["sku"] == "0450663"
+
+    def test_non_canonical_int_raises_before_write(self, data_dir, csv_layer):
+        with pytest.raises(SkuFormatError):
+            csv_layer.write_receiving_log(
+                document_id="DDT-002",
+                date_str="2026-03-30",
+                sku=450663,  # type: ignore[arg-type]
+                qty=5,
+                receipt_date="2026-03-30",
+            )
+        assert csv_layer.read_receiving_logs() == []
+
+    def test_non_canonical_6_digit_str_raises_before_write(self, data_dir, csv_layer):
+        with pytest.raises(SkuFormatError):
+            csv_layer.write_receiving_log(
+                document_id="DDT-003",
+                date_str="2026-03-30",
+                sku="450663",
+                qty=5,
+                receipt_date="2026-03-30",
+            )
+        assert csv_layer.read_receiving_logs() == []
+
+
+# ---------------------------------------------------------------------------
+# 8. SKUImporter._validate_row rejects non-canonical SKUs in bulk import
+# ---------------------------------------------------------------------------
+
+class TestSkuImportValidateRowCanonical:
+    """_validate_row must reject rows where SKU is not in canonical 7-digit format."""
+
+    @pytest.fixture
+    def importer(self, csv_layer):
+        from src.workflows.sku_import import SKUImporter
+        return SKUImporter(csv_layer=csv_layer)
+
+    def test_canonical_sku_no_error(self, importer):
+        errors, _warnings = importer._validate_row(
+            {"sku": "0450663", "description": "Product A"},
+            existing_skus=set(),
+            seen_skus_in_file=set(),
+        )
+        assert not any("SKU non canonico" in e for e in errors)
+
+    def test_non_canonical_6_digit_produces_error(self, importer):
+        errors, _warnings = importer._validate_row(
+            {"sku": "450663", "description": "Product A"},
+            existing_skus=set(),
+            seen_skus_in_file=set(),
+        )
+        assert any("SKU non canonico" in e for e in errors)
+
+    def test_non_canonical_8_digit_produces_error(self, importer):
+        errors, _warnings = importer._validate_row(
+            {"sku": "04506630", "description": "Product A"},
+            existing_skus=set(),
+            seen_skus_in_file=set(),
+        )
+        assert any("SKU non canonico" in e for e in errors)
+
+    def test_non_canonical_alpha_produces_error(self, importer):
+        errors, _warnings = importer._validate_row(
+            {"sku": "SKU_001", "description": "Product A"},
+            existing_skus=set(),
+            seen_skus_in_file=set(),
+        )
+        assert any("SKU non canonico" in e for e in errors)
+
+    def test_non_canonical_empty_produces_error(self, importer):
+        # Empty SKU triggers CRITICAL_FIELDS error first, but canonical check
+        # should not cause an unhandled exception
+        errors, _warnings = importer._validate_row(
+            {"sku": "", "description": "Product A"},
+            existing_skus=set(),
+            seen_skus_in_file=set(),
+        )
+        assert errors  # at least one error (missing critical field or non-canonical)
+
+    def test_canonical_sku_allows_further_validation(self, importer):
+        # With a canonical SKU, downstream validations (moq, pack_size, etc.) still run
+        errors, _warnings = importer._validate_row(
+            {"sku": "0000001", "description": "Test", "moq": "-5"},
+            existing_skus=set(),
+            seen_skus_in_file=set(),
+        )
+        assert any("moq" in e.lower() for e in errors)
+
