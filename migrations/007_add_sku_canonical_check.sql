@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS skus_new (
     in_assortment               INTEGER NOT NULL DEFAULT 1,
     created_at                  TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at                  TEXT    NOT NULL DEFAULT (datetime('now'))
+    -- No FOREIGN KEY constraints: existing data predates FK enforcement
 );
 
 INSERT INTO skus_new (
@@ -93,8 +94,8 @@ CREATE TABLE IF NOT EXISTS transactions_new (
     receipt_date    TEXT    NOT NULL DEFAULT '',
     note            TEXT    NOT NULL DEFAULT '',
     created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
-    run_id          TEXT    NOT NULL DEFAULT '',
-    FOREIGN KEY (sku) REFERENCES skus(sku)
+    run_id          TEXT    NOT NULL DEFAULT ''
+    -- No FOREIGN KEY: existing rows may reference deleted SKUs
 );
 
 INSERT INTO transactions_new (
@@ -138,8 +139,8 @@ CREATE TABLE IF NOT EXISTS order_logs_new (
     event_explain_short         TEXT    NOT NULL DEFAULT '',
     created_at                  TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at                  TEXT    NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (order_id),
-    FOREIGN KEY (sku) REFERENCES skus(sku)
+    PRIMARY KEY (order_id)
+    -- No FOREIGN KEY: existing rows may reference deleted SKUs
 );
 
 INSERT INTO order_logs_new (
@@ -176,8 +177,8 @@ CREATE TABLE IF NOT EXISTS receiving_logs_new (
     receipt_date    TEXT    NOT NULL DEFAULT '',
     order_ids       TEXT    NOT NULL DEFAULT '',
     created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (document_id),
-    FOREIGN KEY (sku) REFERENCES skus(sku)
+    PRIMARY KEY (document_id)
+    -- No FOREIGN KEY: existing rows may reference deleted SKUs
 );
 
 INSERT INTO receiving_logs_new (
