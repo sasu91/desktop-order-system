@@ -51,10 +51,33 @@ CREATE TABLE IF NOT EXISTS skus_new (
     mc_horizon_days             INTEGER NOT NULL DEFAULT 0,
     mc_horizon_mode             TEXT    NOT NULL DEFAULT 'auto',
     has_expiry_label            INTEGER NOT NULL DEFAULT 0,
-    department                  TEXT    NOT NULL DEFAULT ''
+    department                  TEXT    NOT NULL DEFAULT '',
+    category                    TEXT    NOT NULL DEFAULT '',
+    in_assortment               INTEGER NOT NULL DEFAULT 1,
+    created_at                  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at                  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
-INSERT INTO skus_new SELECT * FROM skus;
+INSERT INTO skus_new (
+    sku, description, ean, ean_secondary, moq, pack_size, lead_time_days,
+    review_period, safety_stock, shelf_life_days, min_shelf_life_days,
+    max_stock, reorder_point, waste_penalty_factor, waste_penalty_mode,
+    waste_risk_threshold, oos_boost_percent, oos_detection_mode,
+    oos_popup_preference, target_csl, demand_variability, forecast_method,
+    mc_n_simulations, mc_random_seed, mc_output_stat, mc_output_percentile,
+    mc_distribution, mc_horizon_days, mc_horizon_mode, has_expiry_label,
+    department, category, in_assortment, created_at, updated_at
+)
+SELECT
+    sku, description, ean, ean_secondary, moq, pack_size, lead_time_days,
+    review_period, safety_stock, shelf_life_days, min_shelf_life_days,
+    max_stock, reorder_point, waste_penalty_factor, waste_penalty_mode,
+    waste_risk_threshold, oos_boost_percent, oos_detection_mode,
+    oos_popup_preference, target_csl, demand_variability, forecast_method,
+    mc_n_simulations, mc_random_seed, mc_output_stat, mc_output_percentile,
+    mc_distribution, mc_horizon_days, mc_horizon_mode, has_expiry_label,
+    department, category, in_assortment, created_at, updated_at
+FROM skus;
 
 DROP TABLE skus;
 ALTER TABLE skus_new RENAME TO skus;
@@ -63,7 +86,7 @@ ALTER TABLE skus_new RENAME TO skus;
 -- 2. transactions
 -- ============================================================
 CREATE TABLE IF NOT EXISTS transactions_new (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_id  INTEGER PRIMARY KEY AUTOINCREMENT,
     date            TEXT    NOT NULL,
     sku             TEXT    NOT NULL
                         CHECK(sku GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9]'),
@@ -71,11 +94,17 @@ CREATE TABLE IF NOT EXISTS transactions_new (
     qty             INTEGER NOT NULL,
     receipt_date    TEXT    NOT NULL DEFAULT '',
     note            TEXT    NOT NULL DEFAULT '',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
     run_id          TEXT    NOT NULL DEFAULT '',
     FOREIGN KEY (sku) REFERENCES skus(sku)
 );
 
-INSERT INTO transactions_new SELECT * FROM transactions;
+INSERT INTO transactions_new (
+    transaction_id, date, sku, event, qty, receipt_date, note, created_at
+)
+SELECT
+    transaction_id, date, sku, event, qty, receipt_date, note, created_at
+FROM transactions;
 
 DROP TABLE transactions;
 ALTER TABLE transactions_new RENAME TO transactions;
@@ -110,11 +139,30 @@ CREATE TABLE IF NOT EXISTS order_logs_new (
     event_beta_fallback_level   TEXT    NOT NULL DEFAULT '',
     event_m_i                   REAL    NOT NULL DEFAULT 1.0,
     event_explain_short         TEXT    NOT NULL DEFAULT '',
+    created_at                  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at                  TEXT    NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (order_id),
     FOREIGN KEY (sku) REFERENCES skus(sku)
 );
 
-INSERT INTO order_logs_new SELECT * FROM order_logs;
+INSERT INTO order_logs_new (
+    order_id, date, sku, qty_ordered, qty_received, status, receipt_date,
+    promo_prebuild_enabled, promo_start_date, target_open_qty,
+    projected_stock_on_promo_start, prebuild_delta_qty, prebuild_qty,
+    prebuild_coverage_days, prebuild_distribution_note, event_uplift_active,
+    event_delivery_date, event_reason, event_u_store_day, event_quantile,
+    event_fallback_level, event_beta_i, event_beta_fallback_level,
+    event_m_i, event_explain_short, created_at, updated_at
+)
+SELECT
+    order_id, date, sku, qty_ordered, qty_received, status, receipt_date,
+    promo_prebuild_enabled, promo_start_date, target_open_qty,
+    projected_stock_on_promo_start, prebuild_delta_qty, prebuild_qty,
+    prebuild_coverage_days, prebuild_distribution_note, event_uplift_active,
+    event_delivery_date, event_reason, event_u_store_day, event_quantile,
+    event_fallback_level, event_beta_i, event_beta_fallback_level,
+    event_m_i, event_explain_short, created_at, updated_at
+FROM order_logs;
 
 DROP TABLE order_logs;
 ALTER TABLE order_logs_new RENAME TO order_logs;
@@ -123,19 +171,25 @@ ALTER TABLE order_logs_new RENAME TO order_logs;
 -- 4. receiving_logs
 -- ============================================================
 CREATE TABLE IF NOT EXISTS receiving_logs_new (
-    receipt_id      TEXT    NOT NULL,
-    document_id     TEXT    NOT NULL DEFAULT '',
+    document_id     TEXT    NOT NULL,
+    receipt_id      TEXT,
     date            TEXT    NOT NULL,
     sku             TEXT    NOT NULL
                         CHECK(sku GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9]'),
     qty_received    INTEGER NOT NULL DEFAULT 0,
     receipt_date    TEXT    NOT NULL DEFAULT '',
     order_ids       TEXT    NOT NULL DEFAULT '',
-    PRIMARY KEY (receipt_id),
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (document_id),
     FOREIGN KEY (sku) REFERENCES skus(sku)
 );
 
-INSERT INTO receiving_logs_new SELECT * FROM receiving_logs;
+INSERT INTO receiving_logs_new (
+    document_id, receipt_id, date, sku, qty_received, receipt_date, order_ids, created_at
+)
+SELECT
+    document_id, receipt_id, date, sku, qty_received, receipt_date, order_ids, created_at
+FROM receiving_logs;
 
 DROP TABLE receiving_logs;
 ALTER TABLE receiving_logs_new RENAME TO receiving_logs;
