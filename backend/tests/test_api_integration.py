@@ -332,7 +332,7 @@ class TestPostReceiptsClose:
         payload = {
             "receipt_id": "REC-BAD-001",
             "receipt_date": "2026-02-25",
-            "lines": [{"sku": "GHOST", "qty_received": 5}],
+            "lines": [{"sku": "9999999", "qty_received": 5}],
         }
         r = client.post(f"{_V1}/receipts/close", json=payload)
         assert r.status_code == 400
@@ -373,7 +373,7 @@ class TestPostReceiptsClose:
             "receipt_id": "REC-BAD-004",
             "receipt_date": "2026-02-25",
             "lines": [
-                {"sku": "GHOST1", "qty_received": 1},           # unknown
+                {"sku": "9999998", "qty_received": 1},          # unknown
                 {"sku": "0010002", "qty_received": 2},          # missing expiry
                 {"ean": "NOTDIGITS", "qty_received": 1},         # bad EAN
             ],

@@ -986,6 +986,14 @@ def apply_migrations(conn: Optional[sqlite3.Connection] = None, dry_run: bool = 
                     statements.append(s)
 
                 skipped_idempotent = 0
+                # SQLite ignores PRAGMA foreign_keys inside a transaction.
+                # Hoist all PRAGMA statements out of the statement list and
+                # execute them directly on the connection before BEGIN EXCLUSIVE.
+                pragma_stmts = [s for s in statements if s.upper().lstrip().startswith("PRAGMA")]
+                statements = [s for s in statements if not s.upper().lstrip().startswith("PRAGMA")]
+                for stmt in pragma_stmts:
+                    conn.execute(stmt)
+
                 # Switch to manual transaction mode to keep full control.
                 # Commit any implicit transaction Python may have open first.
                 prev_isolation = conn.isolation_level
@@ -1015,6 +1023,10 @@ def apply_migrations(conn: Optional[sqlite3.Connection] = None, dry_run: bool = 
                         raise
                 finally:
                     conn.isolation_level = prev_isolation  # restore original mode
+                    # Re-enable FK enforcement if it was disabled by migrations PRAGMAs.
+                    # The connection-level setting persists after the transaction ends.
+                    if any("foreign_keys" in s.lower() and "off" in s.lower() for s in pragma_stmts):
+                        conn.execute("PRAGMA foreign_keys = ON")
 
                 if skipped_idempotent:
                     print(f"✓ Migration {version} applied (idempotent: {skipped_idempotent} statement(s) already present)")
