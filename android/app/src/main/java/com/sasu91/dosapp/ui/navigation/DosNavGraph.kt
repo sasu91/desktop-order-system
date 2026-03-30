@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Inventory
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
@@ -88,39 +89,62 @@ fun DosNavGraph(
         }
     }
 
+    // Controls visibility of the feature-launcher popup menu
+    var menuExpanded by remember { mutableStateOf(false) }
+
     Scaffold(
         topBar = { ConnStatusBar(connStatus) },
-        bottomBar = {
-            NavigationBar {
-                TOP_LEVEL_SCREENS.forEach { screen ->
-                    val selected = currentRoute?.startsWith(screen.route.substringBefore("?")) == true
-
-                    NavigationBarItem(
-                        selected = selected,
-                        onClick  = {
-                            navController.navigate(
-                                when (screen) {
-                                    is Screen.Exceptions -> screen.route.replace("{sku}", "")
-                                    is Screen.Eod        -> screen.route.replace("{sku}", "")
-                                    else                 -> screen.route
+        floatingActionButton = {
+            // Small button anchored bottom-right that opens the feature list
+            Box {
+                SmallFloatingActionButton(
+                    onClick = { menuExpanded = true },
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                ) {
+                    Icon(Icons.Default.Menu, contentDescription = "Seleziona funzionalità")
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                ) {
+                    TOP_LEVEL_SCREENS.forEach { screen ->
+                        val selected = currentRoute?.startsWith(screen.route.substringBefore("?")) == true
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    if (screen is Screen.Queue && pendingCount > 0) {
+                                        BadgedBox(badge = { Badge { Text("$pendingCount") } }) {
+                                            Icon(screen.icon, contentDescription = null)
+                                        }
+                                    } else {
+                                        Icon(screen.icon, contentDescription = null)
+                                    }
+                                    Text(
+                                        text = screen.label,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                    )
                                 }
-                            ) {
-                                popUpTo(navController.graph.startDestinationId) { saveState = true }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        },
-                        icon = {
-                            if (screen is Screen.Queue && pendingCount > 0) {
-                                BadgedBox(badge = { Badge { Text("$pendingCount") } }) {
-                                    Icon(screen.icon, contentDescription = screen.label)
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                navController.navigate(
+                                    when (screen) {
+                                        is Screen.Exceptions -> screen.route.replace("{sku}", "")
+                                        is Screen.Eod        -> screen.route.replace("{sku}", "")
+                                        else                 -> screen.route
+                                    }
+                                ) {
+                                    popUpTo(navController.graph.startDestinationId) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
                                 }
-                            } else {
-                                Icon(screen.icon, contentDescription = screen.label)
-                            }
-                        },
-                        label = { Text(screen.label) },
-                    )
+                            },
+                        )
+                    }
                 }
             }
         },
