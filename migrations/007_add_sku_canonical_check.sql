@@ -9,7 +9,7 @@
 -- Existing rows that violate the constraint will cause the migration to fail,
 -- so run scripts/audit_sku_canonical.py first and remediate non-canonical rows.
 --
--- SQLite does not support ADD CONSTRAINT on existing tables; we use CREATE TABLE ...
+-- SQLite does not support ADD CONSTRAINT on existing tables. We use CREATE TABLE ...
 -- with the new constraint + INSERT INTO ... SELECT ... + rename approach.
 -- IMPORTANT: Foreign key checks are disabled during migration to avoid ordering issues.
 

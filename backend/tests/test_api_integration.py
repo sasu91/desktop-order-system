@@ -43,7 +43,7 @@ class TestGetSkusByEan:
         r = client.get(f"{_V1}/skus/by-ean/{SEED_EAN_PLAIN}")
         assert r.status_code == 200
         body = r.json()
-        assert body["sku"] == "PRD-001"
+        assert body["sku"] == "0010001"
         assert body["ean"] == SEED_EAN_PLAIN
         assert body["ean_valid"] is True
 
@@ -51,7 +51,7 @@ class TestGetSkusByEan:
         """EAN matching a has_expiry_label SKU → 200."""
         r = client.get(f"{_V1}/skus/by-ean/{SEED_EAN_EXPIRY}")
         assert r.status_code == 200
-        assert r.json()["sku"] == "PRD-EXP"
+        assert r.json()["sku"] == "0010002"
 
     def test_400_non_digit_ean(self, client: TestClient) -> None:
         """EAN with letters → 400 BAD_REQUEST with EAN-related message."""
@@ -83,10 +83,10 @@ class TestGetStock:
 
     def test_200_known_sku_zero_stock(self, client: TestClient) -> None:
         """Known SKU with no transactions → 200, on_hand=0, on_order=0."""
-        r = client.get(f"{_V1}/stock/PRD-001")
+        r = client.get(f"{_V1}/stock/0010001")
         assert r.status_code == 200
         body = r.json()
-        assert body["sku"] == "PRD-001"
+        assert body["sku"] == "0010001"
         assert body["on_hand"] == 0
         assert body["on_order"] == 0
         assert "mode" in body
@@ -94,13 +94,13 @@ class TestGetStock:
 
     def test_200_default_mode_is_point_in_time(self, client: TestClient) -> None:
         """Default mode → POINT_IN_TIME."""
-        r = client.get(f"{_V1}/stock/PRD-001")
+        r = client.get(f"{_V1}/stock/0010001")
         assert r.status_code == 200
         assert r.json()["mode"] == "POINT_IN_TIME"
 
     def test_200_end_of_day_mode(self, client: TestClient) -> None:
         """Explicit mode=END_OF_DAY round-trips in response."""
-        r = client.get(f"{_V1}/stock/PRD-001?mode=END_OF_DAY")
+        r = client.get(f"{_V1}/stock/0010001?mode=END_OF_DAY")
         assert r.status_code == 200
         assert r.json()["mode"] == "END_OF_DAY"
 
@@ -117,7 +117,7 @@ class TestGetStock:
         body = r.json()
         assert "items" in body
         skus_returned = {item["sku"] for item in body["items"]}
-        assert "PRD-001" in skus_returned
+        assert "0010001" in skus_returned
 
 
 # ===========================================================================
@@ -126,7 +126,7 @@ class TestGetStock:
 
 _BASE_EXCEPTION = {
     "date": "2026-02-25",
-    "sku": "PRD-001",
+    "sku": "0010001",
     "event": "WASTE",
     "qty": 3,
     "note": "damaged packaging",
@@ -142,7 +142,7 @@ class TestPostExceptions:
         assert r.status_code == 201
         body = r.json()
         assert body["already_recorded"] is False
-        assert body["sku"] == "PRD-001"
+        assert body["sku"] == "0010001"
         assert body["event"] == "WASTE"
         assert body["qty"] == 3
 
@@ -153,7 +153,7 @@ class TestPostExceptions:
         client.post(f"{_V1}/exceptions", json=_BASE_EXCEPTION)
         assert len(mem_storage._transactions) == 1
         txn = mem_storage._transactions[0]
-        assert txn.sku == "PRD-001"
+        assert txn.sku == "0010001"
 
     # -- UUID idempotency (client_event_id) -----------------------------------
 
@@ -241,7 +241,7 @@ _BASE_RECEIPT = {
     "receipt_id": "REC-2026-001",
     "receipt_date": "2026-02-25",
     "lines": [
-        {"sku": "PRD-001", "qty_received": 12, "note": "box-A"},
+        {"sku": "0010001", "qty_received": 12, "note": "box-A"},
     ],
 }
 
@@ -259,7 +259,7 @@ class TestPostReceiptsClose:
         assert body["already_posted"] is False
         assert body["receipt_id"] == "REC-2026-001"
         assert body["lines"][0]["status"] == "ok"
-        assert body["lines"][0]["sku"] == "PRD-001"
+        assert body["lines"][0]["sku"] == "0010001"
         assert body["lines"][0]["qty_received"] == 12
 
     def test_201_writes_transaction(
@@ -269,7 +269,7 @@ class TestPostReceiptsClose:
         client.post(f"{_V1}/receipts/close", json=_BASE_RECEIPT)
         assert len(mem_storage._transactions) == 1
         txn = mem_storage._transactions[0]
-        assert txn.sku == "PRD-001"
+        assert txn.sku == "0010001"
         assert txn.qty == 12
 
     def test_201_ean_resolved_to_sku(self, client: TestClient) -> None:
@@ -282,7 +282,7 @@ class TestPostReceiptsClose:
         r = client.post(f"{_V1}/receipts/close", json=payload)
         assert r.status_code == 201
         line = r.json()["lines"][0]
-        assert line["sku"] == "PRD-001"
+        assert line["sku"] == "0010001"
         assert line["ean"] == SEED_EAN_PLAIN
 
     def test_201_qty_zero_gives_skipped(self, client: TestClient) -> None:
@@ -290,7 +290,7 @@ class TestPostReceiptsClose:
         payload = {
             "receipt_id": "REC-ZERO",
             "receipt_date": "2026-02-25",
-            "lines": [{"sku": "PRD-001", "qty_received": 0}],
+            "lines": [{"sku": "0010001", "qty_received": 0}],
         }
         r = client.post(f"{_V1}/receipts/close", json=payload)
         assert r.status_code == 201
@@ -303,7 +303,7 @@ class TestPostReceiptsClose:
         payload = {
             "receipt_id": "REC-ZERO-2",
             "receipt_date": "2026-02-25",
-            "lines": [{"sku": "PRD-001", "qty_received": 0}],
+            "lines": [{"sku": "0010001", "qty_received": 0}],
         }
         client.post(f"{_V1}/receipts/close", json=payload)
         assert len(mem_storage._transactions) == 0
@@ -315,7 +315,7 @@ class TestPostReceiptsClose:
             "receipt_date": "2026-02-25",
             "lines": [
                 {
-                    "sku": "PRD-EXP",
+                    "sku": "0010002",
                     "qty_received": 4,
                     "expiry_date": "2026-08-01",
                 }
@@ -345,7 +345,7 @@ class TestPostReceiptsClose:
         payload = {
             "receipt_id": "REC-BAD-002",
             "receipt_date": "2026-02-25",
-            "lines": [{"sku": "PRD-EXP", "qty_received": 3}],  # no expiry_date
+            "lines": [{"sku": "0010002", "qty_received": 3}],  # no expiry_date
         }
         r = client.post(f"{_V1}/receipts/close", json=payload)
         assert r.status_code == 400
@@ -374,7 +374,7 @@ class TestPostReceiptsClose:
             "receipt_date": "2026-02-25",
             "lines": [
                 {"sku": "GHOST1", "qty_received": 1},           # unknown
-                {"sku": "PRD-EXP", "qty_received": 2},          # missing expiry
+                {"sku": "0010002", "qty_received": 2},          # missing expiry
                 {"ean": "NOTDIGITS", "qty_received": 1},         # bad EAN
             ],
         }
@@ -596,7 +596,7 @@ class TestPostExceptionsConcurrency:
 
 _BASE_UPSERT = {
     "date": "2026-02-25",
-    "sku": "PRD-001",
+    "sku": "0010001",
     "event": "WASTE",
     "qty": 5,
     "mode": "replace",
@@ -671,14 +671,14 @@ class TestPostExceptionsDailyUpsert:
     def test_200_replace_isolated_by_sku(
         self, client: TestClient, mem_storage
     ) -> None:
-        """Replace for PRD-001 must not touch the PRD-NOEAN row."""
-        client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "sku": "PRD-001", "qty": 10})
-        r = client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "sku": "PRD-NOEAN", "qty": 4})
+        """Replace for 0010001 must not touch the 0010003 row."""
+        client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "sku": "0010001", "qty": 10})
+        r = client.post(f"{_V1}/exceptions/daily-upsert", json={**_BASE_UPSERT, "sku": "0010003", "qty": 4})
         assert r.status_code == 200
         sku_set = {t.sku for t in mem_storage._transactions}
-        assert sku_set == {"PRD-001", "PRD-NOEAN"}
-        # PRD-001 row must still be 10
-        prd001_qty = sum(t.qty for t in mem_storage._transactions if t.sku == "PRD-001")
+        assert sku_set == {"0010001", "0010003"}
+        # 0010001 row must still be 10
+        prd001_qty = sum(t.qty for t in mem_storage._transactions if t.sku == "0010001")
         assert prd001_qty == 10
 
     def test_200_replace_isolated_by_event(
@@ -788,7 +788,7 @@ _BASE_EOD = {
     "client_eod_id": "eod-test-uuid-001",
     "entries": [
         {
-            "sku": "PRD-001",
+            "sku": "0010001",
             "on_hand": 50,
             "waste_qty": 3,
             "adjust_qty": None,
@@ -813,7 +813,7 @@ class TestEodClose:
         assert body["client_eod_id"] == "eod-test-uuid-001"
         assert body["total_entries"] == 1
         assert len(body["results"]) == 1
-        assert body["results"][0]["sku"] == "PRD-001"
+        assert body["results"][0]["sku"] == "0010001"
         assert body["results"][0]["noop"] is False
 
     def test_201_writes_transactions_waste_and_adjust(
@@ -838,7 +838,7 @@ class TestEodClose:
             "client_eod_id": "eod-order-check",
             "entries": [
                 {
-                    "sku": "PRD-001",
+                    "sku": "0010001",
                     "on_hand": 20,
                     "waste_qty": 2,
                     "note": "",
@@ -861,7 +861,7 @@ class TestEodClose:
         }
         r = client.post(f"{_V1}/eod/close", json=payload)
         assert r.status_code == 201
-        assert r.json()["results"][0]["sku"] == "PRD-001"
+        assert r.json()["results"][0]["sku"] == "0010001"
 
     def test_201_all_optional_fields_empty_noop(
         self, client: TestClient, mem_storage
@@ -870,7 +870,7 @@ class TestEodClose:
         payload = {
             "date": "2026-03-10",
             "client_eod_id": "eod-noop-test",
-            "entries": [{"sku": "PRD-001"}],  # no qty fields
+            "entries": [{"sku": "0010001"}],  # no qty fields
         }
         r = client.post(f"{_V1}/eod/close", json=payload)
         assert r.status_code == 201
@@ -883,8 +883,8 @@ class TestEodClose:
             "date": "2026-03-10",
             "client_eod_id": "eod-multi-sku",
             "entries": [
-                {"sku": "PRD-001", "waste_qty": 1},
-                {"sku": "PRD-EXP", "on_hand": 5},
+                {"sku": "0010001", "waste_qty": 1},
+                {"sku": "0010002", "on_hand": 5},
             ],
         }
         r = client.post(f"{_V1}/eod/close", json=payload)
@@ -940,7 +940,7 @@ class TestEodClose:
         payload = {
             "date": "2026-03-10",
             "client_eod_id": "eod-neg-onhand",
-            "entries": [{"sku": "PRD-001", "on_hand": -1}],
+            "entries": [{"sku": "0010001", "on_hand": -1}],
         }
         r = client.post(f"{_V1}/eod/close", json=payload)
         assert r.status_code == 400
@@ -952,7 +952,7 @@ class TestEodClose:
         payload = {
             "date": "2026-03-10",
             "client_eod_id": "eod-zero-waste",
-            "entries": [{"sku": "PRD-001", "waste_qty": 0}],
+            "entries": [{"sku": "0010001", "waste_qty": 0}],
         }
         r = client.post(f"{_V1}/eod/close", json=payload)
         assert r.status_code == 400

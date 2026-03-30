@@ -82,19 +82,19 @@ class _MemStorage:
 
 # EAN-13 strings — 13 digits, no check-digit validation enforced by validate_ean.
 _SEED_SKUS: list[SKU] = [
-    SKU(sku="PRD-001", description="Latte UHT 1L", ean="1234567890128"),
+    SKU(sku="0010001", description="Latte UHT 1L", ean="1234567890128"),
     SKU(
-        sku="PRD-EXP",
+        sku="0010002",
         description="Mozzarella 125g",
         ean="9780201379624",
         has_expiry_label=True,
     ),
-    SKU(sku="PRD-NOEAN", description="Acqua 50cl", ean=None),
+    SKU(sku="0010003", description="Acqua 50cl", ean=None),
 ]
 
-# EAN that matches PRD-001 (used in multiple tests)
+# EAN that matches 0010001 (used in multiple tests)
 SEED_EAN_PLAIN = "1234567890128"
-# EAN that matches PRD-EXP (expiry required)
+# EAN that matches 0010002 (expiry required)
 SEED_EAN_EXPIRY = "9780201379624"
 # Well-formed EAN that doesn't match any SKU
 EAN_UNKNOWN = "1111111111111"
