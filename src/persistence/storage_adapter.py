@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from config import (
-    get_storage_backend, is_sqlite_available, 
+    get_storage_backend,
     DATABASE_PATH, DATA_DIR
 )
 
@@ -101,15 +101,12 @@ class StorageAdapter(CSVLayer):
             if not SQLITE_AVAILABLE:
                 print("⚠ SQLite modules not available, falling back to CSV")
                 self.backend = 'csv'
-            elif not is_sqlite_available():
-                print("⚠ SQLite database not initialized, falling back to CSV")
-                self.backend = 'csv'
             else:
                 try:
                     # Backup before migrations so the pre-migration state is always recoverable
                     automatic_backup_on_startup(max_backups=10)
                     self.conn = open_connection(DATABASE_PATH)
-                    apply_migrations(self.conn)  # apply any pending schema migrations
+                    apply_migrations(self.conn)  # apply any pending schema migrations (also initializes DB on first run)
                     self.repos = RepositoryFactory(self.conn)
                 except Exception as e:
                     print(f"⚠ SQLite init failed, falling back to CSV: {e}")

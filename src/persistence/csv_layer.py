@@ -90,6 +90,8 @@ class CSVLayer:
         # Keep DEFAULT_DATA_DIR in sync for code that reads the class attribute
         CSVLayer.DEFAULT_DATA_DIR = self.data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        # Set when _sanitize_enum corrects a stale value; triggers CSV rewrite at end of read_skus.
+        self._sanitization_dirty: bool = False
         self._ensure_all_files_exist()
     
     def _ensure_all_files_exist(self):
@@ -180,17 +182,18 @@ class CSVLayer:
     
     # ============ SKU Operations ============
 
-    @staticmethod
-    def _sanitize_enum(value: str, allowed: list, field: str, sku: str) -> str:
+    def _sanitize_enum(self, value: str, allowed: list, field: str, sku: str) -> str:
         """Return value if allowed, else '' with a warning.
 
         Used to recover SKUs with stale/misspelled enum fields instead of
-        silently discarding the entire row.
+        silently discarding the entire row.  Sets _sanitization_dirty so
+        read_skus() can persist the correction back to CSV.
         """
         v = value.strip() if value else ""
         if v in allowed:
             return v
         print(f"Warning: SKU '{sku}' has invalid {field}='{v}' — resetting to '' (allowed: {allowed})")
+        self._sanitization_dirty = True
         return ""
 
     def read_skus(self) -> List[SKU]:
@@ -272,6 +275,22 @@ class CSVLayer:
             except (ValueError, KeyError) as e:
                 # Log but don't crash
                 print(f"Warning: Invalid SKU in skus.csv: {e}")
+
+        if self._sanitization_dirty:
+            # Persist corrected enum values back to CSV so warnings don't recur on next startup.
+            self._sanitization_dirty = False
+            raw_rows = self._read_csv("skus.csv")
+            sku_map = {s.sku: s for s in skus}
+            for row in raw_rows:
+                s = sku_map.get(row.get("sku", ""))
+                if s:
+                    row["waste_penalty_mode"] = s.waste_penalty_mode
+                    row["forecast_method"] = s.forecast_method
+                    row["mc_distribution"] = s.mc_distribution
+                    row["mc_output_stat"] = s.mc_output_stat
+                    row["mc_horizon_mode"] = s.mc_horizon_mode
+            self._write_csv("skus.csv", raw_rows)
+
         return skus
     
     def write_sku(self, sku: SKU):
