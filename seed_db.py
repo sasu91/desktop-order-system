@@ -1,15 +1,15 @@
 """
 Seed script: wipes current data and inserts 2 realistic SKUs
-with 31 days of history (Jan 19 – Feb 18, 2026).
+with 14 days of complete history (2 full weeks ending yesterday).
 
-SKU-1  LATTE_UHT   – latte UHT 1L, vendite stabili ~15/giorno
-SKU-2  SUCCO_ACE   – succo ACE 750ml, vendite variabili ~8/giorno
+SKU-1  BIRRA_LAGER     – birra lager 33cl, vendite stabili ~20/giorno
+SKU-2  ACQUA_FRIZZANTE – acqua frizzante 1.5L, vendite variabili ~30/giorno
 
 History includes:
   - SNAPSHOT day 0 (initial stock)
-  - Daily SALE records
-  - 1 ORDER + 1 RECEIPT mid-month (per SKU)
-  - 1 ADJUST (inventory correction, week 3)
+  - Daily SALE records for all 14 days
+  - 1 ORDER + 1 RECEIPT mid-week (per SKU)
+  - 1 ADJUST (inventory correction, day 10)
   - sales table (daily aggregates mirror)
   - order_logs + receiving_logs entries
 """
@@ -20,9 +20,9 @@ from pathlib import Path
 import random
 
 DB_PATH = Path("data/app.db")
-START = date(2026, 1, 19)   # 31 days back from today (Feb 18)
-TODAY = date(2026, 2, 18)
-DAYS = (TODAY - START).days + 1   # 31
+TODAY = date(2026, 3, 31)
+START = TODAY - timedelta(days=14)   # 14 days of history; day 0 = START
+DAYS = 14                             # days 1..14 (START+1 .. TODAY-1 + TODAY)
 
 random.seed(42)  # reproducible
 
@@ -31,24 +31,24 @@ random.seed(42)  # reproducible
 # ---------------------------------------------------------------------------
 SKUS = [
     {
-        "sku": "LATTE_UHT",
-        "description": "Latte UHT Intero 1L",
-        "ean": "8001120812575",
-        "moq": 12,
-        "pack_size": 12,
+        "sku": "BIRRA_LAGER",
+        "description": "Birra Lager 33cl Lattina",
+        "ean": "8002270013061",
+        "moq": 24,
+        "pack_size": 24,
         "lead_time_days": 3,
         "review_period": 7,
-        "safety_stock": 24,
-        "shelf_life_days": 90,
-        "min_shelf_life_days": 30,
+        "safety_stock": 48,
+        "shelf_life_days": 180,
+        "min_shelf_life_days": 60,
         "waste_penalty_mode": "soft",
-        "waste_penalty_factor": 0.8,
-        "waste_risk_threshold": 0.15,
-        "max_stock": 300,
-        "reorder_point": 50,
+        "waste_penalty_factor": 0.5,
+        "waste_risk_threshold": 0.10,
+        "max_stock": 600,
+        "reorder_point": 80,
         "demand_variability": "STABLE",
-        "category": "DAIRY",
-        "department": "FOOD",
+        "category": "BEER",
+        "department": "BEVERAGES",
         "oos_boost_percent": 10.0,
         "oos_detection_mode": "strict",
         "oos_popup_preference": "ask",
@@ -57,30 +57,30 @@ SKUS = [
         "target_csl": 0.95,
     },
     {
-        "sku": "SUCCO_ACE",
-        "description": "Succo ACE Arancia Carota Limone 750ml",
-        "ean": "8000735033068",
+        "sku": "ACQUA_FRIZZANTE",
+        "description": "Acqua Frizzante 1.5L",
+        "ean": "8001235002018",
         "moq": 6,
         "pack_size": 6,
-        "lead_time_days": 5,
+        "lead_time_days": 2,
         "review_period": 7,
-        "safety_stock": 12,
-        "shelf_life_days": 60,
-        "min_shelf_life_days": 21,
+        "safety_stock": 30,
+        "shelf_life_days": 365,
+        "min_shelf_life_days": 90,
         "waste_penalty_mode": "soft",
-        "waste_penalty_factor": 0.6,
-        "waste_risk_threshold": 20.0,
-        "max_stock": 180,
-        "reorder_point": 25,
-        "demand_variability": "HIGH",
-        "category": "BEVERAGES",
-        "department": "FOOD",
-        "oos_boost_percent": 15.0,
+        "waste_penalty_factor": 0.3,
+        "waste_risk_threshold": 0.05,
+        "max_stock": 500,
+        "reorder_point": 60,
+        "demand_variability": "MEDIUM",
+        "category": "WATER",
+        "department": "BEVERAGES",
+        "oos_boost_percent": 5.0,
         "oos_detection_mode": "relaxed",
         "oos_popup_preference": "ask",
         "forecast_method": "simple",
         "in_assortment": 1,
-        "target_csl": 0.90,
+        "target_csl": 0.92,
     },
 ]
 
@@ -90,12 +90,12 @@ SKUS = [
 def daily_sales(sku_id: str, d: date) -> int:
     """Return realistic daily sales qty."""
     is_weekend = d.weekday() >= 5
-    if sku_id == "LATTE_UHT":
-        base = 18 if is_weekend else 14
-        noise = random.randint(-3, 3)
-    else:  # SUCCO_ACE
-        base = 12 if is_weekend else 7
-        noise = random.randint(-2, 4)
+    if sku_id == "BIRRA_LAGER":
+        base = 28 if is_weekend else 18
+        noise = random.randint(-4, 4)
+    else:  # ACQUA_FRIZZANTE
+        base = 38 if is_weekend else 26
+        noise = random.randint(-5, 6)
     return max(0, base + noise)
 
 
@@ -145,36 +145,36 @@ def run():
     print("✓ 2 SKU inseriti")
 
     # -----------------------------------------------------------------------
-    # 3. Build transaction ledger + sales
+    # 3. Build transaction ledger + sales (14 days)
     # -----------------------------------------------------------------------
+    SKU_IDS = ["BIRRA_LAGER", "ACQUA_FRIZZANTE"]
+
     # Initial stock levels (day 0 = START)
-    initial_stock = {"LATTE_UHT": 120, "SUCCO_ACE": 60}
-    # Tracking on-hand for ORDER placement logic
-    on_hand = dict(initial_stock)
+    initial_stock = {"BIRRA_LAGER": 240, "ACQUA_FRIZZANTE": 180}
+    on_hand       = dict(initial_stock)
 
-    # Day map: ORDER placed on day 10, RECEIPT on day 13 (lead_time=3)
-    #          ORDER placed on day 10, RECEIPT on day 15 (lead_time=5)
-    order_qty   = {"LATTE_UHT": 96,  "SUCCO_ACE": 48}   # 8×12 and 8×6
-    order_day   = {"LATTE_UHT": 10,  "SUCCO_ACE": 10}    # day offset from START
-    receipt_day = {"LATTE_UHT": 13,  "SUCCO_ACE": 15}
-    adjust_day  = {"LATTE_UHT": 20,  "SUCCO_ACE": 20}    # inventory count correction
-    adjust_delta= {"LATTE_UHT": -3,  "SUCCO_ACE": +2}    # ADJUST: set on_hand to value
+    # ORDER placed on day 5, RECEIPT on day 8 (lead_time=3) / day 7 (lead_time=2)
+    order_qty   = {"BIRRA_LAGER": 192, "ACQUA_FRIZZANTE": 120}  # 8×24 and 20×6
+    order_day   = {"BIRRA_LAGER": 5,   "ACQUA_FRIZZANTE": 5}
+    receipt_day = {"BIRRA_LAGER": 8,   "ACQUA_FRIZZANTE": 7}
+    adjust_day  = {"BIRRA_LAGER": 10,  "ACQUA_FRIZZANTE": 10}
+    adjust_delta= {"BIRRA_LAGER": -4,  "ACQUA_FRIZZANTE": +3}
 
-    order_ids   = {}  # sku -> order_id string
+    order_ids = {}
 
-    # SNAPSHOT (day 0)
-    for sku_id in ["LATTE_UHT", "SUCCO_ACE"]:
+    # SNAPSHOT (day 0 = START)
+    for sku_id in SKU_IDS:
         cur.execute("""
             INSERT INTO transactions (date, sku, event, qty, receipt_date, note)
-            VALUES (?, ?, 'SNAPSHOT', ?, NULL, 'Initial stock count')
+            VALUES (?, ?, 'SNAPSHOT', ?, '', 'Conteggio iniziale')
         """, (START.isoformat(), sku_id, initial_stock[sku_id]))
 
-    # Days 1..30 (START+1 .. TODAY-1), TODAY = day 31
-    for offset in range(1, DAYS):
+    # Days 1..14
+    for offset in range(1, DAYS + 1):
         d = START + timedelta(days=offset)
         d_str = d.isoformat()
 
-        for sku_id in ["LATTE_UHT", "SUCCO_ACE"]:
+        for sku_id in SKU_IDS:
             # ORDER event
             if offset == order_day[sku_id]:
                 qty = order_qty[sku_id]
@@ -185,11 +185,10 @@ def run():
                     INSERT INTO transactions (date, sku, event, qty, receipt_date, note)
                     VALUES (?, ?, 'ORDER', ?, ?, ?)
                 """, (d_str, sku_id, qty, r_date, f"Ordine settimanale {order_id}"))
-                # order_logs
                 cur.execute("""
                     INSERT INTO order_logs (order_id, date, sku, qty_ordered, qty_received, status, receipt_date)
                     VALUES (?, ?, ?, ?, ?, 'RECEIVED', ?)
-                """, (order_id, d_str, sku_id, qty, qty, (START + timedelta(days=receipt_day[sku_id])).isoformat()))
+                """, (order_id, d_str, sku_id, qty, qty, r_date))
 
             # RECEIPT event
             if offset == receipt_day[sku_id]:
@@ -201,33 +200,33 @@ def run():
                     VALUES (?, ?, 'RECEIPT', ?, ?, ?)
                 """, (d_str, sku_id, qty, d_str, f"Ricevimento {receipt_id}"))
                 on_hand[sku_id] = on_hand.get(sku_id, 0) + qty
-                # receiving_logs
                 cur.execute("""
                     INSERT INTO receiving_logs (document_id, receipt_id, date, sku, qty_received, receipt_date, order_ids)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (receipt_id, receipt_id, d_str, sku_id, qty, d_str, order_id))
 
-            # ADJUST event (inventory count)
+            # ADJUST event (inventory count correction)
             if offset == adjust_day[sku_id]:
                 delta = adjust_delta[sku_id]
-                # ADJUST = absolute on_hand reset; we store corrected value
                 corrected = max(0, on_hand.get(sku_id, 0) + delta)
                 cur.execute("""
                     INSERT INTO transactions (date, sku, event, qty, receipt_date, note)
-                    VALUES (?, ?, 'ADJUST', ?, NULL, 'Conteggio inventario settimanale')
+                    VALUES (?, ?, 'ADJUST', ?, '', 'Conteggio inventario settimanale')
                 """, (d_str, sku_id, corrected))
+                on_hand[sku_id] = corrected
 
             # SALE event + sales table
             sale_qty = daily_sales(sku_id, d)
             if sale_qty > 0:
                 cur.execute("""
                     INSERT INTO transactions (date, sku, event, qty, receipt_date, note)
-                    VALUES (?, ?, 'SALE', ?, NULL, '')
+                    VALUES (?, ?, 'SALE', ?, '', '')
                 """, (d_str, sku_id, -sale_qty))
                 cur.execute("""
                     INSERT INTO sales (date, sku, qty_sold, promo_flag)
                     VALUES (?, ?, ?, 0)
                 """, (d_str, sku_id, sale_qty))
+                on_hand[sku_id] = max(0, on_hand.get(sku_id, 0) - sale_qty)
 
     conn.commit()
     conn.close()
@@ -241,7 +240,7 @@ def run():
         cur2.execute(f"SELECT COUNT(*) FROM {t}")
         print(f"  {t}: {cur2.fetchone()[0]} righe")
     conn2.close()
-    print("\n✓ Seed completato.")
+    print(f"\n✓ Seed completato. Storico: {START} → {START + timedelta(days=DAYS)}")
 
 
 if __name__ == "__main__":
