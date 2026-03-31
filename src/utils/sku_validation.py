@@ -1,9 +1,12 @@
 """
-SKU Canonical Validation Utility
+SKU Validation Utility
 
-Canonical SKU format: exactly 7 numeric digits, zero-padded (e.g. '0450663').
-Validation is STRICT — no numeric-equivalence fallback.
-A SKU like '450663' (missing leading zero) is ALWAYS an error, not silently accepted.
+A SKU is valid when it is a non-empty string with no leading/trailing whitespace
+and no embedded whitespace characters.  This allows both legacy alphanumeric codes
+(e.g. 'LATTE_UHT', 'BIRRA_LAGER') and zero-padded numeric codes (e.g. '0450663').
+
+The key guarantee is anti-coercion: a SKU is always stored/compared as a str,
+so a code like '0123456' can never silently become 123456 by an int conversion.
 
 Usage:
     from src.utils.sku_validation import validate_sku_canonical, SkuFormatError
@@ -14,12 +17,12 @@ Usage:
 import re
 from typing import Optional
 
-# Canonical pattern: exactly 7 decimal digits.
-_SKU_PATTERN = re.compile(r'^\d{7}$')
+# A SKU is any non-empty string that contains no whitespace.
+_SKU_PATTERN = re.compile(r'^\S+$')
 
 
 class SkuFormatError(ValueError):
-    """Raised when a SKU string is not in canonical 7-digit format.
+    """Raised when a SKU string is empty, None, or contains whitespace.
 
     Attributes:
         sku_value: The offending value (as received, not coerced).
@@ -31,28 +34,30 @@ class SkuFormatError(ValueError):
         self.context = context
         ctx_str = f" [{context}]" if context else ""
         super().__init__(
-            f"SKU non canonico (atteso stringa di esattamente 7 cifre numeriche): "
+            f"SKU non valido (atteso stringa non vuota senza spazi): "
             f"ricevuto {sku_value!r}{ctx_str}"
         )
 
 
 def validate_sku_canonical(sku: object, context: Optional[str] = None) -> str:
-    """Validate that *sku* is a canonical 7-digit zero-padded string.
+    """Validate that *sku* is a non-empty string containing no whitespace.
 
-    Strict mode:
-    - Must be a ``str`` (not int / None).
-    - Must match ``^\\d{7}$`` — no leading/trailing spaces, no letters, exactly 7 digits.
-    - Leading zeros are REQUIRED (e.g. '0450663' is canonical; '450663' is not).
+    The check ensures:
+    - ``sku`` is a ``str`` (not int / None — prevents silent leading-zero loss).
+    - Not empty and contains no whitespace characters.
+
+    Alphanumeric legacy codes ('LATTE_UHT', 'BIRRA_LAGER') and zero-padded
+    numeric codes ('0450663') are both valid.
 
     Args:
         sku:     Value to validate.
-        context: Optional caller context for error messages (e.g. document ID, field path).
+        context: Optional caller context for error messages.
 
     Returns:
         The validated SKU string (unchanged).
 
     Raises:
-        SkuFormatError: If the SKU does not satisfy the canonical format.
+        SkuFormatError: If the SKU is not a non-empty, whitespace-free string.
     """
     if not isinstance(sku, str) or not _SKU_PATTERN.match(sku):
         raise SkuFormatError(sku, context=context)
@@ -60,5 +65,5 @@ def validate_sku_canonical(sku: object, context: Optional[str] = None) -> str:
 
 
 def is_sku_canonical(sku: object) -> bool:
-    """Return True iff *sku* satisfies the canonical 7-digit format (no exception variant)."""
+    """Return True iff *sku* is a non-empty, whitespace-free string (no exception variant)."""
     return isinstance(sku, str) and bool(_SKU_PATTERN.match(sku))

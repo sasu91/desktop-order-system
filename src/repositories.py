@@ -387,7 +387,7 @@ class LedgerRepository:
                 cur.execute("""
                     INSERT INTO transactions (date, sku, event, qty, receipt_date, note)
                     VALUES (?, ?, ?, ?, ?, ?)
-                """, (date, sku, event, qty, receipt_date, note))
+                """, (date, sku, event, qty, receipt_date or '', note or ''))
                 
                 tx_id = cur.lastrowid
                 assert tx_id is not None, "lastrowid should be set after INSERT"
@@ -427,8 +427,8 @@ class LedgerRepository:
                         txn['sku'],
                         txn['event'],
                         txn['qty'],
-                        txn.get('receipt_date'),
-                        txn.get('note', '')
+                        txn.get('receipt_date') or '',
+                        txn.get('note') or ''
                     ))
                     transaction_ids.append(cur.lastrowid)
             
@@ -903,7 +903,7 @@ class ReceivingRepository:
                     receipt_data['date'],
                     receipt_data['sku'],
                     receipt_data['qty_received'],
-                    receipt_data['receipt_date'],
+                    receipt_data.get('receipt_date') or '',
                     f"Document: {document_id}"
                 ))
                 
