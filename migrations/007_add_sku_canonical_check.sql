@@ -102,7 +102,10 @@ INSERT INTO transactions_new (
     transaction_id, date, sku, event, qty, receipt_date, note, created_at
 )
 SELECT
-    transaction_id, date, sku, event, qty, receipt_date, note, created_at
+    transaction_id, date, sku, event, qty,
+    COALESCE(receipt_date, '') AS receipt_date,
+    COALESCE(note, '') AS note,
+    created_at
 FROM transactions;
 
 DROP TABLE transactions;
@@ -153,13 +156,24 @@ INSERT INTO order_logs_new (
     event_m_i, event_explain_short, created_at, updated_at
 )
 SELECT
-    order_id, date, sku, qty_ordered, qty_received, status, receipt_date,
-    promo_prebuild_enabled, promo_start_date, target_open_qty,
+    order_id, date, sku, qty_ordered, qty_received, status,
+    COALESCE(receipt_date, '') AS receipt_date,
+    promo_prebuild_enabled,
+    COALESCE(promo_start_date, '') AS promo_start_date,
+    target_open_qty,
     projected_stock_on_promo_start, prebuild_delta_qty, prebuild_qty,
-    prebuild_coverage_days, prebuild_distribution_note, event_uplift_active,
-    event_delivery_date, event_reason, event_u_store_day, event_quantile,
-    event_fallback_level, event_beta_i, event_beta_fallback_level,
-    event_m_i, event_explain_short, created_at, updated_at
+    prebuild_coverage_days,
+    COALESCE(prebuild_distribution_note, '') AS prebuild_distribution_note,
+    event_uplift_active,
+    COALESCE(event_delivery_date, '') AS event_delivery_date,
+    COALESCE(event_reason, '') AS event_reason,
+    event_u_store_day, event_quantile,
+    COALESCE(event_fallback_level, '') AS event_fallback_level,
+    event_beta_i,
+    COALESCE(event_beta_fallback_level, '') AS event_beta_fallback_level,
+    event_m_i,
+    COALESCE(event_explain_short, '') AS event_explain_short,
+    created_at, updated_at
 FROM order_logs;
 
 DROP TABLE order_logs;
@@ -185,7 +199,9 @@ INSERT INTO receiving_logs_new (
     document_id, receipt_id, date, sku, qty_received, receipt_date, order_ids, created_at
 )
 SELECT
-    document_id, receipt_id, date, sku, qty_received, receipt_date, order_ids, created_at
+    document_id, receipt_id, date, sku, qty_received, receipt_date,
+    COALESCE(order_ids, '') AS order_ids,
+    created_at
 FROM receiving_logs;
 
 DROP TABLE receiving_logs;
