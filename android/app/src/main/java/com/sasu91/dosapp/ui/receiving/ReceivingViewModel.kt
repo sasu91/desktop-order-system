@@ -15,7 +15,6 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.util.UUID
 import javax.inject.Inject
-import kotlin.math.ceil
 
 // ---------------------------------------------------------------------------
 // Domain model for a single goods-receipt line
@@ -27,7 +26,7 @@ import kotlin.math.ceil
  * @param packSize       Units per collo for this SKU.
  * @param onOrderPezzi   On-order units (pezzi) from the offline cache.
  * @param qtyColliInput  Quantity expressed in colli — what the operator enters.
- *                       Pre-filled as ceil(onOrderPezzi / packSize); defaults to 0.
+ *                       Starts at 1 on first scan; operator adjusts with +/− buttons or keyboard.
  * @param requiresExpiry Whether the server requires expiry_date for this SKU.
  * @param expiryDate     YYYY-MM-DD; blank = not yet provided.
  * @param fromCache      True = data came from Room (offline), false = live API.
@@ -92,6 +91,11 @@ class ReceivingViewModel @Inject constructor(
     private val _state = MutableStateFlow(ReceivingUiState())
     val state: StateFlow<ReceivingUiState> = _state.asStateFlow()
 
+    // Debounce: avoid re-triggering the same EAN while the camera is still framing it
+    private var lastScannedEan: String? = null
+    private var lastScanTime: Long = 0L
+    private val SCAN_DEBOUNCE_MS = 2_000L
+
     // -----------------------------------------------------------------------
     // Header
     // -----------------------------------------------------------------------
@@ -106,16 +110,22 @@ class ReceivingViewModel @Inject constructor(
      * Called by the camera analyser when a barcode is detected.
      *
      * Strategy:
-     * 1. Pause the camera so the same EAN is not re-triggered.
-     * 2. Resolve EAN via [SkuCacheRepository] (cache-first, API fallback).
-     * 3. If the SKU is already in the lines list: increment qty by 1 collo.
-     *    Otherwise: create a new line with qty pre-filled as ceil(on_order / pack_size).
-     * 4. Re-activate the camera after the line is ready (operator can scan next item).
+     * 1. Debounce: ignore the same EAN if re-detected within [SCAN_DEBOUNCE_MS].
+     * 2. Pause the camera while resolving so the same EAN is not re-triggered.
+     * 3. Resolve EAN via [SkuCacheRepository] (cache-first, API fallback).
+     * 4. If the SKU is already in the lines list: scroll/highlight only — do NOT change qty.
+     *    Otherwise: create a new line with qty = 1 (operator adjusts with +/− or keyboard).
+     * 5. Re-activate the camera after the line is ready (operator can scan next item).
      */
     fun onBarcodeDetected(ean: String) {
         val s = _state.value
-        // Ignore while resolving or if exactly this EAN is already being processed
+        // Ignore while resolving
         if (s.isResolving) return
+        // Debounce: same EAN within 2 s → ignore (avoids continuous re-trigger while framing)
+        val now = System.currentTimeMillis()
+        if (ean == lastScannedEan && now - lastScanTime < SCAN_DEBOUNCE_MS) return
+        lastScannedEan = ean
+        lastScanTime = now
 
         _state.update { it.copy(isResolving = true, lastScanError = null, isCameraActive = false) }
 
@@ -128,17 +138,12 @@ class ReceivingViewModel @Inject constructor(
                     val onOrder  = stockDto.onOrder.coerceAtLeast(0)
 
                     _state.update { state ->
-                        val existing = state.lines.indexOfFirst { it.sku == skuDto.sku }
-                        val newLines = if (existing >= 0) {
-                            // SKU already in list: increment qty by 1 collo
-                            state.lines.toMutableList().also {
-                                it[existing] = it[existing].copy(
-                                    qtyColliInput = it[existing].qtyColliInput + 1
-                                )
-                            }
+                        val existingIdx = state.lines.indexOfFirst { it.sku == skuDto.sku }
+                        val newLines = if (existingIdx >= 0) {
+                            // SKU already in list: highlight only, do NOT change qty
+                            state.lines
                         } else {
-                            // New SKU: prefill qty with ceil(onOrder / packSize), default 0
-                            val prefillColli = if (onOrder > 0) ceil(onOrder.toDouble() / packSize).toInt() else 0
+                            // New SKU: start with qty = 1 (operator adjusts with +/− or keyboard)
                             val newLine = ReceivingLine(
                                 id             = state.nextLineId,
                                 ean            = ean,
@@ -146,18 +151,22 @@ class ReceivingViewModel @Inject constructor(
                                 description    = skuDto.description,
                                 packSize       = packSize,
                                 onOrderPezzi   = onOrder,
-                                qtyColliInput  = prefillColli,
+                                qtyColliInput  = 1,
                                 requiresExpiry = skuDto.hasExpiryLabel,
                                 fromCache      = result.fromCache,
                             )
                             state.lines + newLine
                         }
+                        val highlightId = if (existingIdx >= 0)
+                            state.lines[existingIdx].id
+                        else
+                            state.nextLineId
                         state.copy(
                             lines             = newLines,
-                            nextLineId        = if (existing < 0) state.nextLineId + 1 else state.nextLineId,
+                            nextLineId        = if (existingIdx < 0) state.nextLineId + 1 else state.nextLineId,
                             isResolving       = false,
                             isCameraActive    = true,
-                            lastScannedLineId = if (existing < 0) state.nextLineId else state.lastScannedLineId,
+                            lastScannedLineId = highlightId,
                         )
                     }
                 }
@@ -183,7 +192,7 @@ class ReceivingViewModel @Inject constructor(
     // -----------------------------------------------------------------------
 
     fun onLineQtyChange(lineId: Int, colli: Int) = updateLine(lineId) {
-        copy(qtyColliInput = colli.coerceAtLeast(0))
+        copy(qtyColliInput = colli.coerceAtLeast(1))
     }
 
     fun onLineExpiryChange(lineId: Int, v: String) = updateLine(lineId) { copy(expiryDate = v) }

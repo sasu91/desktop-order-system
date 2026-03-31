@@ -291,12 +291,12 @@ private fun ReceivingLineCard(
                 Text("Colli:", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(40.dp))
                 IconButton(
                     onClick  = { onQtyChange(line.qtyColliInput - 1) },
-                    enabled  = line.qtyColliInput > 0,
+                    enabled  = line.qtyColliInput > 1,
                 ) { Text("−", style = MaterialTheme.typography.titleMedium) }
 
                 OutlinedTextField(
                     value         = line.qtyColliInput.toString(),
-                    onValueChange = { onQtyChange(it.toIntOrNull()?.coerceAtLeast(0) ?: 0) },
+                    onValueChange = { onQtyChange(it.toIntOrNull()?.coerceAtLeast(1) ?: 1) },
                     modifier      = Modifier.width(60.dp),
                     singleLine    = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
