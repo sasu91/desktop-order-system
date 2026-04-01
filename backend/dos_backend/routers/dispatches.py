@@ -25,7 +25,6 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, status
-from fastapi.responses import JSONResponse
 
 from ..api.auth import verify_token
 from ..api.deps import get_storage
