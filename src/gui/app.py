@@ -4465,6 +4465,7 @@ class DesktopOrderApp:
         # Reset edits
         self.pending_qty_edits = {}
         self.pending_expiry_edits = {}  # Per-row expiry dates (keyed by treeview item_id)
+        self.pending_sku_by_item_id = {}  # Preserve canonical SKU string (Treeview may coerce numeric-looking values)
         
         # Read order logs
         order_logs = self.csv_layer.read_order_logs()
@@ -4476,10 +4477,10 @@ class DesktopOrderApp:
         self.pending_treeview.delete(*self.pending_treeview.get_children())
         
         for log in order_logs:
-            sku = log.get("sku", "")
+            sku = str(log.get("sku", "")).strip()
             if not sku:
                 continue
-            status = log.get("status", "PENDING")
+            status = str(log.get("status", "PENDING")).strip().upper()
             
             # Show PENDING and PARTIAL orders (PARTIAL = partially received, still has qty residua)
             if status not in ("PENDING", "PARTIAL"):
@@ -4522,6 +4523,7 @@ class DesktopOrderApp:
             )
             # Pre-populate edits dict with remaining (pending) quantity in pezzi
             self.pending_qty_edits[item_id] = colli_ricevuti_prefill * pack_size
+            self.pending_sku_by_item_id[item_id] = sku
 
         # Store all item IDs so _filter_pending_orders can re-attach on filter change
         self._all_pending_item_ids = list(self.pending_treeview.get_children())
@@ -4564,7 +4566,8 @@ class DesktopOrderApp:
         
         # ── Colonna "Scadenza" (#9) ──────────────────────────────────────────
         if column == "#9":
-            sku = values[1]
+            pending_sku_map = getattr(self, "pending_sku_by_item_id", {})
+            sku = pending_sku_map.get(item_id, str(values[1]).strip())
             skus_by_id = {s.sku: s for s in self.csv_layer.read_skus()}
             sku_obj = skus_by_id.get(sku)
             if not sku_obj or not sku_obj.has_expiry_label:
@@ -4735,12 +4738,13 @@ class DesktopOrderApp:
         # Build items from visible (date-filtered) rows only
         items = []
         invalid_skus = []
+        pending_sku_map = getattr(self, "pending_sku_by_item_id", {})
         for item_id in visible_item_ids:
             new_qty_received = self.pending_qty_edits.get(item_id, 0)
             if new_qty_received <= 0:
                 continue
             values = self.pending_treeview.item(item_id)["values"]
-            sku = str(values[1]).strip()
+            sku = pending_sku_map.get(item_id, str(values[1]).strip())
             expiry_date_for_item = self.pending_expiry_edits.get(item_id, "")
             if not is_sku_canonical(sku):
                 invalid_skus.append(sku)

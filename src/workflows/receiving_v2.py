@@ -111,17 +111,14 @@ class ReceivingWorkflow:
         
         # 3. Process each item
         for item in items:
-            # Normalize sku to string (guards against int keys from external callers)
-            sku = str(item["sku"]).strip()
-
-            # Strict canonical validation: must be exactly 7 numeric digits.
-            # A non-canonical SKU (e.g. '450663' instead of '0450663') can never
-            # match order logs and would silently produce FK/catalog errors.  Fail
-            # fast here with an actionable message instead.
+            # Strict canonical validation: must be a string of exactly 7 numeric digits.
+            # Validate before any coercion to prevent silent leading-zero loss
+            # (e.g. int 450663 cannot represent canonical '0450663').
+            sku_raw = item["sku"]
             try:
-                validate_sku_canonical(sku, context=f"document {document_id}")
+                sku = validate_sku_canonical(sku_raw, context=f"document {document_id}")
             except SkuFormatError as exc:
-                raise SkuFormatError(sku, context=f"document {document_id}") from exc
+                raise SkuFormatError(sku_raw, context=f"document {document_id}") from exc
             qty_received = item["qty_received"]
             specified_order_ids = item.get("order_ids", [])
             

@@ -1,63 +1,38 @@
 """
-SKU Validation Utility
+SKU Canonical Validation Utility
 
-A SKU is valid when it is a non-empty string with no leading/trailing whitespace
-and no embedded whitespace characters.  This allows both legacy alphanumeric codes
-(e.g. 'LATTE_UHT', 'BIRRA_LAGER') and zero-padded numeric codes (e.g. '0450663').
+Canonical SKU format: exactly 7 numeric digits, zero-padded (e.g. '0450663').
+Validation is STRICT — no numeric-equivalence fallback.
 
-The key guarantee is anti-coercion: a SKU is always stored/compared as a str,
-so a code like '0123456' can never silently become 123456 by an int conversion.
-
-Usage:
-    from src.utils.sku_validation import validate_sku_canonical, SkuFormatError
-
-    validate_sku_canonical(sku, context="Document DDT-20260328")   # raises SkuFormatError on fail
+This file is mirrored by backend/dos_backend/utils/sku_validation.py.
+Keep the two files in sync when modifying the canonical format.
 """
 
 import re
 from typing import Optional
 
-# A SKU is any non-empty string that contains no whitespace.
-_SKU_PATTERN = re.compile(r'^\S+$')
+# Canonical pattern: exactly 7 decimal digits.
+_SKU_PATTERN = re.compile(r'^\d{7}$')
 
 
 class SkuFormatError(ValueError):
-    """Raised when a SKU string is empty, None, or contains whitespace.
-
-    Attributes:
-        sku_value: The offending value (as received, not coerced).
-        context:   Optional caller context to aid diagnostics (e.g. document ID, field name).
-    """
+    """Raised when a SKU string is not in canonical 7-digit format."""
 
     def __init__(self, sku_value: object, context: Optional[str] = None) -> None:
         self.sku_value = sku_value
         self.context = context
         ctx_str = f" [{context}]" if context else ""
         super().__init__(
-            f"SKU non valido (atteso stringa non vuota senza spazi): "
+            f"SKU non canonico (atteso stringa di esattamente 7 cifre numeriche): "
             f"ricevuto {sku_value!r}{ctx_str}"
         )
 
 
 def validate_sku_canonical(sku: object, context: Optional[str] = None) -> str:
-    """Validate that *sku* is a non-empty string containing no whitespace.
+    """Validate that *sku* is a canonical 7-digit zero-padded string.
 
-    The check ensures:
-    - ``sku`` is a ``str`` (not int / None — prevents silent leading-zero loss).
-    - Not empty and contains no whitespace characters.
-
-    Alphanumeric legacy codes ('LATTE_UHT', 'BIRRA_LAGER') and zero-padded
-    numeric codes ('0450663') are both valid.
-
-    Args:
-        sku:     Value to validate.
-        context: Optional caller context for error messages.
-
-    Returns:
-        The validated SKU string (unchanged).
-
-    Raises:
-        SkuFormatError: If the SKU is not a non-empty, whitespace-free string.
+    Raises SkuFormatError if the format is not satisfied.
+    Returns the validated SKU string unchanged.
     """
     if not isinstance(sku, str) or not _SKU_PATTERN.match(sku):
         raise SkuFormatError(sku, context=context)
@@ -65,5 +40,5 @@ def validate_sku_canonical(sku: object, context: Optional[str] = None) -> str:
 
 
 def is_sku_canonical(sku: object) -> bool:
-    """Return True iff *sku* is a non-empty, whitespace-free string (no exception variant)."""
+    """Return True iff *sku* satisfies the canonical 7-digit format."""
     return isinstance(sku, str) and bool(_SKU_PATTERN.match(sku))
