@@ -536,6 +536,218 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "OrderDispatchCreateLine": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "ean": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ean"
+          },
+          "order_id": {
+            "title": "Order Id",
+            "type": "string"
+          },
+          "qty_ordered": {
+            "minimum": 1.0,
+            "title": "Qty Ordered",
+            "type": "integer"
+          },
+          "receipt_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Date"
+          },
+          "sku": {
+            "title": "Sku",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sku",
+          "description",
+          "qty_ordered",
+          "order_id"
+        ],
+        "title": "OrderDispatchCreateLine",
+        "type": "object"
+      },
+      "OrderDispatchCreateRequest": {
+        "properties": {
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/OrderDispatchCreateLine"
+            },
+            "minItems": 1,
+            "title": "Lines",
+            "type": "array"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lines"
+        ],
+        "title": "OrderDispatchCreateRequest",
+        "type": "object"
+      },
+      "OrderDispatchDeleteResponse": {
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "dispatch_id": {
+            "title": "Dispatch Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dispatch_id",
+          "deleted",
+          "message"
+        ],
+        "title": "OrderDispatchDeleteResponse",
+        "type": "object"
+      },
+      "OrderDispatchLineResponse": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "ean": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ean"
+          },
+          "order_id": {
+            "title": "Order Id",
+            "type": "string"
+          },
+          "qty_ordered": {
+            "title": "Qty Ordered",
+            "type": "integer"
+          },
+          "receipt_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Date"
+          },
+          "sku": {
+            "title": "Sku",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sku",
+          "description",
+          "qty_ordered",
+          "order_id"
+        ],
+        "title": "OrderDispatchLineResponse",
+        "type": "object"
+      },
+      "OrderDispatchResponse": {
+        "properties": {
+          "dispatch_id": {
+            "title": "Dispatch Id",
+            "type": "string"
+          },
+          "line_count": {
+            "title": "Line Count",
+            "type": "integer"
+          },
+          "lines": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/OrderDispatchLineResponse"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "sent_at": {
+            "title": "Sent At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dispatch_id",
+          "sent_at",
+          "line_count"
+        ],
+        "title": "OrderDispatchResponse",
+        "type": "object"
+      },
+      "OrderDispatchSummary": {
+        "properties": {
+          "dispatch_id": {
+            "title": "Dispatch Id",
+            "type": "string"
+          },
+          "line_count": {
+            "title": "Line Count",
+            "type": "integer"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "sent_at": {
+            "title": "Sent At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dispatch_id",
+          "sent_at",
+          "line_count"
+        ],
+        "title": "OrderDispatchSummary",
+        "type": "object"
+      },
       "ReceiptLine": {
         "description": "Una riga di una ricezione merce.\n\nRisoluzione SKU (in ordine di precedenza):\n1. ``sku``  — codice SKU esatto (case-sensitive).\n2. ``ean``  — EAN-12/13; il server risolve l'EAN → SKU prima della validazione.\n3. Se entrambi mancano → errore 400 su quella riga.\nSe entrambi presenti, ``sku`` ha la precedenza; ``ean`` viene ignorato.",
         "properties": {
@@ -1377,6 +1589,197 @@
         "summary": "Upsert totale giornaliero (WASTE / ADJUST / UNFULFILLED)",
         "tags": [
           "exceptions"
+        ]
+      }
+    },
+    "/api/v1/order-dispatches": {
+      "delete": {
+        "operationId": "delete_all_order_dispatches_api_v1_order_dispatches_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderDispatchDeleteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete All Order Dispatches",
+        "tags": [
+          "dispatches"
+        ]
+      },
+      "get": {
+        "description": "Return the last _MAX_HISTORY dispatches, newest first.",
+        "operationId": "list_order_dispatches_api_v1_order_dispatches_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OrderDispatchSummary"
+                  },
+                  "title": "Response List Order Dispatches Api V1 Order Dispatches Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Order Dispatches",
+        "tags": [
+          "dispatches"
+        ]
+      },
+      "post": {
+        "operationId": "create_order_dispatch_api_v1_order_dispatches_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderDispatchCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderDispatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Order Dispatch",
+        "tags": [
+          "dispatches"
+        ]
+      }
+    },
+    "/api/v1/order-dispatches/{dispatch_id}": {
+      "delete": {
+        "operationId": "delete_order_dispatch_api_v1_order_dispatches__dispatch_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dispatch_id",
+            "required": true,
+            "schema": {
+              "title": "Dispatch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderDispatchDeleteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Order Dispatch",
+        "tags": [
+          "dispatches"
+        ]
+      },
+      "get": {
+        "operationId": "get_order_dispatch_api_v1_order_dispatches__dispatch_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dispatch_id",
+            "required": true,
+            "schema": {
+              "title": "Dispatch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderDispatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Order Dispatch",
+        "tags": [
+          "dispatches"
         ]
       }
     },
