@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Inventory
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
@@ -26,6 +27,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.*
 import androidx.navigation.compose.*
 import com.sasu91.dosapp.ui.connectivity.ConnectivityViewModel
+import com.sasu91.dosapp.ui.dispatch.OrderDispatchScreen
 import com.sasu91.dosapp.ui.eod.EodScreen
 import com.sasu91.dosapp.ui.exceptions.ExceptionScreen
 import com.sasu91.dosapp.ui.queue.OfflineQueueScreen
@@ -49,9 +51,11 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector)
     }
     /** Associate secondary EAN barcodes to SKUs. */
     object SkuBind    : Screen("sku_bind",        "Abbina EAN",    Icons.Default.Link)
+    /** View order proposals sent from the desktop to Android terminals. */
+    object OrderDispatches : Screen("order_dispatches", "Ordini inviati", Icons.Default.Send)
 }
 
-private val TOP_LEVEL_SCREENS = listOf(Screen.Scan, Screen.QuickWaste, Screen.Exceptions, Screen.Receiving, Screen.Eod, Screen.Queue, Screen.SkuBind)
+private val TOP_LEVEL_SCREENS = listOf(Screen.Scan, Screen.QuickWaste, Screen.Exceptions, Screen.Receiving, Screen.Eod, Screen.Queue, Screen.SkuBind, Screen.OrderDispatches)
 
 /**
  * Root navigation graph with a Material 3 bottom navigation bar.
@@ -209,6 +213,11 @@ fun DosNavGraph(
             // SKU ↔ secondary EAN binding
             composable(Screen.SkuBind.route) {
                 SkuEanBindScreen()
+            }
+
+            // Order dispatches — view orders sent from desktop to Android
+            composable(Screen.OrderDispatches.route) {
+                OrderDispatchScreen()
             }
         }
     }

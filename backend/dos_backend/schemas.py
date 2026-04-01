@@ -427,3 +427,47 @@ class EodCloseResponse(BaseModel):
     already_posted: bool = False
     total_entries: int
     results: list[EodEntryResult] = []
+
+
+# ---------------------------------------------------------------------------
+# Order Dispatch (snapshot of confirmed order sent to Android terminal)
+# ---------------------------------------------------------------------------
+
+class OrderDispatchCreateLine(BaseModel):
+    sku: str
+    description: str
+    qty_ordered: int = Field(..., ge=1)
+    ean: Optional[str] = None
+    order_id: str
+    receipt_date: Optional[date] = None
+
+
+class OrderDispatchCreateRequest(BaseModel):
+    lines: list[OrderDispatchCreateLine] = Field(..., min_length=1)
+    note: str = ""
+
+
+class OrderDispatchLineResponse(BaseModel):
+    sku: str
+    description: str
+    qty_ordered: int
+    ean: Optional[str] = None
+    order_id: str
+    receipt_date: Optional[date] = None
+
+
+class OrderDispatchSummary(BaseModel):
+    dispatch_id: str
+    sent_at: str
+    line_count: int
+    note: str = ""
+
+
+class OrderDispatchResponse(OrderDispatchSummary):
+    lines: list[OrderDispatchLineResponse] = []
+
+
+class OrderDispatchDeleteResponse(BaseModel):
+    dispatch_id: str
+    deleted: bool
+    message: str

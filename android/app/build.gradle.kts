@@ -96,6 +96,9 @@ dependencies {
     // Permissions (Accompanist)
     implementation(libs.accompanist.permissions)
 
+    // Barcode encoding — generate EAN/QR bitmaps (used by OrderDispatchScreen)
+    implementation(libs.zxing.core)
+
     // Coroutines
     implementation(libs.coroutines.android)
 }

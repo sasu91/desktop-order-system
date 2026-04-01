@@ -778,6 +778,26 @@ class StorageAdapter(CSVLayer):
     
     def write_event_uplift_rule(self, rule: EventUpliftRule):
         self.csv_layer.write_event_uplift_rule(rule)
+
+    # ---- Order dispatch (send to Android) ----
+
+    def read_order_dispatches(self):
+        return self.csv_layer.read_order_dispatches()
+
+    def read_order_dispatch_lines(self, dispatch_id: str):
+        return self.csv_layer.read_order_dispatch_lines(dispatch_id)
+
+    def write_order_dispatch(self, *args, **kwargs):
+        self.csv_layer.write_order_dispatch(*args, **kwargs)
+
+    def write_order_dispatch_lines_batch(self, lines):
+        self.csv_layer.write_order_dispatch_lines_batch(lines)
+
+    def delete_order_dispatch(self, dispatch_id: str) -> bool:
+        return self.csv_layer.delete_order_dispatch(dispatch_id)
+
+    def delete_all_order_dispatches(self) -> int:
+        return self.csv_layer.delete_all_order_dispatches()
     
     # ============================================================
     # Helper: Domain Model Conversions

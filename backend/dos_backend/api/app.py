@@ -26,7 +26,7 @@ from fastapi import FastAPI
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .errors import register_handlers
-from ..routers import health, skus, stock, exceptions, receipts, eod
+from ..routers import health, skus, stock, exceptions, receipts, eod, dispatches
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +253,7 @@ def create_app() -> FastAPI:
     app.include_router(exceptions.router, prefix="/api/v1")
     app.include_router(receipts.router,   prefix="/api/v1")
     app.include_router(eod.router,        prefix="/api/v1")
+    app.include_router(dispatches.router,  prefix="/api/v1")
 
     logger.info("FastAPI app created — version=%s", api_version)
     return app

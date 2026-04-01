@@ -170,4 +170,32 @@ interface DosApiService {
         @Path("sku")  sku: String,
         @Body         body: BindSecondaryEanRequestDto,
     ): Response<BindSecondaryEanResponseDto>
+
+    // -----------------------------------------------------------------------
+    // GET /api/v1/order-dispatches  — list last 10 dispatches
+    // -----------------------------------------------------------------------
+    @GET("api/v1/order-dispatches")
+    suspend fun listOrderDispatches(): Response<List<OrderDispatchSummaryDto>>
+
+    // -----------------------------------------------------------------------
+    // GET /api/v1/order-dispatches/{dispatch_id}  — detail with lines
+    // -----------------------------------------------------------------------
+    @GET("api/v1/order-dispatches/{dispatchId}")
+    suspend fun getOrderDispatch(
+        @Path("dispatchId") dispatchId: String,
+    ): Response<OrderDispatchResponseDto>
+
+    // -----------------------------------------------------------------------
+    // DELETE /api/v1/order-dispatches/{dispatch_id}
+    // -----------------------------------------------------------------------
+    @DELETE("api/v1/order-dispatches/{dispatchId}")
+    suspend fun deleteOrderDispatch(
+        @Path("dispatchId") dispatchId: String,
+    ): Response<OrderDispatchDeleteResponseDto>
+
+    // -----------------------------------------------------------------------
+    // DELETE /api/v1/order-dispatches  — delete all
+    // -----------------------------------------------------------------------
+    @DELETE("api/v1/order-dispatches")
+    suspend fun deleteAllOrderDispatches(): Response<OrderDispatchDeleteResponseDto>
 }

@@ -71,6 +71,47 @@ class _MemStorage:
         """Replace the entire transaction list (used by daily-upsert replace mode)."""
         self._transactions = list(txns)
 
+    # -- Order dispatches (send to Android) -----------------------------------
+    def __init_dispatch_store(self):
+        if not hasattr(self, "_dispatches"):
+            self._dispatches: list[dict] = []
+            self._dispatch_lines: list[dict] = []
+
+    def read_order_dispatches(self) -> list[dict]:
+        self.__init_dispatch_store()
+        return sorted(self._dispatches, key=lambda r: r.get("sent_at", ""), reverse=True)
+
+    def read_order_dispatch_lines(self, dispatch_id: str) -> list[dict]:
+        self.__init_dispatch_store()
+        return [r for r in self._dispatch_lines if r.get("dispatch_id") == dispatch_id]
+
+    def write_order_dispatch(self, dispatch_id: str, sent_at: str, line_count: int, note: str = "") -> None:
+        self.__init_dispatch_store()
+        self._dispatches.append({
+            "dispatch_id": dispatch_id,
+            "sent_at": sent_at,
+            "line_count": str(line_count),
+            "note": note,
+        })
+
+    def write_order_dispatch_lines_batch(self, lines: list[dict]) -> None:
+        self.__init_dispatch_store()
+        self._dispatch_lines.extend(lines)
+
+    def delete_order_dispatch(self, dispatch_id: str) -> bool:
+        self.__init_dispatch_store()
+        before = len(self._dispatches)
+        self._dispatches = [r for r in self._dispatches if r["dispatch_id"] != dispatch_id]
+        self._dispatch_lines = [r for r in self._dispatch_lines if r.get("dispatch_id") != dispatch_id]
+        return len(self._dispatches) < before
+
+    def delete_all_order_dispatches(self) -> int:
+        self.__init_dispatch_store()
+        count = len(self._dispatches)
+        self._dispatches = []
+        self._dispatch_lines = []
+        return count
+
     # -- Lifecycle ------------------------------------------------------------
     def close(self) -> None:  # noqa: D401
         """No-op — nothing to close for in-memory storage."""

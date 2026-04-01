@@ -3902,7 +3902,7 @@ class DesktopOrderApp:
         card = tk.Frame(popup, bg="white")
         card.pack(fill="both", expand=True, padx=12, pady=12)
 
-        # Header: title (left) + page indicator (left) + Chiudi (right)
+        # Header: title (left) + page indicator (left) + Invia ad Android + Chiudi (right)
         hdr = tk.Frame(card, bg="white")
         hdr.pack(fill="x", padx=16, pady=(12, 0))
         tk.Label(hdr, text="Ricevuta Conferma Ordine",
@@ -3914,6 +3914,69 @@ class DesktopOrderApp:
                   bg="#1a73e8", fg="white", relief="flat", padx=14, pady=4, bd=0,
                   cursor="hand2", activebackground="#1558b0", activeforeground="white",
                   command=popup.destroy).pack(side="right")
+        send_btn = tk.Button(hdr, text="📱 Invia ad Android", font=("Helvetica", 10),
+                             bg="#34a853", fg="white", relief="flat", padx=14, pady=4, bd=0,
+                             cursor="hand2", activebackground="#1e7e34", activeforeground="white")
+        send_btn.pack(side="right", padx=(0, 8))
+
+        # ── Send-to-Android logic ─────────────────────────────────────────────
+        import json as _json
+        import threading as _threading
+        import urllib.request as _urlreq
+        import urllib.error as _urlerr
+
+        def _send_to_android() -> None:
+            """POST the current order rows to the backend /api/v1/order-dispatches."""
+            send_btn.config(state="disabled", text="Invio…")
+            payload_lines = [
+                {
+                    "sku": rd["sku"],
+                    "description": rd["desc"],
+                    "qty_ordered": rd["qty"],
+                    "ean": rd["ean"],
+                    "order_id": "",   # not available at receipt-window level
+                    "receipt_date": None,
+                }
+                for rd in rows
+            ]
+            payload = {"lines": payload_lines, "note": ""}
+
+            try:
+                base_url = self.backend_manager.local_base_url
+            except Exception:
+                base_url = "http://127.0.0.1:8000"
+
+            url = f"{base_url}/api/v1/order-dispatches"
+
+            def _do_post() -> None:
+                try:
+                    data = _json.dumps(payload).encode("utf-8")
+                    req = _urlreq.Request(
+                        url,
+                        data=data,
+                        headers={"Content-Type": "application/json", "Accept": "application/json"},
+                        method="POST",
+                    )
+                    with _urlreq.urlopen(req, timeout=8):
+                        pass
+                    popup.after(0, lambda: send_btn.config(
+                        state="disabled", text="✓ Inviato", bg="#1e7e34"))
+                except _urlerr.HTTPError as exc:
+                    popup.after(0, lambda: send_btn.config(
+                        state="normal", text="⚠ Fallito", bg="#c0392b"))
+                    popup.after(0, lambda: tk.messagebox.showerror(
+                        "Errore invio", f"Il backend ha risposto con HTTP {exc.code}.",
+                        parent=popup))
+                except Exception as exc:
+                    popup.after(0, lambda: send_btn.config(
+                        state="normal", text="⚠ Fallito", bg="#c0392b"))
+                    popup.after(0, lambda: tk.messagebox.showerror(
+                        "Errore invio", f"Impossibile inviare al backend:\n{exc}",
+                        parent=popup))
+
+            _threading.Thread(target=_do_post, daemon=True).start()
+
+        send_btn.config(command=_send_to_android)
 
         tk.Frame(card, height=1, bg="#dee2e6").pack(fill="x", padx=12, pady=(8, 0))
 

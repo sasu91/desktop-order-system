@@ -76,6 +76,11 @@ class CSVLayer:
             "is_perishable", "confidence_score", "data_quality_flag",
             "missing_features_count", "notes",
         ],
+        # Order dispatches — snapshot of confirmed orders sent to Android terminals
+        "order_dispatches.csv": ["dispatch_id", "sent_at", "line_count", "note"],
+        "order_dispatch_lines.csv": [
+            "dispatch_id", "sku", "description", "qty_ordered", "ean", "order_id", "receipt_date"
+        ],
     }
     
     def __init__(self, data_dir: Optional[Path] = None):
@@ -2617,3 +2622,59 @@ class CSVLayer:
                 f"Transaction will be written without FEFO update."
             )
             return txn
+
+    # ============ Order Dispatch (send to Android) ============
+
+    def read_order_dispatches(self) -> List[Dict]:
+        """Read all order dispatches, sorted by sent_at descending (newest first)."""
+        rows = self._read_csv("order_dispatches.csv")
+        rows.sort(key=lambda r: r.get("sent_at", ""), reverse=True)
+        return rows
+
+    def read_order_dispatch_lines(self, dispatch_id: str) -> List[Dict]:
+        """Read all lines for a given dispatch_id."""
+        rows = self._read_csv("order_dispatch_lines.csv")
+        return [r for r in rows if r.get("dispatch_id") == dispatch_id]
+
+    def write_order_dispatch(self, dispatch_id: str, sent_at: str, line_count: int, note: str = ""):
+        """Append a new dispatch header row."""
+        self._append_csv("order_dispatches.csv", {
+            "dispatch_id": dispatch_id,
+            "sent_at": sent_at,
+            "line_count": str(line_count),
+            "note": note,
+        })
+
+    def write_order_dispatch_lines_batch(self, lines: List[Dict]):
+        """Append multiple dispatch line rows (each dict must include dispatch_id)."""
+        for line in lines:
+            self._append_csv("order_dispatch_lines.csv", {
+                "dispatch_id": line.get("dispatch_id", ""),
+                "sku": line.get("sku", ""),
+                "description": line.get("description", ""),
+                "qty_ordered": str(line.get("qty_ordered", 0)),
+                "ean": line.get("ean") or "",
+                "order_id": line.get("order_id", ""),
+                "receipt_date": line.get("receipt_date") or "",
+            })
+
+    def delete_order_dispatch(self, dispatch_id: str) -> bool:
+        """Delete a single dispatch and all its lines. Returns True if found and deleted."""
+        dispatches = self._read_csv("order_dispatches.csv")
+        new_dispatches = [r for r in dispatches if r.get("dispatch_id") != dispatch_id]
+        if len(new_dispatches) == len(dispatches):
+            return False  # not found
+        self._write_csv("order_dispatches.csv", new_dispatches)
+
+        lines = self._read_csv("order_dispatch_lines.csv")
+        new_lines = [r for r in lines if r.get("dispatch_id") != dispatch_id]
+        self._write_csv("order_dispatch_lines.csv", new_lines)
+        return True
+
+    def delete_all_order_dispatches(self) -> int:
+        """Delete all dispatches and lines. Returns number of dispatches deleted."""
+        dispatches = self._read_csv("order_dispatches.csv")
+        count = len(dispatches)
+        self._write_csv("order_dispatches.csv", [])
+        self._write_csv("order_dispatch_lines.csv", [])
+        return count
