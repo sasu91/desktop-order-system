@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import socket
 import subprocess
 import sys
@@ -106,6 +107,9 @@ class BackendManager:
         self._process: subprocess.Popen | None = None
         self._lock = threading.Lock()
         self._started = False
+        # Thread-safe callback queue: background thread enqueues callables,
+        # main thread drains them via <<BackendEvent>> virtual event.
+        self._event_queue: queue.Queue = queue.Queue()
 
     # ------------------------------------------------------------------
     # Public API
@@ -255,7 +259,15 @@ class BackendManager:
         if cb is None:
             return
         if self._tk_root is not None:
-            self._tk_root.after(0, lambda: cb(base_url))
+            # root.after() is NOT safe to call from a non-main thread on Windows
+            # (raises RuntimeError: main thread is not in main loop).
+            # event_generate() with when="tail" IS thread-safe: it posts a Tcl
+            # event into the event queue without touching the Tcl command table.
+            self._event_queue.put(lambda: cb(base_url))
+            try:
+                self._tk_root.event_generate("<<BackendEvent>>", when="tail")
+            except Exception:
+                pass
         else:
             cb(base_url)
 
@@ -264,6 +276,23 @@ class BackendManager:
         if cb is None:
             return
         if self._tk_root is not None:
-            self._tk_root.after(0, lambda: cb(reason))
+            self._event_queue.put(lambda: cb(reason))
+            try:
+                self._tk_root.event_generate("<<BackendEvent>>", when="tail")
+            except Exception:
+                pass
         else:
             cb(reason)
+
+    def drain_event_queue(self) -> None:
+        """Execute all pending callbacks from the main (Tkinter) thread.
+
+        Bind this to the <<BackendEvent>> virtual event on the Tk root widget:
+            root.bind("<<BackendEvent>>", lambda e: manager.drain_event_queue())
+        """
+        while True:
+            try:
+                cb = self._event_queue.get_nowait()
+                cb()
+            except queue.Empty:
+                break
