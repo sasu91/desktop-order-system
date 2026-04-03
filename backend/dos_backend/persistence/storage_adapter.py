@@ -369,13 +369,13 @@ class StorageAdapter(CSVLayer):
             assert self.repos is not None
             try:
                 sku_dict = self._sku_to_dict(sku_object)
-                
-                # If SKU ID changed, need to update transactions too
+
                 if old_sku_id != sku_object.sku:
-                    # TODO: Implement SKU rename in SQLite (cascade update)
-                    print(f"⚠ SKU rename not yet supported in SQLite, using CSV")
-                    return self.csv_layer.update_sku_object(old_sku_id, sku_object)
-                
+                    # Cascade rename across all child tables atomically.
+                    self.repos.skus().rename(old_sku_id, sku_object.sku)
+                    # Update the remaining SKU fields with the new key.
+                    sku_dict["sku"] = sku_object.sku
+
                 self.repos.skus().upsert(sku_dict)
                 return True
             except Exception as e:
@@ -383,6 +383,7 @@ class StorageAdapter(CSVLayer):
                 print(f"⚠ SQLite update_sku failed, falling back to CSV: {e}")
                 return self.csv_layer.update_sku_object(old_sku_id, sku_object)
         else:
+            return self.csv_layer.update_sku_object(old_sku_id, sku_object)
             return self.csv_layer.update_sku_object(old_sku_id, sku_object)
     
     def update_sku(

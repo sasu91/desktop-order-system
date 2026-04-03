@@ -309,6 +309,56 @@ class SKURepository:
                 counts[table] = 0
         return counts
 
+    def rename(self, old_sku: str, new_sku: str) -> None:
+        """Rename a SKU, cascading the change to all child tables.
+
+        SQLite does not define ON UPDATE CASCADE on any FK referencing skus(sku),
+        so this method temporarily disables FK enforcement, updates every table
+        that holds a ``sku`` column, then re-enables FK enforcement.
+
+        The operation is atomic: either all tables are updated or none are.
+
+        Raises:
+            NotFoundError: if *old_sku* does not exist.
+            DuplicateKeyError: if *new_sku* already exists.
+        """
+        if not self.exists(old_sku):
+            raise NotFoundError(f"SKU {old_sku} non trovato.")
+        if self.exists(new_sku):
+            raise DuplicateKeyError(f"SKU {new_sku} esiste già.")
+
+        # Tables (table_name, column_name) that reference skus.sku.
+        # audit_log.sku is nullable (ON DELETE SET NULL) — we update it too so
+        # the audit trail stays linked after the rename.
+        _CHILD_TABLES = [
+            ("transactions",    "sku"),
+            ("sales",           "sku"),
+            ("order_logs",      "sku"),
+            ("receiving_logs",  "sku"),
+            ("lots",            "sku"),
+            ("promo_calendar",  "sku"),
+            ("kpi_daily",       "sku"),
+            ("audit_log",       "sku"),
+        ]
+
+        # PRAGMA foreign_keys must be set *outside* an active transaction.
+        self.conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            with transaction(self.conn, isolation_level="IMMEDIATE") as cur:
+                # 1. Cascade to all child tables first.
+                for table, col in _CHILD_TABLES:
+                    cur.execute(
+                        f"UPDATE {table} SET {col} = ? WHERE {col} = ?",
+                        (new_sku, old_sku),
+                    )
+                # 2. Rename the SKU primary key itself.
+                cur.execute(
+                    "UPDATE skus SET sku = ? WHERE sku = ?",
+                    (new_sku, old_sku),
+                )
+        finally:
+            self.conn.execute("PRAGMA foreign_keys = ON")
+
     def purge_complete(self, sku: str) -> dict:
         """
         Permanently delete a SKU and ALL associated data in one atomic transaction.

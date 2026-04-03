@@ -1,35 +1,42 @@
 """
-SKU Canonical Validation Utility
+SKU Validation Utility
 
-Canonical SKU format: exactly 7 numeric digits, zero-padded (e.g. '0450663').
-Validation is STRICT — no numeric-equivalence fallback.
+SKU format: qualsiasi stringa non vuota composta da lettere, cifre, underscore
+o trattino (es. '0450663', 'LATTE_UHT', 'BIRRA-LAGER').
 
-This file is mirrored by backend/dos_backend/utils/sku_validation.py.
-Keep the two files in sync when modifying the canonical format.
+Regola per SKU numerici: se uno SKU è composto solo da cifre e inizia con zero,
+lo zero iniziale deve essere SEMPRE preservato — non fare mai int(sku).
+
+Questo file è specchiato da backend/dos_backend/utils/sku_validation.py.
+Mantenere i due file sincronizzati quando si modifica il formato.
 """
 
 import re
 from typing import Optional
 
-# Canonical pattern: exactly 7 decimal digits.
-_SKU_PATTERN = re.compile(r'^\d{7}$')
+# Valid SKU: 1+ chars, letters / digits / underscore / hyphen, no whitespace.
+_SKU_PATTERN = re.compile(r'^[A-Za-z0-9_\-]+$')
 
 
 class SkuFormatError(ValueError):
-    """Raised when a SKU string is not in canonical 7-digit format."""
+    """Raised when a SKU string is not in a valid format."""
 
     def __init__(self, sku_value: object, context: Optional[str] = None) -> None:
         self.sku_value = sku_value
         self.context = context
         ctx_str = f" [{context}]" if context else ""
         super().__init__(
-            f"SKU non canonico (atteso stringa di esattamente 7 cifre numeriche): "
+            f"SKU non valido (deve essere una stringa non vuota di lettere/cifre/underscore/trattino, "
+            f"es. '0450663' o 'LATTE_UHT'): "
             f"ricevuto {sku_value!r}{ctx_str}"
         )
 
 
 def validate_sku_canonical(sku: object, context: Optional[str] = None) -> str:
-    """Validate that *sku* is a canonical 7-digit zero-padded string.
+    """Validate that *sku* is a non-empty string of letters/digits/underscore/hyphen.
+
+    Numeric SKUs with leading zeros (e.g. '0450663') are accepted as-is;
+    the caller must never convert them to int.
 
     Raises SkuFormatError if the format is not satisfied.
     Returns the validated SKU string unchanged.
@@ -40,5 +47,5 @@ def validate_sku_canonical(sku: object, context: Optional[str] = None) -> str:
 
 
 def is_sku_canonical(sku: object) -> bool:
-    """Return True iff *sku* satisfies the canonical 7-digit format."""
+    """Return True iff *sku* is a valid SKU string."""
     return isinstance(sku, str) and bool(_SKU_PATTERN.match(sku))

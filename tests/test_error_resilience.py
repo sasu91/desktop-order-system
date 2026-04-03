@@ -335,45 +335,54 @@ class TestSkuCanonicalValidator:
 
     # ---- validate_sku_canonical ----
 
-    def test_canonical_7_digit_accepted(self):
-        """'0450663' is canonical (leading zero, 7 digits)."""
+    def test_numeric_7_digit_accepted(self):
+        """'0450663' — numeric SKU with leading zero."""
         assert validate_sku_canonical("0450663") == "0450663"
 
-    def test_canonical_all_zeros_accepted(self):
-        """'0000000' is technically canonical (edge case)."""
+    def test_numeric_all_zeros_accepted(self):
+        """'0000000' — all-zero numeric SKU."""
         assert validate_sku_canonical("0000000") == "0000000"
 
-    def test_canonical_no_leading_zero_accepted(self):
-        """'1234567' has no leading zero but is still 7 numeric digits → canonical."""
+    def test_numeric_no_leading_zero_accepted(self):
+        """'1234567' — numeric SKU without leading zero."""
         assert validate_sku_canonical("1234567") == "1234567"
 
-    def test_non_canonical_6_digits_raises(self):
-        """'450663' (6 digits) is non-canonical — the exact production failure case."""
-        with pytest.raises(SkuFormatError) as exc_info:
-            validate_sku_canonical("450663")
-        assert "450663" in str(exc_info.value)
+    def test_numeric_6_digits_accepted(self):
+        """'450663' (6 digits) — valid non-7-digit numeric SKU."""
+        assert validate_sku_canonical("450663") == "450663"
 
-    def test_non_canonical_8_digits_raises(self):
-        """'04506630' (8 digits) is non-canonical."""
-        with pytest.raises(SkuFormatError):
-            validate_sku_canonical("04506630")
+    def test_numeric_8_digits_accepted(self):
+        """'04506630' (8 digits) — valid numeric SKU."""
+        assert validate_sku_canonical("04506630") == "04506630"
 
-    def test_non_canonical_alpha_raises(self):
-        """'SKU_001' is not numeric — must be rejected."""
-        with pytest.raises(SkuFormatError):
-            validate_sku_canonical("SKU_001")
+    def test_alpha_sku_accepted(self):
+        """'LATTE_UHT' is a valid alphanumeric SKU."""
+        assert validate_sku_canonical("LATTE_UHT") == "LATTE_UHT"
 
-    def test_non_canonical_with_spaces_raises(self):
-        """' 0450663 ' (with surrounding spaces) is non-canonical in strict mode."""
+    def test_alpha_mixed_accepted(self):
+        """'SKU_001' — mixed letters/digits/underscore is valid."""
+        assert validate_sku_canonical("SKU_001") == "SKU_001"
+
+    def test_alpha_hyphen_accepted(self):
+        """'BIRRA-LAGER' — hyphen is allowed."""
+        assert validate_sku_canonical("BIRRA-LAGER") == "BIRRA-LAGER"
+
+    def test_with_spaces_raises(self):
+        """' 0450663 ' (surrounding spaces) is invalid."""
         with pytest.raises(SkuFormatError):
             validate_sku_canonical(" 0450663 ")
 
-    def test_non_canonical_int_raises(self):
+    def test_empty_string_raises(self):
+        """Empty string is invalid."""
+        with pytest.raises(SkuFormatError):
+            validate_sku_canonical("")
+
+    def test_int_raises(self):
         """int 450663 is not a str — must be rejected."""
         with pytest.raises(SkuFormatError):
             validate_sku_canonical(450663)  # type: ignore[arg-type]
 
-    def test_non_canonical_none_raises(self):
+    def test_none_raises(self):
         """None is not a str — must be rejected."""
         with pytest.raises(SkuFormatError):
             validate_sku_canonical(None)  # type: ignore[arg-type]
@@ -381,22 +390,25 @@ class TestSkuCanonicalValidator:
     def test_context_included_in_error_message(self):
         """Error message must include the provided context for diagnostics."""
         with pytest.raises(SkuFormatError) as exc_info:
-            validate_sku_canonical("450663", context="document DDT-20260328")
+            validate_sku_canonical(" bad sku ", context="document DDT-20260328")
         assert "DDT-20260328" in str(exc_info.value)
 
     # ---- is_sku_canonical ----
 
-    def test_is_canonical_true(self):
+    def test_is_valid_numeric(self):
         assert is_sku_canonical("0450663") is True
 
-    def test_is_canonical_false_short(self):
-        assert is_sku_canonical("450663") is False
+    def test_is_valid_alpha(self):
+        assert is_sku_canonical("LATTE_UHT") is True
 
-    def test_is_canonical_false_int(self):
+    def test_is_invalid_spaces(self):
+        assert is_sku_canonical(" 0450663 ") is False
+
+    def test_is_invalid_int(self):
         assert is_sku_canonical(450663) is False  # type: ignore[arg-type]
 
-    def test_is_canonical_false_alpha(self):
-        assert is_sku_canonical("ABC1234") is False
+    def test_is_invalid_empty(self):
+        assert is_sku_canonical("") is False
 
 
 # ---------------------------------------------------------------------------
