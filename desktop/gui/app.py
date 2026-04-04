@@ -2809,20 +2809,40 @@ class DesktopOrderApp:
                                 category=sku_obj.category, department=sku_obj.department,
                             )
 
-                proposal = self.order_workflow.generate_proposal(
-                    sku=sku_id,
-                    description=description,
-                    current_stock=stocks[sku_id],
-                    daily_sales_avg=daily_sales,
-                    sku_obj=sku_obj,
-                    oos_days_count=oos_days_count,
-                    oos_boost_percent=oos_boost_percent,
-                    target_receipt_date=target_receipt_date,
-                    protection_period_days=protection_period,
-                    transactions=transactions,
-                    sales_records=sales_records,
-                )
-                proposal.history_valid_days = history_valid_days
+                oos_days_list = data.get("oos_days_list", [])
+                try:
+                    proposal, _explain = self.order_workflow.generate_proposal_v2(
+                        sku_obj=sku_obj,
+                        current_stock=stocks[sku_id],
+                        asof_date=date.today(),
+                        target_receipt_date=target_receipt_date,
+                        protection_period_days=protection_period,
+                        sales_records=sales_records,
+                        transactions=transactions,
+                        oos_days_list=oos_days_list,
+                        oos_days_count=oos_days_count,
+                        oos_boost_percent=oos_boost_percent,
+                        history_valid_days=history_valid_days,
+                    )
+                except Exception as _e:
+                    logger.warning(
+                        "generate_proposal_v2 failed for %s (%s); falling back to legacy path",
+                        sku_id, _e, exc_info=True,
+                    )
+                    proposal = self.order_workflow.generate_proposal(
+                        sku=sku_id,
+                        description=description,
+                        current_stock=stocks[sku_id],
+                        daily_sales_avg=daily_sales,
+                        sku_obj=sku_obj,
+                        oos_days_count=oos_days_count,
+                        oos_boost_percent=oos_boost_percent,
+                        target_receipt_date=target_receipt_date,
+                        protection_period_days=protection_period,
+                        transactions=transactions,
+                        sales_records=sales_records,
+                    )
+                    proposal.history_valid_days = history_valid_days
                 self.current_proposals.append(proposal)
 
             self._refresh_proposal_table()
@@ -4205,8 +4225,8 @@ class DesktopOrderApp:
                 continue
             status = log.get("status", "PENDING")
             
-            # Only show PENDING orders
-            if status != "PENDING":
+            # Show PENDING and PARTIAL orders (PARTIAL = partially received, still has outstanding qty)
+            if status not in ("PENDING", "PARTIAL"):
                 continue
             
             order_id = log.get("order_id")
@@ -4463,12 +4483,13 @@ class DesktopOrderApp:
             if new_qty_received <= 0:
                 continue
             values = self.pending_treeview.item(item_id)["values"]
+            order_id = str(values[0]).strip() if values else ""
             sku = values[1]
             expiry_date_for_item = self.pending_expiry_edits.get(item_id, "")
             items.append({
                 "sku": sku,
                 "qty_received": new_qty_received,
-                "order_ids": [],  # FIFO allocation automatica
+                "order_ids": [order_id] if order_id else [],
                 "expiry_date": expiry_date_for_item,
             })
         
@@ -8095,36 +8116,39 @@ class DesktopOrderApp:
                     proposal_map[prop.sku] = prop
             else:
                 # Generate fresh proposals for export (loop over all SKUs)
-                from src.workflows.order import OrderWorkflow
-                from src.domain.ledger import StockCalculator
-                order_workflow = OrderWorkflow(self.csv_layer)
+                from dos_backend.domain.ledger import StockCalculator
+                from dos_backend.domain.calendar import (
+                    resolve_receipt_and_protection, create_calendar_with_holidays,
+                )
+                cal_cfg = create_calendar_with_holidays(self.csv_layer.data_dir)
+                export_asof = date.today()
                 for sku_obj in all_skus:
                     try:
-                        # Calculate current stock
                         stock = StockCalculator.calculate_asof(
                             sku=sku_obj.sku,
-                            asof_date=date.today() + timedelta(days=1),
+                            asof_date=export_asof + timedelta(days=1),
                             transactions=transactions,
                             sales_records=None,
                         )
-                        
-                        # Calculate daily sales avg
-                        sku_sales = [s for s in sales_records if s.sku == sku_obj.sku]
-                        if sku_sales:
-                            total_sales = sum(s.qty_sold for s in sku_sales)
-                            days = len(sku_sales)
-                            daily_sales_avg = total_sales / days if days > 0 else 0.0
-                        else:
-                            daily_sales_avg = 0.0
-                        
-                        prop = order_workflow.generate_proposal(
-                            sku=sku_obj.sku,
-                            description=sku_obj.description,
-                            current_stock=stock,
-                            daily_sales_avg=daily_sales_avg,
+                        _lt = sku_obj.lead_time_days if sku_obj.lead_time_days > 0 else 7
+                        _rp = sku_obj.review_period if sku_obj.review_period > 0 else 1
+                        try:
+                            from dos_backend.domain.calendar import Lane
+                            _trd, _pp = resolve_receipt_and_protection(
+                                export_asof, Lane.STANDARD, cal_cfg
+                            )
+                        except Exception:
+                            _trd = export_asof + timedelta(days=_lt)
+                            _pp = _lt + _rp
+
+                        prop, _ = self.order_workflow.generate_proposal_v2(
                             sku_obj=sku_obj,
-                            transactions=transactions,
+                            current_stock=stock,
+                            asof_date=export_asof,
+                            target_receipt_date=_trd,
+                            protection_period_days=_pp,
                             sales_records=sales_records,
+                            transactions=transactions,
                         )
                         if prop:
                             proposal_map[sku_obj.sku] = prop

@@ -1483,15 +1483,24 @@ class OrderWorkflow:
         
         today = date.today()
         order_id_base = today.isoformat().replace("-", "")
-        
+
+        # Derive offset from existing orders today to prevent collision when
+        # confirm_order is called more than once on the same calendar day.
+        existing_today_count = sum(
+            1 for log in self.csv_layer.read_order_logs()
+            if str(log.get("order_id", "")).startswith(order_id_base)
+        )
+
         confirmations = []
         transactions = []
-        
-        for idx, (proposal, qty) in enumerate(zip(proposals, confirmed_qtys)):
+        order_seq = existing_today_count  # running counter for this confirm call
+
+        for proposal, qty in zip(proposals, confirmed_qtys):
             if qty <= 0:
                 continue
-            
-            order_id = f"{order_id_base}_{idx:03d}"
+
+            order_id = f"{order_id_base}_{order_seq:03d}"
+            order_seq += 1
             
             confirmation = OrderConfirmation(
                 order_id=order_id,

@@ -104,7 +104,22 @@ class ReceivingWorkflow:
         
         # 2. Read current order state
         order_logs = self.csv_layer.read_order_logs()
-        
+
+        # Build mutable in-memory state keyed by order_id.
+        # This ensures multiple items for the same SKU in one document
+        # each see the correct residual (prevents stale-snapshot overwrite).
+        order_state: dict = {}
+        for _log in order_logs:
+            _oid = _log.get("order_id", "")
+            if _oid:
+                order_state[_oid] = {
+                    "sku": str(_log.get("sku", "")).strip(),
+                    "status": _log.get("status", "PENDING"),
+                    "qty_ordered": int(_log.get("qty_ordered", 0)),
+                    "qty_received": int(_log.get("qty_received", 0)),
+                    "date": _log.get("date", ""),
+                }
+
         transactions = []
         order_updates = {}  # {order_id: {qty_received_total, new_status, sku}}
         
@@ -113,27 +128,33 @@ class ReceivingWorkflow:
             sku = item["sku"]
             qty_received = item["qty_received"]
             specified_order_ids = item.get("order_ids", [])
-            
-            # Get PENDING orders for this SKU (sorted by date for FIFO)
-            sku_orders = [
-                log for log in order_logs
-                if log.get("sku") == sku and log.get("status") in ["PENDING", "PARTIAL"]
-            ]
-            sku_orders.sort(key=lambda x: x.get("date", ""))
-            
+
+            # Get PENDING/PARTIAL orders for this SKU from in-memory state
+            # (already reflects allocations made by earlier items in this document).
+            sku_order_ids = sorted(
+                [
+                    oid for oid, st in order_state.items()
+                    if st["sku"] == sku
+                    and st["status"].upper().strip() in ("PENDING", "PARTIAL")
+                    and st["qty_ordered"] - st["qty_received"] > 0
+                ],
+                key=lambda oid: order_state[oid]["date"],
+            )
+
             # Determine which orders to allocate to
             if specified_order_ids:
-                # Use specified orders
-                target_orders = [o for o in sku_orders if o.get("order_id") in specified_order_ids]
-                if not target_orders:
-                    logger.warning(f"Document {document_id}: specified order_ids {specified_order_ids} not found for {sku}")
-                    # Fallback to FIFO
-                    target_orders = sku_orders
+                target_order_ids = [oid for oid in sku_order_ids if oid in specified_order_ids]
+                if not target_order_ids:
+                    logger.warning(
+                        f"Document {document_id}: specified order_ids {specified_order_ids} "
+                        f"not found for {sku}; falling back to FIFO"
+                    )
+                    target_order_ids = sku_order_ids
             else:
                 # FIFO allocation
-                target_orders = sku_orders
-            
-            if not target_orders:
+                target_order_ids = sku_order_ids
+
+            if not target_order_ids:
                 logger.warning(f"Document {document_id}: No PENDING/PARTIAL orders found for {sku}, qty_received={qty_received}")
                 # Still create RECEIPT event (might be manual stock in)
                 txn_receipt = Transaction(
@@ -161,22 +182,22 @@ class ReceivingWorkflow:
             qty_remaining = qty_received
             allocated_order_ids = []
             
-            for order in target_orders:
+            for order_id in target_order_ids:
                 if qty_remaining <= 0:
                     break
-                
-                order_id = order.get("order_id", "")
-                qty_ordered = int(order.get("qty_ordered", 0))
-                qty_already_received = int(order.get("qty_received", 0))
+
+                st = order_state[order_id]
+                qty_ordered = st["qty_ordered"]
+                qty_already_received = st["qty_received"]
                 qty_still_needed = qty_ordered - qty_already_received
-                
+
                 if qty_still_needed <= 0:
-                    continue  # Order already fully received
-                
+                    continue  # Order already fully received (via earlier item in same document)
+
                 # Allocate up to qty_still_needed
                 qty_to_allocate = min(qty_remaining, qty_still_needed)
                 new_qty_received_total = qty_already_received + qty_to_allocate
-                
+
                 # Determine new status
                 if new_qty_received_total >= qty_ordered:
                     new_status = "RECEIVED"
@@ -184,15 +205,20 @@ class ReceivingWorkflow:
                     new_status = "PARTIAL"
                 else:
                     new_status = "PENDING"
-                
-                # Update order state
+
+                # Update in-memory state immediately so the next item sees
+                # the correct residual (prevents stale-snapshot overwrite).
+                st["qty_received"] = new_qty_received_total
+                st["status"] = new_status
+
+                # Persist cumulative update for final CSV write
                 order_updates[order_id] = {
                     "qty_received_total": new_qty_received_total,
                     "new_status": new_status,
                     "sku": sku,
                     "qty_ordered": qty_ordered,
                 }
-                
+
                 allocated_order_ids.append(order_id)
                 qty_remaining -= qty_to_allocate
                 

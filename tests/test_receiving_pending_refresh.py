@@ -436,3 +436,123 @@ class TestAllocationDeterminism:
             f"Order B must be RECEIVED; got {updates.get(order_id_b)}"
         )
         assert len(_pending_orders(csv_layer)) == 0
+
+
+# ---------------------------------------------------------------------------
+# Test 11 — Same SKU, two orders on different receipt_dates.
+#
+# Reproduces the original bug: user filters pending tab by "second" receipt_date,
+# confirms that document → first order must remain PENDING, undisturbed.
+# ---------------------------------------------------------------------------
+
+class TestDoublePendingDifferentReceiptDates:
+    """
+    Scenario
+    --------
+    1. Order A for SKU-J placed today, receipt_date = today+3 (older/first in FIFO).
+    2. Order B for SKU-J placed today+1, receipt_date = today+7 (newer/second in FIFO).
+    3. User closes document referencing only Order B (specifying order_ids=[order_id_b]).
+    4. Expected: Order B → RECEIVED, Order A → still PENDING and untouched.
+    5. Pending list must still contain exactly Order A.
+    """
+
+    def test_only_targeted_order_is_updated(self, csv_layer, order_wf, recv_wf):
+        from datetime import timedelta
+
+        today = date.today()
+        receipt_date_a = today + timedelta(days=3)
+        receipt_date_b = today + timedelta(days=7)
+
+        # Confirm Order A
+        confirmations_a, _ = order_wf.confirm_order(
+            [_make_proposal("SKU-J", 40, receipt_date_a)]
+        )
+        order_id_a = confirmations_a[0].order_id
+
+        # Confirm Order B (next day → different order_id prefix in real usage,
+        # but here we just need two distinct PENDING rows for same SKU)
+        confirmations_b, _ = order_wf.confirm_order(
+            [_make_proposal("SKU-J", 60, receipt_date_b)]
+        )
+        order_id_b = confirmations_b[0].order_id
+
+        assert order_id_a != order_id_b, "order_ids must be distinct"
+        assert len(_pending_orders(csv_layer)) == 2
+
+        # User closes only the second document (order B)
+        txns, skip, updates = recv_wf.close_receipt_by_document(
+            "DDT-014",
+            today,
+            [{"sku": "SKU-J", "qty_received": 60, "order_ids": [order_id_b]}],
+        )
+
+        assert not skip
+        # Order B must be RECEIVED
+        assert order_id_b in updates, f"Order B not in updates: {updates}"
+        assert updates[order_id_b]["new_status"] == "RECEIVED"
+
+        # Order A must remain PENDING and must NOT appear in order_updates
+        assert order_id_a not in updates, (
+            f"Order A was incorrectly touched: {updates.get(order_id_a)}"
+        )
+
+        pending = _pending_orders(csv_layer)
+        pending_ids = [o["order_id"] for o in pending]
+        assert order_id_a in pending_ids, "Order A must still be in pending list"
+        assert order_id_b not in pending_ids, "Order B must be gone from pending list"
+
+    def test_fifo_fallback_takes_oldest_when_no_order_ids(self, csv_layer, order_wf, recv_wf):
+        """When order_ids is empty (legacy FIFO path), oldest order is consumed first."""
+        from datetime import timedelta
+
+        today = date.today()
+        receipt_date_older = today + timedelta(days=2)
+        receipt_date_newer = today + timedelta(days=8)
+
+        confirmations_old, _ = order_wf.confirm_order(
+            [_make_proposal("SKU-K", 30, receipt_date_older)]
+        )
+        order_id_old = confirmations_old[0].order_id
+
+        confirmations_new, _ = order_wf.confirm_order(
+            [_make_proposal("SKU-K", 50, receipt_date_newer)]
+        )
+        order_id_new = confirmations_new[0].order_id
+
+        # Backdate the older order's date so FIFO sorts it first
+        orders = csv_layer.read_order_logs()
+        for o in orders:
+            if o["order_id"] == order_id_old:
+                o["date"] = (today - timedelta(days=1)).isoformat()
+        csv_layer._write_csv("order_logs.csv", orders)
+
+        # Receive exactly 30 — should fill older order only
+        txns, skip, updates = recv_wf.close_receipt_by_document(
+            "DDT-015",
+            today,
+            [{"sku": "SKU-K", "qty_received": 30, "order_ids": []}],
+        )
+
+        assert not skip
+        assert order_id_old in updates
+        assert updates[order_id_old]["new_status"] == "RECEIVED"
+        assert order_id_new not in updates, "Newer order must not be touched"
+
+        pending = _pending_orders(csv_layer)
+        pending_ids = [o["order_id"] for o in pending]
+        assert order_id_new in pending_ids
+        assert order_id_old not in pending_ids
+
+    def test_second_confirm_on_same_day_produces_unique_order_ids(self, csv_layer, order_wf):
+        """Two confirm_order calls on the same day must produce non-colliding order_ids."""
+        today = date.today()
+
+        conf_a, _ = order_wf.confirm_order([_make_proposal("SKU-L", 10, today)])
+        conf_b, _ = order_wf.confirm_order([_make_proposal("SKU-L", 20, today)])
+
+        id_a = conf_a[0].order_id
+        id_b = conf_b[0].order_id
+        assert id_a != id_b, (
+            f"Duplicate order_id generated by two same-day confirm calls: {id_a}"
+        )
+

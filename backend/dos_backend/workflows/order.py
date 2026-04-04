@@ -1460,7 +1460,128 @@ class OrderWorkflow:
             csl_lane=str(csl_breakdown.get("lane", "")),
             csl_n_censored=int(csl_breakdown.get("n_censored", 0)),
         )
-    
+
+    def generate_proposal_v2(
+        self,
+        sku_obj: "SKU",
+        current_stock: "Stock",
+        asof_date: date,
+        target_receipt_date: date,
+        protection_period_days: int,
+        sales_records: Optional[List] = None,
+        transactions: Optional[List] = None,
+        oos_days_list: Optional[List[date]] = None,
+        oos_days_count: int = 0,
+        oos_boost_percent: float = 0.0,
+        history_valid_days: int = 0,
+        pipeline_extra: Optional[List[dict]] = None,
+    ) -> Tuple["OrderProposal", "OrderExplain"]:
+        """
+        Canonical single-SKU proposal: uses propose_order_for_sku (pure, no I/O).
+
+        This is the adapter between the GUI (which owns OOS decisions and date
+        context) and the pure facade.  It:
+          1. Pre-loads all modifiers data via csv_layer (once per call site batch).
+          2. Builds history list and censored_flags from sales_records + oos_days_list.
+          3. Builds open pipeline via build_open_pipeline.
+          4. Computes expected_waste_rate from ShelfLifeCalculator.
+          5. Calls propose_order_for_sku (→ build_demand_distribution → compute_order_v2).
+          6. Enriches the returned OrderProposal with GUI-specific fields
+             (OOS boost, history_valid_days).
+
+        The caller (GUI) is responsible for OOS popup decisions and passing
+        oos_days_list + oos_boost_percent.
+        """
+        from ..analytics.pipeline import build_open_pipeline
+
+        settings = self.csv_layer.read_settings()
+
+        # ── 1. History + censored_flags ─────────────────────────────────────
+        oos_set: set = set(oos_days_list) if oos_days_list else set()
+        if sales_records is None:
+            sales_records = self.csv_layer.read_sales()
+        sku_history = sorted(
+            [
+                {"date": r.date, "qty_sold": float(r.qty_sold)}
+                for r in sales_records
+                if r.sku == sku_obj.sku
+            ],
+            key=lambda x: x["date"],
+        )
+        censored_flags = [r["date"] in oos_set for r in sku_history]
+
+        # ── 2. Open pipeline ────────────────────────────────────────────────
+        pipeline = build_open_pipeline(self.csv_layer, sku_obj.sku, asof_date)
+        if pipeline_extra:
+            pipeline.extend(pipeline_extra)
+            pipeline.sort(key=lambda x: x["receipt_date"])
+
+        # ── 3. Modifiers data (lazy load) ───────────────────────────────────
+        promo_calendar_data = self.csv_layer.read_promo_calendar()
+        event_uplift_rules = self.csv_layer.read_event_uplift_rules()
+        all_skus = self.csv_layer.read_skus()
+        if transactions is None:
+            transactions = self.csv_layer.read_transactions()
+        try:
+            holidays = self.csv_layer.read_holidays()
+        except Exception:
+            holidays = []
+
+        # ── 4. expected_waste_rate (shelf-life) ─────────────────────────────
+        expected_waste_rate = 0.0
+        shelf_life_days = sku_obj.shelf_life_days if sku_obj else 0
+        shelf_life_enabled = settings.get("shelf_life_policy", {}).get("enabled", {}).get("value", True)
+        if shelf_life_enabled and shelf_life_days > 0:
+            try:
+                from ..domain.shelf_life import ShelfLifeCalculator, WasteUncertainty
+                lots = self.csv_layer.get_lots_by_sku(sku_obj.sku, sort_by_expiry=True)
+                usable_result = ShelfLifeCalculator.calculate_usable_stock(
+                    lots=lots,
+                    check_date=target_receipt_date,
+                    min_shelf_life_days=sku_obj.min_shelf_life_days if sku_obj.min_shelf_life_days > 0 else 7,
+                    waste_horizon_days=settings.get("shelf_life_policy", {}).get("waste_horizon_days", {}).get("value", 14),
+                )
+                expected_waste_rate = WasteUncertainty.calculate_expected_waste_rate(
+                    waste_risk_percent=usable_result.waste_risk_percent,
+                    waste_realization_factor=settings.get("shelf_life_policy", {}).get("waste_realization_factor", {}).get("value", 0.5),
+                )
+            except Exception as _e:
+                logging.warning("generate_proposal_v2: waste rate calculation failed for %s: %s", sku_obj.sku, _e)
+
+        # ── 5. Pure facade call ─────────────────────────────────────────────
+        proposal, explain = propose_order_for_sku(
+            sku_obj=sku_obj,
+            history=sku_history,
+            stock=current_stock,
+            pipeline=pipeline,
+            asof_date=asof_date,
+            target_receipt_date=target_receipt_date,
+            protection_period_days=protection_period_days,
+            settings=settings,
+            promo_calendar=promo_calendar_data,
+            event_uplift_rules=event_uplift_rules,
+            sales_records=sales_records,
+            transactions=transactions,
+            all_skus=all_skus,
+            censored_flags=censored_flags,
+            expected_waste_rate=expected_waste_rate,
+            holidays=holidays,
+        )
+
+        # ── 6. Enrich GUI-specific fields ────────────────────────────────────
+        # OOS boost: legacy generate_proposal applied this as a safety_stock multiplier.
+        # The canonical facade does not (OOS boost is a GUI-level decision), so we
+        # record it on the proposal for display purposes only.  The order quantity
+        # has already been calculated by the facade without the boost; if a future
+        # version wants to include it, the caller should pass it as a censored-flag
+        # or as an explicit modifier, not as a post-hoc field.
+        proposal.oos_days_count = oos_days_count
+        proposal.oos_boost_applied = oos_boost_percent > 0.0
+        proposal.oos_boost_percent = oos_boost_percent
+        proposal.history_valid_days = history_valid_days
+
+        return proposal, explain
+
     def confirm_order(
         self,
         proposals: List[OrderProposal],
@@ -1483,15 +1604,24 @@ class OrderWorkflow:
         
         today = date.today()
         order_id_base = today.isoformat().replace("-", "")
-        
+
+        # Derive offset from existing orders today to prevent collision when
+        # confirm_order is called more than once on the same calendar day.
+        existing_today_count = sum(
+            1 for log in self.csv_layer.read_order_logs()
+            if str(log.get("order_id", "")).startswith(order_id_base)
+        )
+
         confirmations = []
         transactions = []
-        
-        for idx, (proposal, qty) in enumerate(zip(proposals, confirmed_qtys)):
+        order_seq = existing_today_count  # running counter for this confirm call
+
+        for proposal, qty in zip(proposals, confirmed_qtys):
             if qty <= 0:
                 continue
-            
-            order_id = f"{order_id_base}_{idx:03d}"
+
+            order_id = f"{order_id_base}_{order_seq:03d}"
+            order_seq += 1
             
             confirmation = OrderConfirmation(
                 order_id=order_id,
