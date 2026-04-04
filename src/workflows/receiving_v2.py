@@ -103,8 +103,28 @@ class ReceivingWorkflow:
             logger.info(f"Document {document_id} already processed (idempotent skip)")
             return [], True, {}
         
-        # 2. Read current order state
+        # 2. Read current order state once and build a mutable in-memory dict.
+        #
+        # Why in-memory state?  When the same document contains multiple items for
+        # the same SKU (one per pending treeview row), the allocation loop must see
+        # the quantities already consumed by earlier items.  Reading order_logs as a
+        # static snapshot causes the second item to re-allocate to an already-served
+        # order, overwriting order_updates with stale data and leaving the pending
+        # list unchanged after confirmation.
         order_logs = self.csv_layer.read_order_logs()
+
+        # Keyed by order_id for O(1) lookup; values are mutable dicts.
+        order_state: dict = {}
+        for _log in order_logs:
+            _oid = _log.get("order_id", "")
+            if _oid:
+                order_state[_oid] = {
+                    "sku": str(_log.get("sku", "")).strip(),
+                    "status": _log.get("status", "PENDING"),
+                    "qty_ordered": int(_log.get("qty_ordered", 0)),
+                    "qty_received": int(_log.get("qty_received", 0)),
+                    "date": _log.get("date", ""),
+                }
         
         transactions = []
         order_updates = {}  # {order_id: {qty_received_total, new_status, sku}}
@@ -122,30 +142,33 @@ class ReceivingWorkflow:
             qty_received = item["qty_received"]
             specified_order_ids = item.get("order_ids", [])
             
-            # Get PENDING orders for this SKU (sorted by date for FIFO).
-            # Both sku and status are normalised (strip + upper) so that
-            # minor formatting differences (int SKU, lowercase status) never
-            # cause a false "no matching orders" result.
-            sku_orders = [
-                log for log in order_logs
-                if str(log.get("sku", "")).strip() == sku
-                and log.get("status", "PENDING").upper().strip() in ["PENDING", "PARTIAL"]
-            ]
-            sku_orders.sort(key=lambda x: x.get("date", ""))
+            # Get PENDING/PARTIAL orders for this SKU from the in-memory state
+            # (already reflects allocations made by earlier items in this document).
+            # Sorted by order date for FIFO.
+            sku_order_ids = sorted(
+                [
+                    oid for oid, st in order_state.items()
+                    if st["sku"] == sku
+                    and st["status"].upper().strip() in ("PENDING", "PARTIAL")
+                    and st["qty_ordered"] - st["qty_received"] > 0  # residual exists
+                ],
+                key=lambda oid: order_state[oid]["date"],
+            )
             
             # Determine which orders to allocate to
             if specified_order_ids:
-                # Use specified orders
-                target_orders = [o for o in sku_orders if o.get("order_id") in specified_order_ids]
-                if not target_orders:
-                    logger.warning(f"Document {document_id}: specified order_ids {specified_order_ids} not found for {sku}")
-                    # Fallback to FIFO
-                    target_orders = sku_orders
+                target_order_ids = [oid for oid in sku_order_ids if oid in specified_order_ids]
+                if not target_order_ids:
+                    logger.warning(
+                        f"Document {document_id}: specified order_ids {specified_order_ids} "
+                        f"not found for {sku}; falling back to FIFO"
+                    )
+                    target_order_ids = sku_order_ids
             else:
                 # FIFO allocation
-                target_orders = sku_orders
+                target_order_ids = sku_order_ids
             
-            if not target_orders:
+            if not target_order_ids:
                 logger.warning(f"Document {document_id}: No PENDING/PARTIAL orders found for {sku}, qty_received={qty_received}")
                 # Still create RECEIPT event (might be manual stock in)
                 txn_receipt = Transaction(
@@ -173,17 +196,19 @@ class ReceivingWorkflow:
             qty_remaining = qty_received
             allocated_order_ids = []
             
-            for order in target_orders:
+            for order_id in target_order_ids:
                 if qty_remaining <= 0:
                     break
                 
-                order_id = order.get("order_id", "")
-                qty_ordered = int(order.get("qty_ordered", 0))
-                qty_already_received = int(order.get("qty_received", 0))
+                # Use in-memory state: reflects allocations already done by
+                # earlier items in the same document for the same SKU.
+                st = order_state[order_id]
+                qty_ordered = st["qty_ordered"]
+                qty_already_received = st["qty_received"]
                 qty_still_needed = qty_ordered - qty_already_received
                 
                 if qty_still_needed <= 0:
-                    continue  # Order already fully received
+                    continue  # Order already fully received (via earlier item)
                 
                 # Allocate up to qty_still_needed
                 qty_to_allocate = min(qty_remaining, qty_still_needed)
@@ -197,7 +222,12 @@ class ReceivingWorkflow:
                 else:
                     new_status = "PENDING"
                 
-                # Update order state
+                # Update in-memory state immediately so the next item sees
+                # the correct residual for this order (prevents stale overwrite).
+                st["qty_received"] = new_qty_received_total
+                st["status"] = new_status
+                
+                # Persist cumulative update for final CSV write
                 order_updates[order_id] = {
                     "qty_received_total": new_qty_received_total,
                     "new_status": new_status,

@@ -4694,9 +4694,10 @@ class DesktopOrderApp:
             entry.bind("<Escape>", lambda e: entry.destroy())
 
     def _close_receipt_bulk(self):
-        """Chiudi ricevimento per le righe visibili (filtrate per data prevista)."""
-        # Scope to visible (attached) rows only — respects the date filter
-        visible_item_ids = set(self.pending_treeview.get_children())
+        # Scope to visible (attached) rows only — respects the date filter.
+        # Use list (not set) to preserve treeview display order, which determines
+        # which items are processed first in the FIFO allocation loop.
+        visible_item_ids = list(self.pending_treeview.get_children())
         active_date_var = getattr(self, "pending_date_filter_var", None)
         active_date = active_date_var.get() if active_date_var else "— Tutte le date —"
         filter_by_date = bool(active_date) and active_date != "— Tutte le date —"
