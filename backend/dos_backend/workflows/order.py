@@ -1000,9 +1000,17 @@ class OrderWorkflow:
         else:
             # LEGACY mode: traditional formula with optional simulation
             csl_breakdown = {"policy_mode": "legacy"}
-            
-            # Use simulation for intermittent demand
-            if use_simulation:
+
+            # When Monte Carlo is the selected forecast method, it already embeds
+            # demand uncertainty via bootstrap/distribution — the intermittent
+            # simulation must NOT override the qty derived from MC or it silently
+            # discards the probabilistic forecast result.
+            # Simulation is only applicable for simple/intermittent methods that
+            # produce a deterministic level estimate with no uncertainty model.
+            mc_is_primary = (forecast_method == "monte_carlo" and mc_method_used == "monte_carlo")
+
+            # Use simulation for intermittent demand (non-MC methods only)
+            if use_simulation and not mc_is_primary:
                 sim_qty, sim_trigger, sim_notes = simulate_intermittent_demand(
                     daily_sales_avg=daily_sales_avg,
                     current_ip=inventory_position,
@@ -1019,6 +1027,7 @@ class OrderWorkflow:
                 proposed_qty_before_rounding = proposed_qty_raw
             else:
                 # Standard formula: proposed = max(0, S − IP)
+                # (Covers: MC is primary, or demand is not intermittent)
                 proposed_qty_raw = max(0, S - inventory_position)
                 proposed_qty_before_rounding = proposed_qty_raw
         
@@ -1295,6 +1304,10 @@ class OrderWorkflow:
         
         # Policy mode and forecast method
         expl_policy_mode = csl_breakdown.get("policy_mode", "")
+        # Reflect the method that actually drove the final qty:
+        # - MC is primary → show monte_carlo (mc_method_used already set to "monte_carlo")
+        # - MC was selected but simulation overrode it → impossible after fix, but guard anyway
+        # - Simple/intermittent + simulation → show forecast_method unchanged
         expl_forecast_method = forecast_method  # Already computed earlier (simple, monte_carlo)
         
         # Target CSL, sigma_horizon, reorder_point depend on policy mode

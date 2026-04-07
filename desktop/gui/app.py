@@ -2388,8 +2388,11 @@ class DesktopOrderApp:
         # Monte Carlo Details (if MC was used as main method or for comparison)
         if proposal.mc_method_used or proposal.mc_comparison_qty is not None:
             details.append("")
-            if proposal.mc_method_used == "monte_carlo":
+            if proposal.mc_method_used == "monte_carlo" and not proposal.simulation_used:
                 details.append("═══ METODO MONTE CARLO (PRINCIPALE) ═══")
+            elif proposal.mc_method_used == "monte_carlo" and proposal.simulation_used:
+                # MC ran and was then overridden by simulation (non-MC methods)
+                details.append("═══ MONTE CARLO (CALCOLATO, NON USATO) ═══")
             else:
                 details.append("═══ CONFRONTO MONTE CARLO ═══")
             
@@ -3339,9 +3342,13 @@ class DesktopOrderApp:
         colli_proposti = proposal.proposed_qty // pack_size if pack_size > 0 else proposal.proposed_qty
 
         mc_comparison_display = ""
-        if proposal.mc_method_used == "monte_carlo":
+        if proposal.mc_method_used == "monte_carlo" and not proposal.simulation_used:
             stat_label = f"P{proposal.mc_output_percentile}" if proposal.mc_output_stat == "percentile" else "Media"
             mc_comparison_display = f"MC: {stat_label}"
+        elif proposal.mc_method_used == "monte_carlo" and proposal.simulation_used:
+            # MC ran but was not the qty driver (simulation overrode it)
+            stat_label = f"P{proposal.mc_output_percentile}" if proposal.mc_output_stat == "percentile" else "Media"
+            mc_comparison_display = f"MC¹: {stat_label}"
         elif proposal.mc_comparison_qty is not None:
             stat_label = f"P{proposal.mc_output_percentile}" if proposal.mc_output_stat == "percentile" else "Media"
             mc_comparison_display = f"Confronto: {stat_label} ({proposal.mc_comparison_qty} pz)"

@@ -304,5 +304,134 @@ def test_order_workflow_simple_vs_mc():
         assert 80 <= proposal2.proposed_qty <= 200
 
 
+# --------------------------------------------------------------------------
+# MC vs. intermittent simulation priority
+# --------------------------------------------------------------------------
+
+class TestMCPriorityOverSimulation:
+    """MC selected→simulation must NOT override the proposed qty.
+    Simple/intermittent selected→simulation still activates for low demand."""
+
+    def _make_intermittent_sku(self, csv_layer, sku_id: str, forecast_method: str):
+        """Pack size 6, lead 1d+review 1d, daily_avg 1.4 pz/gg → below threshold 6/2.5=2.4."""
+        sku = SKU(
+            sku=sku_id,
+            description="Intermittent test",
+            ean=None,
+            moq=6,
+            pack_size=6,           # threshold = 6/2.5 = 2.4
+            lead_time_days=1,
+            review_period=1,
+            safety_stock=4,
+            shelf_life_days=0,
+            max_stock=300,
+            reorder_point=0,
+            demand_variability=DemandVariability.LOW,
+            forecast_method=forecast_method,
+        )
+        csv_layer.write_sku(sku)
+        # Add 10 sales records so sparse-history guard does not fire
+        for i in range(1, 11):
+            csv_layer.write_sales([SalesRecord(
+                date=date(2026, 3, i),
+                sku=sku_id,
+                qty_sold=8,  # 8 pz every few days → avg ~1.4/day over 30d
+            )])
+        return sku
+
+    def test_mc_primary_blocks_simulation(self):
+        """When forecast_method=monte_carlo, simulation_used must be False."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_layer = CSVLayer(data_dir=Path(tmpdir))
+            sku = self._make_intermittent_sku(csv_layer, "MC_LATTE", "monte_carlo")
+
+            from backend.src.domain.models import Stock
+            stock = Stock(sku="MC_LATTE", on_hand=12, on_order=0)
+
+            workflow = OrderWorkflow(csv_layer, lead_time_days=1)
+            proposal = workflow.generate_proposal(
+                sku="MC_LATTE",
+                description="Latte UHT intermittent",
+                current_stock=stock,
+                daily_sales_avg=1.4,
+                sku_obj=sku,
+            )
+
+            # MC must be the driver: simulation_used must be False
+            assert proposal.simulation_used is False, (
+                "simulation_used should be False when forecast_method=monte_carlo"
+            )
+            assert proposal.mc_method_used == "monte_carlo", (
+                "mc_method_used should be 'monte_carlo'"
+            )
+            # proposed_qty derives from S−IP; with IP=12 and S≈15 it may be 0 or small
+            # The critical assertion is that simulation did NOT take over
+            assert proposal.proposed_qty >= 0  # sanity only
+
+    def test_simple_method_activates_simulation_for_intermittent(self):
+        """When forecast_method=simple and demand is intermittent, simulation_used=True."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_layer = CSVLayer(data_dir=Path(tmpdir))
+            # Override global method to simple
+            settings = csv_layer.read_settings()
+            settings["reorder_engine"]["forecast_method"] = {"value": "simple"}
+            csv_layer.write_settings(settings)
+
+            sku = self._make_intermittent_sku(csv_layer, "SIMPLE_LATTE", "")  # use global
+
+            from backend.src.domain.models import Stock
+            stock = Stock(sku="SIMPLE_LATTE", on_hand=3, on_order=0)
+
+            workflow = OrderWorkflow(csv_layer, lead_time_days=1)
+            proposal = workflow.generate_proposal(
+                sku="SIMPLE_LATTE",
+                description="Simple method intermittent",
+                current_stock=stock,
+                daily_sales_avg=1.4,
+                sku_obj=sku,
+            )
+
+            # Simple + low demand → simulation should activate
+            assert proposal.simulation_used is True, (
+                "simulation_used should be True for simple method with intermittent demand"
+            )
+            assert proposal.mc_method_used == "", (
+                "mc_method_used should be empty for simple forecast"
+            )
+
+    def test_mc_primary_explainability_consistency(self):
+        """When MC is primary, forecast_method and mc_method_used must agree."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_layer = CSVLayer(data_dir=Path(tmpdir))
+            sku = self._make_intermittent_sku(csv_layer, "MC_EXPL", "monte_carlo")
+
+            from backend.src.domain.models import Stock
+            stock = Stock(sku="MC_EXPL", on_hand=6, on_order=0)
+
+            workflow = OrderWorkflow(csv_layer, lead_time_days=1)
+            proposal = workflow.generate_proposal(
+                sku="MC_EXPL",
+                description="MC explainability test",
+                current_stock=stock,
+                daily_sales_avg=1.4,
+                sku_obj=sku,
+            )
+
+            # forecast_method on proposal should be monte_carlo
+            assert proposal.forecast_method == "monte_carlo", (
+                "proposal.forecast_method must be 'monte_carlo'"
+            )
+            # simulation_used must be False (MC is primary)
+            assert not proposal.simulation_used, (
+                "proposal.simulation_used must be False when MC is primary"
+            )
+            # Both fields consistent: no contradictory explainability
+            if proposal.mc_method_used == "monte_carlo":
+                assert not proposal.simulation_used, (
+                    "Cannot have mc_method_used=monte_carlo AND simulation_used=True "
+                    "after the fix — that was the original bug"
+                )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
