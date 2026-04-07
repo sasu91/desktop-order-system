@@ -2659,6 +2659,17 @@ class DesktopOrderApp:
                 sku_oos_data_local: dict = {}
                 oos_candidates_local: list = []
 
+                # Pre-build per-SKU indexes for O(1) lookup inside the loop.
+                # Without this every calculate_daily_sales_average call would
+                # linearly scan the full global lists (O(N_sku × T_all)).
+                from collections import defaultdict as _defaultdict
+                _txn_index = _defaultdict(list)
+                for _t in transactions:
+                    _txn_index[_t.sku].append(_t)
+                _sales_index = _defaultdict(list)
+                for _s in sales_records:
+                    _sales_index[_s.sku].append(_s)
+
                 for i, sku_id in enumerate(sku_ids):
                     sku_obj = skus_by_id.get(sku_id)
                     description = sku_obj.description if sku_obj else "N/A"
@@ -2676,6 +2687,8 @@ class DesktopOrderApp:
                             asof_date=date.today(),
                             oos_detection_mode=oos_detection_mode,
                             return_details=True,
+                            sku_txns=_txn_index[sku_id],
+                            sku_sales=_sales_index[sku_id],
                         )
                     )
                     history_valid_days = oos_lookback_days - len(oos_days_list) - len(out_of_assortment_days)

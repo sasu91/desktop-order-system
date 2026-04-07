@@ -1956,6 +1956,8 @@ def calculate_daily_sales_average(
     asof_date: Optional[date] = None,
     oos_detection_mode: str = "strict",
     return_details: bool = False,
+    sku_txns: list | None = None,
+    sku_sales: list | None = None,
 ) -> tuple:
     """
     Calculate average daily sales for a SKU using calendar-based approach.
@@ -2011,12 +2013,16 @@ def calculate_daily_sales_average(
     
     if asof_date is None:
         asof_date = date.today()
-    
+
+    # Resolve per-SKU lists: use pre-filtered lists when provided by caller
+    # (avoids O(T_global) scans when called N_sku times from a bulk worker).
+    _txns: list = sku_txns if sku_txns is not None else [t for t in (transactions or []) if t.sku == sku]
+    _srs: list  = sku_sales if sku_sales is not None else [s for s in (sales_records or []) if s.sku == sku]
+
     # Build sales map: {date: qty_sold}
     sku_sales_map = {}
-    for s in sales_records:
-        if s.sku == sku:
-            sku_sales_map[s.date] = sku_sales_map.get(s.date, 0) + s.qty_sold
+    for s in _srs:
+        sku_sales_map[s.date] = sku_sales_map.get(s.date, 0) + s.qty_sold
     
     # Generate calendar days range
     start_date = asof_date - timedelta(days=days_lookback - 1)
@@ -2030,11 +2036,9 @@ def calculate_daily_sales_average(
     for _d in sku_sales_map:
         if _first_activity is None or _d < _first_activity:
             _first_activity = _d
-    if transactions:
-        for _t in transactions:
-            if _t.sku == sku:
-                if _first_activity is None or _t.date < _first_activity:
-                    _first_activity = _t.date
+    for _t in _txns:
+        if _first_activity is None or _t.date < _first_activity:
+            _first_activity = _t.date
 
     # Build map of out-of-assortment periods from ledger
     out_of_assortment_days = set()
@@ -2046,11 +2050,11 @@ def calculate_daily_sales_average(
             if _d < _first_activity:
                 out_of_assortment_days.add(_d)
 
-    if transactions:
+    if _txns:
         # Find all assortment transitions for this SKU
         assortment_events = [
-            txn for txn in transactions 
-            if txn.sku == sku and txn.event in (EventType.ASSORTMENT_OUT, EventType.ASSORTMENT_IN)
+            txn for txn in _txns
+            if txn.event in (EventType.ASSORTMENT_OUT, EventType.ASSORTMENT_IN)
         ]
         
         # Sort by date
@@ -2106,18 +2110,19 @@ def calculate_daily_sales_average(
     oos_days = set()
     oos_override_days = set()  # Days with OOS_ESTIMATE_OVERRIDE marker
 
-    if transactions:
+    if _txns:
         # First, identify days with override markers
-        for txn in transactions:
-            if txn.sku == sku and txn.note and "OOS_ESTIMATE_OVERRIDE:" in txn.note:
+        for txn in _txns:
+            if txn.note and "OOS_ESTIMATE_OVERRIDE:" in txn.note:
                 oos_override_days.add(txn.date)
 
         # ── FAST PATH: single forward pass instead of 30 × calculate_asof ──
         # One call to get base state at start of lookback window, then replay
         # only events that fall within [start_date, asof_date).  This reduces
         # complexity from O(days × T_all) to O(T_sku_total + days).
+        # Pass per-SKU lists to calculate_asof so it doesn't re-scan global lists.
         base_stock = StockCalculator.calculate_asof(
-            sku, start_date, transactions, sales_records
+            sku, start_date, _txns, _srs
         )
         oh = base_stock.on_hand
         oo = base_stock.on_order
@@ -2125,10 +2130,10 @@ def calculate_daily_sales_average(
         # Collect and sort SKU-filtered events in the lookback window
         _priority = StockCalculator.EVENT_PRIORITY
         _window_txns: list = [
-            t for t in transactions
-            if t.sku == sku and start_date <= t.date < asof_date
+            t for t in _txns
+            if start_date <= t.date < asof_date
         ]
-        if sales_records:
+        if _srs:
             # Deduplicate: skip sales_records dates that already have an explicit
             # SALE transaction in the ledger (same dedup as StockCalculator.calculate_asof).
             # Without this, EOD-generated records (which write BOTH a SALE transaction AND
@@ -2138,8 +2143,8 @@ def calculate_daily_sales_average(
             }
             _window_txns.extend(
                 Transaction(date=s.date, sku=s.sku, event=EventType.SALE, qty=s.qty_sold)
-                for s in sales_records
-                if s.sku == sku and start_date <= s.date < asof_date
+                for s in _srs
+                if start_date <= s.date < asof_date
                 and s.date not in _window_dates_with_ledger_sale
             )
         _window_txns.sort(key=lambda t: (t.date, _priority.get(t.event, 99)))
