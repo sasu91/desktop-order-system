@@ -554,34 +554,53 @@ class OrderWorkflow:
             
             mc_horizon_days_used = horizon_days
             
-            # Fetch historical sales data for SKU
+            # Fetch historical sales data for SKU (with lookback window to avoid stale outliers)
             sales_records = self.csv_layer.read_sales()
+            mc_history_lookback = int(
+                settings.get("monte_carlo", {}).get("history_days", {}).get("value", 90)
+                if settings else 90
+            )
+            mc_cutoff = date.today() - timedelta(days=mc_history_lookback)
             sku_sales_history = [
                 {"date": rec.date, "qty_sold": rec.qty_sold}
-                for rec in sales_records if rec.sku == sku
+                for rec in sales_records if rec.sku == sku and rec.date >= mc_cutoff
             ]
-            
-            # Run Monte Carlo forecast
+
+            # Run Monte Carlo forecast (with sparse-history guard)
+            # When fewer than 5 records exist in the window, the MC empirical bootstrap
+            # falls into its early-exit path and returns mean(few_records)/day — which can
+            # be wildly wrong (e.g. one EOD bulk-sale record dominates the average).
+            # In that case fall back to daily_sales_avg which is calendar-normalised.
+            _MC_MIN_HISTORY = 5
             from ..forecast import monte_carlo_forecast
             try:
-                mc_forecast_values = monte_carlo_forecast(
-                    history=sku_sales_history,
-                    horizon_days=horizon_days,
-                    distribution=mc_params["distribution"],
-                    n_simulations=mc_params["n_simulations"],
-                    random_seed=mc_params["random_seed"],
-                    output_stat=mc_params["output_stat"],
-                    output_percentile=mc_params["output_percentile"],
-                    expected_waste_rate=expected_waste_rate,  # NEW (Fase 3): shelf life waste adjustment
-                )
-                
+                if len(sku_sales_history) < _MC_MIN_HISTORY:
+                    logging.warning(
+                        f"MC: storico insufficiente per {sku} "
+                        f"({len(sku_sales_history)} record < {_MC_MIN_HISTORY} nell'ultimo "
+                        f"{mc_history_lookback}gg). "
+                        f"Usata media giornaliera ({daily_sales_avg:.2f} pz/gg) come fallback MC."
+                    )
+                    mc_forecast_values = [max(0.0, float(daily_sales_avg))] * horizon_days
+                else:
+                    mc_forecast_values = monte_carlo_forecast(
+                        history=sku_sales_history,
+                        horizon_days=horizon_days,
+                        distribution=mc_params["distribution"],
+                        n_simulations=mc_params["n_simulations"],
+                        random_seed=mc_params["random_seed"],
+                        output_stat=mc_params["output_stat"],
+                        output_percentile=mc_params["output_percentile"],
+                        expected_waste_rate=expected_waste_rate,  # NEW (Fase 3): shelf life waste adjustment
+                    )
+
                 # Build summary of forecast values
                 if mc_forecast_values:
                     mc_min = int(min(mc_forecast_values))
                     mc_max = int(max(mc_forecast_values))
                     mc_avg = int(sum(mc_forecast_values) / len(mc_forecast_values))
                     mc_forecast_values_summary = f"min={mc_min}, max={mc_max}, avg={mc_avg}"
-                
+
                 # Use sum of forecast over horizon as total demand
                 forecast_qty = int(sum(mc_forecast_values))
                 lead_time_demand = int(sum(mc_forecast_values[:effective_lead_time])) if len(mc_forecast_values) >= effective_lead_time else forecast_qty
@@ -833,30 +852,44 @@ class OrderWorkflow:
                 mc_horizon_days_used = mc_horizon
                 
                 sales_records = self.csv_layer.read_sales()
+                mc_history_lookback_cmp = int(
+                    settings.get("monte_carlo", {}).get("history_days", {}).get("value", 90)
+                    if settings else 90
+                )
+                mc_cutoff_cmp = date.today() - timedelta(days=mc_history_lookback_cmp)
                 sku_sales_history = [
                     {"date": rec.date, "qty_sold": rec.qty_sold}
-                    for rec in sales_records if rec.sku == sku
+                    for rec in sales_records if rec.sku == sku and rec.date >= mc_cutoff_cmp
                 ]
-                
+
                 from ..forecast import monte_carlo_forecast
-                mc_forecast_values = monte_carlo_forecast(
-                    history=sku_sales_history,
-                    horizon_days=mc_horizon,
-                    distribution=mc_params["distribution"],
-                    n_simulations=mc_params["n_simulations"],
-                    random_seed=mc_params["random_seed"],
-                    output_stat=mc_params["output_stat"],
-                    output_percentile=mc_params["output_percentile"],
-                    expected_waste_rate=expected_waste_rate,  # NEW (Fase 3): shelf life waste adjustment
-                )
-                
+                _MC_MIN_HISTORY_CMP = 5
+                if len(sku_sales_history) < _MC_MIN_HISTORY_CMP:
+                    logging.warning(
+                        f"MC comparazione: storico insufficiente per {sku} "
+                        f"({len(sku_sales_history)} record < {_MC_MIN_HISTORY_CMP}). "
+                        f"Usata media giornaliera ({daily_sales_avg:.2f} pz/gg) come fallback MC."
+                    )
+                    mc_forecast_values = [max(0.0, float(daily_sales_avg))] * mc_horizon
+                else:
+                    mc_forecast_values = monte_carlo_forecast(
+                        history=sku_sales_history,
+                        horizon_days=mc_horizon,
+                        distribution=mc_params["distribution"],
+                        n_simulations=mc_params["n_simulations"],
+                        random_seed=mc_params["random_seed"],
+                        output_stat=mc_params["output_stat"],
+                        output_percentile=mc_params["output_percentile"],
+                        expected_waste_rate=expected_waste_rate,  # NEW (Fase 3): shelf life waste adjustment
+                    )
+
                 # Build summary of forecast values
                 if mc_forecast_values:
                     mc_min = int(min(mc_forecast_values))
                     mc_max = int(max(mc_forecast_values))
                     mc_avg = int(sum(mc_forecast_values) / len(mc_forecast_values))
                     mc_forecast_values_summary = f"min={mc_min}, max={mc_max}, avg={mc_avg}"
-                
+
                 mc_forecast_qty = int(sum(mc_forecast_values))
                 mc_S = mc_forecast_qty + safety_stock
                 mc_proposed_raw = max(0, mc_S - inventory_position)
@@ -1587,6 +1620,70 @@ class OrderWorkflow:
         return confirmations, transactions
 
 
+def _find_max_viable_shelf_life_qty(
+    lots: list,
+    receipt_date,
+    sku_shelf_life_days: int,
+    min_shelf_life_days: int,
+    waste_horizon_days: int,
+    forecast_daily_demand: float,
+    pack_size: int,
+    waste_risk_threshold: float,
+    max_proposed_qty: int,
+) -> int:
+    """
+    Find the largest order quantity (multiple of pack_size) whose demand-adjusted
+    forward waste risk stays BELOW waste_risk_threshold.
+
+    Algorithm:
+    1. Estimate max viable using: daily_demand × shelf_life_days - usable_at_receipt
+    2. Round DOWN to pack_size multiple
+    3. Verify with calculate_forward_waste_risk_demand_adjusted; if still over threshold,
+       reduce by one pack at a time (up to 5 iterations) until below threshold or zero.
+
+    Returns 0 if no viable quantity can be found.
+    """
+    from ..domain.ledger import ShelfLifeCalculator
+    if forecast_daily_demand <= 0 or sku_shelf_life_days <= 0 or pack_size <= 0:
+        return 0
+
+    # Usable stock already at receipt date (aged forward, without incoming order)
+    usable_at_receipt = ShelfLifeCalculator.calculate_usable_stock(
+        lots=lots,
+        check_date=receipt_date,
+        min_shelf_life_days=min_shelf_life_days,
+        waste_horizon_days=waste_horizon_days,
+    ).usable_qty
+
+    # Max order = how much can be sold within one shelf life window minus existing usable stock
+    max_viable_estimate = int(forecast_daily_demand * sku_shelf_life_days) - usable_at_receipt
+    max_viable_estimate = max(0, max_viable_estimate)
+    max_viable_estimate = (max_viable_estimate // pack_size) * pack_size  # round DOWN
+    max_viable_estimate = min(max_viable_estimate, max_proposed_qty)
+
+    if max_viable_estimate <= 0:
+        return 0
+
+    # Verify and reduce (up to 5 steps of one pack each) to account for lot timing details
+    for attempt in range(6):
+        qty_to_test = max_viable_estimate - attempt * pack_size
+        if qty_to_test <= 0:
+            return 0
+        risk, _, _, _ = ShelfLifeCalculator.calculate_forward_waste_risk_demand_adjusted(
+            lots=lots,
+            receipt_date=receipt_date,
+            proposed_qty=qty_to_test,
+            sku_shelf_life_days=sku_shelf_life_days,
+            min_shelf_life_days=min_shelf_life_days,
+            waste_horizon_days=waste_horizon_days,
+            forecast_daily_demand=forecast_daily_demand,
+        )
+        if risk < waste_risk_threshold:
+            return qty_to_test
+
+    return 0
+
+
 def apply_order_constraints(
     proposed_qty_raw: int,
     pack_size: int,
@@ -1703,7 +1800,19 @@ def apply_order_constraints(
             f"max_stock: {proposed_qty_before_cap} → {proposed_qty} "
             f"(capped by max_stock={max_stock}, IP={inventory_position})"
         )
-    
+
+    # === STEP 3b: WARN WHEN MAX_STOCK EXCEEDS SHELF LIFE COVERAGE ===
+    if shelf_life_days > 0 and daily_sales_avg > 0:
+        max_stock_days_coverage = max_stock / daily_sales_avg
+        if max_stock_days_coverage > shelf_life_days * 1.1:
+            suggested_max = int(daily_sales_avg * shelf_life_days)
+            constraints_applied.append(
+                f"⚠️ max_stock={max_stock} pz ({max_stock_days_coverage:.0f}gg copertura) "
+                f"supera shelf life ({shelf_life_days}gg): "
+                f"considerare max_stock ≤ {suggested_max} pz "
+                f"({shelf_life_days}gg × {daily_sales_avg:.1f}pz/gg)"
+            )
+
     # === STEP 4: SHELF LIFE PENALTY ===
     shelf_life_penalty_applied = False
     shelf_life_penalty_message = ""
@@ -1776,14 +1885,46 @@ def apply_order_constraints(
         # Use DEMAND-ADJUSTED waste risk for penalty decision (more realistic)
         if waste_risk_demand_adjusted_percent >= waste_risk_threshold:
             original_proposed = proposed_qty
-            proposed_qty, penalty_msg = ShelfLifeCalculator.apply_shelf_life_penalty(
-                proposed_qty=proposed_qty,
-                waste_risk_percent=waste_risk_demand_adjusted_percent,
-                waste_risk_threshold=waste_risk_threshold,
-                penalty_mode=waste_penalty_mode,
-                penalty_factor=waste_penalty_factor
-            )
-            
+
+            if waste_penalty_mode == "hard":
+                # Hard mode: instead of immediately blocking at 0, search for the maximum
+                # order quantity whose waste risk stays BELOW the threshold.
+                # This avoids a complete stockout when a smaller order is actually viable.
+                viable_qty = _find_max_viable_shelf_life_qty(
+                    lots=lots or [],
+                    receipt_date=receipt_date_calc,
+                    sku_shelf_life_days=shelf_life_days,
+                    min_shelf_life_days=min_shelf_life_calc,
+                    waste_horizon_days=waste_horizon_days_calc,
+                    forecast_daily_demand=forecast_daily_demand,
+                    pack_size=pack_size,
+                    waste_risk_threshold=waste_risk_threshold,
+                    max_proposed_qty=proposed_qty,
+                )
+                if viable_qty > 0:
+                    proposed_qty = viable_qty
+                    penalty_msg = (
+                        f"⚠️ Ridotto a max praticabile: {viable_qty} pz "
+                        f"(rischio waste {waste_risk_demand_adjusted_percent:.1f}% → "
+                        f"sotto soglia {waste_risk_threshold:.1f}% con shelf life {shelf_life_days}gg)"
+                    )
+                else:
+                    proposed_qty = 0
+                    penalty_msg = (
+                        f"❌ BLOCKED: Waste risk {waste_risk_demand_adjusted_percent:.1f}% "
+                        f"> {waste_risk_threshold:.1f}% (hard mode, "
+                        f"nessuna qty praticabile con shelf life {shelf_life_days}gg)"
+                    )
+            else:
+                # Soft penalty: reduce by configured factor
+                proposed_qty, penalty_msg = ShelfLifeCalculator.apply_shelf_life_penalty(
+                    proposed_qty=proposed_qty,
+                    waste_risk_percent=waste_risk_demand_adjusted_percent,
+                    waste_risk_threshold=waste_risk_threshold,
+                    penalty_mode=waste_penalty_mode,
+                    penalty_factor=waste_penalty_factor
+                )
+
             if penalty_msg:
                 shelf_life_penalty_applied = True
                 shelf_life_penalty_message = penalty_msg
