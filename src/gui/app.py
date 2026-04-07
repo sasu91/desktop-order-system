@@ -2792,40 +2792,40 @@ class DesktopOrderApp:
                         try:
                             pack_size = sku_obj.pack_size if sku_obj else 1
                             estimate_pz = estimate_colli * pack_size
-                            estimate_note = f"OOS_ESTIMATE_OVERRIDE:{estimate_date.isoformat()}"
-                            existing_override = any(
-                                t.sku == sku_id and t.date == estimate_date and estimate_note in (t.note or "")
-                                for t in transactions
+                            # Idempotent upsert: replaces legacy WASTE+note pattern with clean
+                            # OOS_OVERRIDE event; safe to call multiple times for same SKU+date.
+                            new_sale = self.csv_layer.upsert_oos_estimate_sale(
+                                sku_id, estimate_date, estimate_pz
                             )
-                            if not existing_override:
-                                from ..domain.models import SalesRecord
-                                new_sale = SalesRecord(date=estimate_date, sku=sku_id, qty_sold=estimate_pz)
-                                self.csv_layer.write_sales([new_sale])
-                                sales_records.append(new_sale)
+                            new_marker = self.csv_layer.upsert_oos_override_marker(
+                                sku_id, estimate_date, estimate_colli, estimate_pz
+                            )
+                            # Refresh in-memory lists (replace stale entries for same SKU+date)
+                            sales_records = [
+                                s for s in sales_records
+                                if not (s.sku == sku_id and s.date == estimate_date)
+                            ] + [new_sale]
+                            transactions = [
+                                t for t in transactions
+                                if not (
+                                    t.sku == sku_id and t.date == estimate_date
+                                    and t.event == EventType.OOS_OVERRIDE
+                                )
+                            ] + [new_marker]
 
-                                marker_txn = Transaction(
-                                    date=estimate_date,
-                                    sku=sku_id,
-                                    event=EventType.WASTE,
-                                    qty=0,
-                                    note=f"{estimate_note}|{estimate_colli} colli ({estimate_pz} pz) - prevents OOS counting",
-                                )
-                                self.csv_layer.write_transaction(marker_txn)
-                                transactions.append(marker_txn)
-
-                                daily_sales, oos_days_count, _oos_days_list, _ooa_days = calculate_daily_sales_average(
-                                    sales_records, sku_id,
-                                    days_lookback=oos_lookback_days,
-                                    transactions=transactions,
-                                    asof_date=date.today(),
-                                    oos_detection_mode=oos_detection_mode,
-                                    return_details=True,
-                                )
-                                history_valid_days = oos_lookback_days - len(_oos_days_list) - len(_ooa_days)
-                                logger.info(
-                                    f"OOS estimate registered for {sku_id} on {estimate_date}: "
-                                    f"{estimate_colli} colli ({estimate_pz} pz)"
-                                )
+                            daily_sales, oos_days_count, _oos_days_list, _ooa_days = calculate_daily_sales_average(
+                                sales_records, sku_id,
+                                days_lookback=oos_lookback_days,
+                                transactions=transactions,
+                                asof_date=date.today(),
+                                oos_detection_mode=oos_detection_mode,
+                                return_details=True,
+                            )
+                            history_valid_days = oos_lookback_days - len(_oos_days_list) - len(_ooa_days)
+                            logger.info(
+                                f"OOS estimate registered for {sku_id} on {estimate_date}: "
+                                f"{estimate_colli} colli ({estimate_pz} pz)"
+                            )
                         except Exception as e:
                             logger.error(f"Failed to register OOS estimate for {sku_id}: {e}", exc_info=True)
 

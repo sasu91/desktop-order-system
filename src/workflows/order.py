@@ -2111,15 +2111,19 @@ def calculate_daily_sales_average(
     oos_override_days = set()  # Days with OOS_ESTIMATE_OVERRIDE marker
 
     if _txns:
-        # First, identify days with override markers
+        # First, identify days with override markers (dual detection: new OOS_OVERRIDE
+        # event type + legacy WASTE-with-note for backward compatibility)
         for txn in _txns:
-            if txn.note and "OOS_ESTIMATE_OVERRIDE:" in txn.note:
+            if txn.event == EventType.OOS_OVERRIDE:                    # new clean marker
+                oos_override_days.add(txn.date)
+            elif txn.note and "OOS_ESTIMATE_OVERRIDE:" in txn.note:    # legacy backward compat
                 oos_override_days.add(txn.date)
 
         # ── FAST PATH: single forward pass instead of 30 × calculate_asof ──
         # One call to get base state at start of lookback window, then replay
-        # only events that fall within [start_date, asof_date).  This reduces
+        # only events that fall within [start_date, asof_date].  This reduces
         # complexity from O(days × T_all) to O(T_sku_total + days).
+        # Boundary is inclusive (<=) so estimates written for today are visible.
         # Pass per-SKU lists to calculate_asof so it doesn't re-scan global lists.
         base_stock = StockCalculator.calculate_asof(
             sku, start_date, _txns, _srs
@@ -2131,7 +2135,7 @@ def calculate_daily_sales_average(
         _priority = StockCalculator.EVENT_PRIORITY
         _window_txns: list = [
             t for t in _txns
-            if start_date <= t.date < asof_date
+            if start_date <= t.date <= asof_date
         ]
         if _srs:
             # Deduplicate: skip sales_records dates that already have an explicit
@@ -2144,7 +2148,7 @@ def calculate_daily_sales_average(
             _window_txns.extend(
                 Transaction(date=s.date, sku=s.sku, event=EventType.SALE, qty=s.qty_sold)
                 for s in _srs
-                if start_date <= s.date < asof_date
+                if start_date <= s.date <= asof_date
                 and s.date not in _window_dates_with_ledger_sale
             )
         _window_txns.sort(key=lambda t: (t.date, _priority.get(t.event, 99)))

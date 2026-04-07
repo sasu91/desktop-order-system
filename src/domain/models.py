@@ -23,6 +23,7 @@ class EventType(Enum):
     EXPORT_LOG = "EXPORT_LOG"  # Export operation log - no stock impact
     ASSORTMENT_IN = "ASSORTMENT_IN"    # SKU back in assortment - no stock impact, affects forecast
     ASSORTMENT_OUT = "ASSORTMENT_OUT"  # SKU out of assortment - no stock impact, affects forecast
+    OOS_OVERRIDE = "OOS_OVERRIDE"      # Lost-sale estimate marker: no stock impact; excludes day from OOS detection
 
 
 class DemandVariability(Enum):

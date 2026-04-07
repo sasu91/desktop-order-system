@@ -29,6 +29,7 @@ class StockCalculator:
         EventType.WASTE: 2,
         EventType.ADJUST: 2,
         EventType.UNFULFILLED: 3,  # Tracking only
+        EventType.OOS_OVERRIDE: 99,  # No stock impact; marker only
     }
     
     @staticmethod

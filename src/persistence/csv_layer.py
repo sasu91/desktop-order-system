@@ -1144,7 +1144,74 @@ class CSVLayer:
             writer.writerow(["date", "sku", "qty_sold", "promo_flag"])
             for sale in sales:
                 writer.writerow([sale.date.isoformat(), sale.sku, str(sale.qty_sold), str(sale.promo_flag)])
-    
+
+    def upsert_oos_estimate_sale(self, sku: str, estimate_date: date, qty_pz: int) -> SalesRecord:
+        """
+        Idempotent upsert of a lost-sale estimate entry for a specific SKU+date.
+
+        If a SalesRecord for (sku, estimate_date) already exists it is replaced;
+        otherwise a new row is appended.  Returns the resulting SalesRecord.
+        """
+        all_sales = self.read_sales()
+        found = False
+        updated_sales = []
+        for s in all_sales:
+            if s.sku == sku and s.date == estimate_date:
+                updated_sales.append(SalesRecord(date=estimate_date, sku=sku, qty_sold=qty_pz))
+                found = True
+            else:
+                updated_sales.append(s)
+        new_record = SalesRecord(date=estimate_date, sku=sku, qty_sold=qty_pz)
+        if not found:
+            updated_sales.append(new_record)
+        self.write_sales(updated_sales)
+        return new_record
+
+    def upsert_oos_override_marker(
+        self,
+        sku: str,
+        estimate_date: date,
+        colli: int,
+        qty_pz: int,
+    ) -> "Transaction":
+        """
+        Idempotent upsert of an OOS_OVERRIDE marker transaction for a specific SKU+date.
+
+        Any existing OOS_OVERRIDE transaction for the same (sku, estimate_date) is
+        replaced (update-in-place semantics).  Legacy WASTE+OOS_ESTIMATE_OVERRIDE
+        markers for the same date are removed and replaced by the new event type.
+        Returns the resulting Transaction.
+        """
+        from ..domain.models import EventType  # local import to avoid circular
+        note = f"OOS_OVERRIDE:{estimate_date.isoformat()}|{colli} colli ({qty_pz} pz)"
+        new_txn = Transaction(
+            date=estimate_date,
+            sku=sku,
+            event=EventType.OOS_OVERRIDE,
+            qty=0,
+            note=note,
+        )
+        all_txns = self.read_transactions()
+        filtered = []
+        for t in all_txns:
+            # Remove exact-type duplicate
+            if t.sku == sku and t.date == estimate_date and t.event == EventType.OOS_OVERRIDE:
+                continue
+            # Remove legacy WASTE qty=0 marker for same day
+            if (
+                t.sku == sku
+                and t.date == estimate_date
+                and t.event == EventType.WASTE
+                and t.qty == 0
+                and t.note
+                and "OOS_ESTIMATE_OVERRIDE:" in t.note
+            ):
+                continue
+            filtered.append(t)
+        filtered.append(new_txn)
+        self.overwrite_transactions(filtered)
+        return new_txn
+
     # ============ Promo Calendar Operations ============
     
     def read_promo_calendar(self) -> List[PromoWindow]:

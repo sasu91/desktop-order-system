@@ -153,16 +153,20 @@ def _find_assortment_out_periods(transactions: List) -> List[Tuple[Date, Optiona
 
 def _find_override_dates(transactions: List) -> set:
     """
-    Find dates marked with OOS_ESTIMATE_OVERRIDE in transaction notes.
-    
+    Find dates marked as OOS estimate overrides in the transaction ledger.
+    Dual detection: new OOS_OVERRIDE event type (preferred) + legacy WASTE-
+    with-note pattern for backward compatibility.
+
     Returns set of dates to exclude from OOS calculation.
     """
     override_dates = set()
-    
+
     for txn in transactions:
-        if txn.note and "OOS_ESTIMATE_OVERRIDE" in txn.note:
+        if txn.event == EventType.OOS_OVERRIDE:                    # new clean marker
             override_dates.add(txn.date)
-    
+        elif txn.note and "OOS_ESTIMATE_OVERRIDE" in txn.note:    # legacy backward compat
+            override_dates.add(txn.date)
+
     return override_dates
 
 
