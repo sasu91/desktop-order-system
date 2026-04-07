@@ -2060,8 +2060,15 @@ def calculate_daily_sales_average(
         currently_out = False
         out_start = None
         
-        # If first event in history is ASSORTMENT_IN, SKU was initially OUT
-        if assortment_events and assortment_events[0].event == EventType.ASSORTMENT_IN:
+        # If first event in history is ASSORTMENT_IN, SKU was initially OUT —
+        # BUT ONLY if the SKU had no prior activity before that event.
+        # An orphan ASSORTMENT_IN on a SKU that was already trading (visible
+        # sales or transactions BEFORE the ASSORTMENT_IN date) is spurious
+        # (e.g. written by SKU_EDIT when toggling in_assortment=True on an
+        # already-active SKU). In that case, do NOT assume was-out-from-start.
+        if (assortment_events
+                and assortment_events[0].event == EventType.ASSORTMENT_IN
+                and (_first_activity is None or _first_activity >= assortment_events[0].date)):
             currently_out = True
             out_start = start_date  # Entire lookback period starts as OUT
         
@@ -2122,10 +2129,18 @@ def calculate_daily_sales_average(
             if t.sku == sku and start_date <= t.date < asof_date
         ]
         if sales_records:
+            # Deduplicate: skip sales_records dates that already have an explicit
+            # SALE transaction in the ledger (same dedup as StockCalculator.calculate_asof).
+            # Without this, EOD-generated records (which write BOTH a SALE transaction AND
+            # a sales.csv entry for the same day) would double-deplete the running stock.
+            _window_dates_with_ledger_sale = {
+                t.date for t in _window_txns if t.event == EventType.SALE
+            }
             _window_txns.extend(
                 Transaction(date=s.date, sku=s.sku, event=EventType.SALE, qty=s.qty_sold)
                 for s in sales_records
                 if s.sku == sku and start_date <= s.date < asof_date
+                and s.date not in _window_dates_with_ledger_sale
             )
         _window_txns.sort(key=lambda t: (t.date, _priority.get(t.event, 99)))
 
