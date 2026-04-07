@@ -462,13 +462,17 @@ class OrderWorkflow:
                     unusable_qty = usable_result.unusable_qty
                     waste_risk_percent = usable_result.waste_risk_percent
                 else:
-                    # Lots exist but are lower than ledger (partial discrepancy) → fallback
-                    logging.warning(
-                        f"Shelf life fallback for {sku}: "
-                        f"lots total={lots_total}, ledger on_hand={ledger_stock}. "
-                        f"Using ledger stock, waste risk set to 0%. "
-                        f"Reconcile lots.csv with ledger to restore shelf life tracking."
-                    )
+                    if ledger_stock > 0:
+                        # Partial discrepancy: lots total is below ledger stock.
+                        # Real reconciliation needed — warn operator.
+                        logging.warning(
+                            f"Shelf life fallback for {sku}: "
+                            f"lots total={lots_total}, ledger on_hand={ledger_stock}. "
+                            f"Using ledger stock, waste risk set to 0%. "
+                            f"Reconcile lots.csv with ledger to restore shelf life tracking."
+                        )
+                    # else: lots_total=0 and ledger_stock=0 → SKU is out of stock,
+                    # both sources agree; no warning needed.
                     usable_qty = ledger_stock
                     unusable_qty = 0
                     waste_risk_percent = 0.0
@@ -1876,10 +1880,31 @@ def calculate_daily_sales_average(
     # Generate calendar days range
     start_date = asof_date - timedelta(days=days_lookback - 1)
     calendar_days = [start_date + timedelta(days=i) for i in range(days_lookback)]
-    
+
+    # Find first date with any ledger/sales activity for this SKU.
+    # Days before this anchor are "pre-existence" and should be excluded from
+    # both the OOS count and the valid-day denominator (treated like
+    # out-of-assortment so they don't inflate oos_days_count or deflate avg).
+    _first_activity = None
+    for _d in sku_sales_map:
+        if _first_activity is None or _d < _first_activity:
+            _first_activity = _d
+    if transactions:
+        for _t in transactions:
+            if _t.sku == sku:
+                if _first_activity is None or _t.date < _first_activity:
+                    _first_activity = _t.date
+
     # Build map of out-of-assortment periods from ledger
     out_of_assortment_days = set()
-    
+
+    # Pre-existence: mark days before the SKU's first known activity as excluded.
+    # This prevents "no data before SKU was created" from being counted as OOS.
+    if _first_activity and _first_activity > start_date:
+        for _d in calendar_days:
+            if _d < _first_activity:
+                out_of_assortment_days.add(_d)
+
     if transactions:
         # Find all assortment transitions for this SKU
         assortment_events = [
@@ -1921,7 +1946,14 @@ def calculate_daily_sales_average(
                 if current in calendar_days:
                     out_of_assortment_days.add(current)
                 current += timedelta(days=1)
-    
+
+    # Sales-immunity: a day with recorded sales cannot be out-of-assortment.
+    # Guards against spurious ASSORTMENT_IN events (e.g. written by a SKU_EDIT
+    # that toggles in_assortment) incorrectly marking active trading days as
+    # excluded and collapsing history_valid_days to 0.
+    if sku_sales_map:
+        out_of_assortment_days -= set(sku_sales_map.keys())
+
     # Detect OOS days (if transactions provided)
     oos_days = set()
     oos_override_days = set()  # Days with OOS_ESTIMATE_OVERRIDE marker
