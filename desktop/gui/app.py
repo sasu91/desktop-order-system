@@ -2703,6 +2703,9 @@ class DesktopOrderApp:
 
         def _on_pass_a_done():
             """Called on main thread after PASS A worker finishes."""
+            # Allow estimate block to reassign these shared lists without
+            # causing UnboundLocalError for SKUs that skip the estimate branch.
+            nonlocal transactions, sales_records
             try:
                 _prog.grab_release()
                 _prog.destroy()
