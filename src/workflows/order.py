@@ -596,14 +596,29 @@ class OrderWorkflow:
 
                 # Build summary of forecast values
                 if mc_forecast_values:
-                    mc_min = int(min(mc_forecast_values))
-                    mc_max = int(max(mc_forecast_values))
-                    mc_avg = int(sum(mc_forecast_values) / len(mc_forecast_values))
-                    mc_forecast_values_summary = f"min={mc_min}, max={mc_max}, avg={mc_avg}"
+                    _mc_raw_min = min(mc_forecast_values)
+                    _mc_raw_max = max(mc_forecast_values)
+                    _mc_raw_avg = sum(mc_forecast_values) / len(mc_forecast_values)
+                    # Show decimal precision when values are sub-unit (avoids misleading 0/0/0)
+                    if _mc_raw_max < 1.0:
+                        mc_forecast_values_summary = (
+                            f"min={_mc_raw_min:.2f}, max={_mc_raw_max:.2f}, avg={_mc_raw_avg:.2f}"
+                        )
+                    else:
+                        mc_forecast_values_summary = (
+                            f"min={int(_mc_raw_min)}, max={int(_mc_raw_max)}, avg={int(_mc_raw_avg)}"
+                        )
 
-                # Use sum of forecast over horizon as total demand
-                forecast_qty = int(sum(mc_forecast_values))
-                lead_time_demand = int(sum(mc_forecast_values[:effective_lead_time])) if len(mc_forecast_values) >= effective_lead_time else forecast_qty
+                # Use rounded sum of forecast over horizon as total demand.
+                # round() prevents systematic downward bias from int() truncation
+                # on sub-unit daily averages (e.g. 0.24 pz/gg × 2 days = 0.48 →
+                # int gives 0, round gives 0, but 0.6 × 1 day → round gives 1).
+                forecast_qty = max(0, round(sum(mc_forecast_values)))
+                lead_time_demand = (
+                    max(0, round(sum(mc_forecast_values[:effective_lead_time])))
+                    if len(mc_forecast_values) >= effective_lead_time
+                    else forecast_qty
+                )
             except Exception as e:
                 # Fallback to simple forecast if MC fails
                 logging.warning(f"Monte Carlo forecast failed for SKU {sku}: {e}. Falling back to simple forecast.")
