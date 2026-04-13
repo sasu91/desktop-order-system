@@ -1932,8 +1932,16 @@ class DesktopOrderApp:
         sma_daily = proposal.daily_sales_avg
         sma_total = sma_daily * proposal.forecast_period_days
 
-        # MC: mc_comparison_qty (or mc_forecast_qty) if available; else same as SMA
-        mc_qty = proposal.mc_comparison_qty if proposal.mc_comparison_qty is not None else None
+        # MC: usa mc_comparison_qty se disponibile (metodo non-MC con confronto MC);
+        # quando MC è il metodo principale, mc_comparison_qty è None perché il blocco
+        # comparison non gira — in quel caso usa directamente forecast_qty che è già il
+        # risultato MC.
+        if proposal.mc_comparison_qty is not None:
+            mc_qty = proposal.mc_comparison_qty
+        elif proposal.mc_method_used == "monte_carlo":
+            mc_qty = proposal.forecast_qty  # MC è il metodo primario
+        else:
+            mc_qty = None
         mc_daily: float | None = None
         if mc_qty is not None and proposal.forecast_period_days > 0:
             mc_daily = mc_qty / proposal.forecast_period_days
@@ -6896,7 +6904,7 @@ class DesktopOrderApp:
         add_field_row(content_order, 3, "Periodo Revisione (giorni):", "Finestra revisione target S", review_period_var, "entry")
 
         safety_stock_var = tk.StringVar(value=bval("safety_stock", "0"))
-        add_field_row(content_order, 4, "Scorta Sicurezza:", "Stock buffer aggiunto a target", safety_stock_var, "entry")
+        add_field_row(content_order, 4, "Scorta Sicurezza:", "Valore base in pz (moltiplicato da Variabilità Domanda: HIGH ×1.5, STABLE ×0.8, altri ×1)", safety_stock_var, "entry")
 
         shelf_life_var = tk.StringVar(value=bval("shelf_life_days", "0"))
         add_field_row(content_order, 5, "Shelf Life (giorni):", "0 = nessuna scadenza", shelf_life_var, "entry")
@@ -6910,7 +6918,7 @@ class DesktopOrderApp:
         demand_var = tk.StringVar(
             value=bval("demand_variability", "STABLE", transform=lambda v: v.value if hasattr(v, "value") else str(v))
         )
-        add_field_row(content_order, 8, "Variabilità Domanda:", "Livello variabilità vendite", demand_var, "combobox", choices=["STABLE", "LOW", "HIGH", "SEASONAL"])
+        add_field_row(content_order, 8, "Variabilità Domanda:", "Modifica la scorta di sicurezza: HIGH ×1.5, STABLE ×0.8, LOW/SEASONAL invariata", demand_var, "combobox", choices=["STABLE", "LOW", "HIGH", "SEASONAL"])
 
         target_csl_var = tk.StringVar(value=bval("target_csl", "0"))
         add_field_row(content_order, 9, "CSL Target (0-1, 0=cluster):", "0=usa cluster/globale, oppure 0.01-0.99 per override", target_csl_var, "entry")

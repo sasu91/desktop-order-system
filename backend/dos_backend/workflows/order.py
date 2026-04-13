@@ -605,8 +605,10 @@ class OrderWorkflow:
                             f"min={_mc_raw_min:.2f}, max={_mc_raw_max:.2f}, avg={_mc_raw_avg:.2f}"
                         )
                     else:
+                        # Use round() consistent with forecast_qty calculation below.
+                        # int() would cause avg=6 while forecast_qty=7 (e.g. raw_avg=6.8).
                         mc_forecast_values_summary = (
-                            f"min={int(_mc_raw_min)}, max={int(_mc_raw_max)}, avg={int(_mc_raw_avg)}"
+                            f"min={round(_mc_raw_min)}, max={round(_mc_raw_max)}, avg={round(_mc_raw_avg)}"
                         )
 
                 # Use rounded sum of forecast over horizon as total demand.
