@@ -572,7 +572,7 @@ class OrderWorkflow:
             # be wildly wrong (e.g. one EOD bulk-sale record dominates the average).
             # In that case fall back to daily_sales_avg which is calendar-normalised.
             _MC_MIN_HISTORY = 5
-            from ..forecast import monte_carlo_forecast
+            from ..forecast import monte_carlo_forecast, monte_carlo_forecast_with_stats
             try:
                 if len(sku_sales_history) < _MC_MIN_HISTORY:
                     logging.warning(
@@ -582,33 +582,58 @@ class OrderWorkflow:
                         f"Usata media giornaliera ({daily_sales_avg:.2f} pz/gg) come fallback MC."
                     )
                     mc_forecast_values = [max(0.0, float(daily_sales_avg))] * horizon_days
+                    # Fallback is deterministic: no cross-simulation spread
+                    _mc_p10_total = _mc_avg_total = _mc_p90_total = max(0, round(sum(mc_forecast_values)))
                 else:
-                    mc_forecast_values = monte_carlo_forecast(
+                    # Single-run via monte_carlo_forecast_with_stats: yields both per-day
+                    # aggregated forecast AND the true cross-simulation uncertainty (p10/p90)
+                    # without running 1000 simulations twice.
+                    _mc_stats = monte_carlo_forecast_with_stats(
                         history=sku_sales_history,
                         horizon_days=horizon_days,
                         distribution=mc_params["distribution"],
                         n_simulations=mc_params["n_simulations"],
                         random_seed=mc_params["random_seed"],
-                        output_stat=mc_params["output_stat"],
-                        output_percentile=mc_params["output_percentile"],
-                        expected_waste_rate=expected_waste_rate,  # NEW (Fase 3): shelf life waste adjustment
+                        expected_waste_rate=expected_waste_rate,
                     )
+                    # Select per-day forecast values based on output_stat
+                    if mc_params["output_stat"] == "mean":
+                        mc_forecast_values = _mc_stats["mean"]
+                    elif mc_params["output_stat"] == "percentile":
+                        _pct_map = {10: "p10", 25: "p25", 50: "median", 75: "p75", 90: "p90", 95: "p95"}
+                        _pct_key = _pct_map.get(mc_params["output_percentile"])
+                        if _pct_key:
+                            mc_forecast_values = _mc_stats[_pct_key]
+                        else:
+                            # Percentile not precomputed (e.g. P80) → dedicated call
+                            mc_forecast_values = monte_carlo_forecast(
+                                history=sku_sales_history,
+                                horizon_days=horizon_days,
+                                distribution=mc_params["distribution"],
+                                n_simulations=mc_params["n_simulations"],
+                                random_seed=mc_params["random_seed"],
+                                output_stat=mc_params["output_stat"],
+                                output_percentile=mc_params["output_percentile"],
+                                expected_waste_rate=expected_waste_rate,
+                            )
+                    else:
+                        mc_forecast_values = _mc_stats["mean"]
+                    # Uncertainty range: p10/p90 of TOTAL horizon demand across all simulations.
+                    # Per-day individual means all converge to ~same value (law of large numbers)
+                    # so min/max/avg per-day was meaningless. Sum the p-ile paths instead.
+                    _mc_p10_total = max(0, round(sum(_mc_stats["p10"])))
+                    _mc_avg_total = max(0, round(sum(_mc_stats["mean"])))
+                    _mc_p90_total = max(0, round(sum(_mc_stats["p90"])))
 
-                # Build summary of forecast values
+                # Summary: p10/avg/p90 of TOTAL demand over horizon (cross-simulation spread)
                 if mc_forecast_values:
-                    _mc_raw_min = min(mc_forecast_values)
-                    _mc_raw_max = max(mc_forecast_values)
-                    _mc_raw_avg = sum(mc_forecast_values) / len(mc_forecast_values)
-                    # Show decimal precision when values are sub-unit (avoids misleading 0/0/0)
-                    if _mc_raw_max < 1.0:
+                    if _mc_p90_total < 1:
                         mc_forecast_values_summary = (
-                            f"min={_mc_raw_min:.2f}, max={_mc_raw_max:.2f}, avg={_mc_raw_avg:.2f}"
+                            f"p10={_mc_p10_total:.2f}, avg={_mc_avg_total:.2f}, p90={_mc_p90_total:.2f}"
                         )
                     else:
-                        # Use round() consistent with forecast_qty calculation below.
-                        # int() would cause avg=6 while forecast_qty=7 (e.g. raw_avg=6.8).
                         mc_forecast_values_summary = (
-                            f"min={round(_mc_raw_min)}, max={round(_mc_raw_max)}, avg={round(_mc_raw_avg)}"
+                            f"p10={_mc_p10_total}, avg={_mc_avg_total}, p90={_mc_p90_total}"
                         )
 
                 # Use rounded sum of forecast over horizon as total demand.

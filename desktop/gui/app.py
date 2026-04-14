@@ -2434,7 +2434,7 @@ class DesktopOrderApp:
             
             # Forecast summary
             if proposal.mc_forecast_values_summary:
-                details.append(f"Forecast: {proposal.mc_forecast_values_summary}")
+                details.append(f"Forecast (totale orizzonte, p10/avg/p90): {proposal.mc_forecast_values_summary}")
             
             # Seed (for reproducibility)
             if proposal.mc_random_seed > 0:
