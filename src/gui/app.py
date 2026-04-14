@@ -6653,7 +6653,8 @@ class DesktopOrderApp:
         ttk.Button(toolbar_frame, text="🗂 Modifica in batch", command=self._edit_sku_batch).pack(side="left", padx=5)
         ttk.Button(toolbar_frame, text="🗑️ Elimina SKU", command=self._delete_sku).pack(side="left", padx=5)
         ttk.Button(toolbar_frame, text="⚠️ Purge completo", command=self._purge_sku).pack(side="left", padx=5)
-        ttk.Button(toolbar_frame, text="🔄 Aggiorna", command=self._refresh_admin_tab).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="� Simula storico", command=self._simulate_sku_history).pack(side="left", padx=5)
+        ttk.Button(toolbar_frame, text="�🔄 Aggiorna", command=self._refresh_admin_tab).pack(side="left", padx=5)
         
         # Toggle for showing out-of-assortment SKUs
         self.show_out_of_assortment_var = tk.BooleanVar(value=False)
@@ -6700,6 +6701,8 @@ class DesktopOrderApp:
         
         # Bind double-click to edit
         self.admin_treeview.bind("<Double-1>", lambda e: self._edit_sku())
+        # Bind right-click for context menu
+        self.admin_treeview.bind("<Button-3>", self._show_admin_context_menu)
     
     def _get_selected_admin_sku_codes(self) -> list:
         """Return list of SKU codes for all currently selected rows in admin_treeview."""
@@ -6969,6 +6972,273 @@ class DesktopOrderApp:
             self._show_sku_form(mode="edit", sku_code=sku_codes[0])
             return
         self._show_sku_form(mode="batch", batch_sku_codes=sku_codes)
+
+    # ------------------------------------------------------------------ #
+    # History Simulation                                                   #
+    # ------------------------------------------------------------------ #
+
+    def _show_admin_context_menu(self, event):
+        """Show right-click context menu on admin_treeview."""
+        # Select the row under cursor before showing menu
+        item_id = self.admin_treeview.identify_row(event.y)
+        if item_id:
+            if item_id not in self.admin_treeview.selection():
+                self.admin_treeview.selection_set(item_id)
+                self.admin_treeview.focus(item_id)
+
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="✏️ Modifica SKU", command=self._edit_sku)
+        menu.add_command(label="🗂 Modifica in batch", command=self._edit_sku_batch)
+        menu.add_separator()
+        menu.add_command(label="📊 Simulazione storico", command=self._simulate_sku_history)
+        menu.add_separator()
+        menu.add_command(label="🗑️ Elimina SKU", command=self._delete_sku)
+        menu.add_command(label="⚠️ Purge completo", command=self._purge_sku)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _simulate_sku_history(self):
+        """Open the history simulation dialog for the selected SKU."""
+        sku_codes = self._get_selected_admin_sku_codes()
+        if not sku_codes:
+            messagebox.showwarning(
+                "Nessuna Selezione",
+                "Seleziona uno SKU per avviare la simulazione storico."
+            )
+            return
+        if len(sku_codes) > 1:
+            messagebox.showwarning(
+                "Selezione Multipla",
+                "La simulazione storico è disponibile per un singolo SKU alla volta.\n"
+                "Seleziona un solo SKU e riprova."
+            )
+            return
+        self._show_simulation_dialog(sku_codes[0])
+
+    def _show_simulation_dialog(self, sku_code: str):
+        """Show the history simulation input dialog for a single SKU."""
+        from datetime import date as _date
+
+        popup = tk.Toplevel(self.root)
+        popup.title(f"Simulazione Storico — {sku_code}")
+        popup.geometry("480x420")
+        popup.resizable(False, False)
+        popup.transient(self.root)
+        popup.grab_set()
+
+        # Center popup
+        popup.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 480) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 420) // 2
+        popup.geometry(f"480x420+{x}+{y}")
+
+        pad = dict(padx=15, pady=6)
+
+        # ---- Header ----
+        ttk.Label(
+            popup,
+            text=f"Simulazione Storico — {sku_code}",
+            font=("Helvetica", 12, "bold"),
+        ).pack(**pad, pady=(15, 2))
+        ttk.Label(
+            popup,
+            text=(
+                "Genera movimenti storici (SALE, ORDER, RECEIPT) esattamente come\n"
+                "verrebbero registrati nel normale flusso operativo."
+            ),
+            foreground="gray",
+            justify="center",
+        ).pack(**pad)
+
+        ttk.Separator(popup, orient="horizontal").pack(fill="x", padx=15, pady=8)
+
+        # ---- Form fields ----
+        form = ttk.Frame(popup)
+        form.pack(fill="x", padx=15)
+
+        def _row(label_text, row_idx):
+            ttk.Label(form, text=label_text, anchor="w").grid(
+                row=row_idx, column=0, sticky="w", pady=4, padx=(0, 10)
+            )
+
+        # Qty min
+        _row("Vendite giornaliere — minimo (pz):", 0)
+        qty_min_var = tk.StringVar(value="10")
+        ttk.Spinbox(form, from_=0, to=9999, textvariable=qty_min_var, width=10).grid(
+            row=0, column=1, sticky="w"
+        )
+
+        # Qty max
+        _row("Vendite giornaliere — massimo (pz):", 1)
+        qty_max_var = tk.StringVar(value="14")
+        ttk.Spinbox(form, from_=0, to=9999, textvariable=qty_max_var, width=10).grid(
+            row=1, column=1, sticky="w"
+        )
+
+        # Days
+        _row("Giorni di storico da generare:", 2)
+        days_var = tk.StringVar(value="60")
+        ttk.Spinbox(form, from_=1, to=730, textvariable=days_var, width=10).grid(
+            row=2, column=1, sticky="w"
+        )
+
+        # Seed (optional)
+        _row("Seed casuale (0 = variabile):", 3)
+        seed_var = tk.StringVar(value="0")
+        ttk.Spinbox(form, from_=0, to=999999, textvariable=seed_var, width=10).grid(
+            row=3, column=1, sticky="w"
+        )
+        ttk.Label(
+            form,
+            text="  (stesso seed → stessi valori ad ogni riesecuzione)",
+            foreground="gray",
+            font=("Helvetica", 8),
+        ).grid(row=3, column=2, sticky="w")
+
+        # ---- Period preview (updated live) ----
+        today = _date.today()
+        period_label_var = tk.StringVar()
+
+        def _update_period_preview(*_):
+            try:
+                n = max(1, int(days_var.get()))
+            except ValueError:
+                n = 1
+            start = today - __import__("datetime").timedelta(days=n - 1)
+            period_label_var.set(f"Periodo: {start.isoformat()} → {today.isoformat()} ({n} giorni)")
+
+        days_var.trace_add("write", _update_period_preview)
+        _update_period_preview()
+
+        ttk.Separator(popup, orient="horizontal").pack(fill="x", padx=15, pady=8)
+        ttk.Label(popup, textvariable=period_label_var, foreground="#1a6ea8").pack()
+
+        # ---- Stock info ----
+        ttk.Label(
+            popup,
+            text="Stock iniziale: 0 (la simulazione genera ordini automaticamente)",
+            foreground="gray",
+            font=("Helvetica", 8, "italic"),
+        ).pack(pady=(2, 0))
+
+        ttk.Separator(popup, orient="horizontal").pack(fill="x", padx=15, pady=8)
+
+        # ---- Warning ----
+        ttk.Label(
+            popup,
+            text=(
+                "⚠️  Se eseguita di nuovo sullo stesso SKU e periodo, i dati\n"
+                "simulati precedenti verranno sostituiti completamente."
+            ),
+            foreground="#c0392b",
+            justify="center",
+        ).pack()
+
+        # ---- Buttons ----
+        btn_frame = ttk.Frame(popup)
+        btn_frame.pack(pady=12)
+
+        def _on_run():
+            try:
+                qty_min = int(qty_min_var.get())
+                qty_max = int(qty_max_var.get())
+                n_days = int(days_var.get())
+                seed_raw = int(seed_var.get())
+                random_seed = seed_raw if seed_raw > 0 else None
+            except ValueError:
+                messagebox.showerror(
+                    "Input non valido",
+                    "Inserire valori numerici interi per tutti i campi.",
+                    parent=popup,
+                )
+                return
+
+            if qty_min < 0 or qty_max < qty_min:
+                messagebox.showerror(
+                    "Range non valido",
+                    "Il valore minimo deve essere >= 0 e il massimo >= minimo.",
+                    parent=popup,
+                )
+                return
+            if n_days < 1:
+                messagebox.showerror(
+                    "Giorni non valido",
+                    "Inserire almeno 1 giorno di storico.",
+                    parent=popup,
+                )
+                return
+
+            # First confirmation
+            confirmed = messagebox.askyesno(
+                "Conferma Simulazione",
+                f"Verrà generato uno storico simulato per lo SKU {sku_code}:\n\n"
+                f"  • Range vendite: {qty_min}–{qty_max} pz/giorno\n"
+                f"  • Periodo: {n_days} giorni (fino ad oggi)\n\n"
+                "I dati simulati precedenti per questo SKU e periodo saranno\n"
+                "rimossi e sostituiti.\n\nProcedere?",
+                parent=popup,
+            )
+            if not confirmed:
+                return
+
+            popup.destroy()
+            self._run_simulation(sku_code, qty_min, qty_max, n_days, random_seed)
+
+        ttk.Button(btn_frame, text="▶ Avvia Simulazione", command=_on_run).pack(
+            side="left", padx=8
+        )
+        ttk.Button(btn_frame, text="Annulla", command=popup.destroy).pack(
+            side="left", padx=8
+        )
+
+    def _run_simulation(self, sku_code: str, qty_min: int, qty_max: int, n_days: int, random_seed):
+        """Execute the history simulation and show result summary."""
+        from datetime import date as _date
+        from ..workflows.history_simulation import HistorySimulationWorkflow
+
+        try:
+            workflow = HistorySimulationWorkflow(self.csv_layer)
+            result = workflow.run_for_sku(
+                sku_code=sku_code,
+                qty_min=qty_min,
+                qty_max=qty_max,
+                n_days=n_days,
+                end_date=_date.today(),
+                random_seed=random_seed,
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Errore Simulazione",
+                f"La simulazione è fallita:\n\n{exc}"
+            )
+            return
+
+        # Build summary
+        lines = [
+            f"✅ Simulazione completata per SKU {sku_code}",
+            "",
+            f"Giorni generati:     {result.days_generated}",
+            f"Vendite totali (pz): {result.total_sales_qty}",
+            f"Ordini creati:       {result.orders_created}",
+            f"Ricezioni create:    {result.receipts_created}",
+        ]
+        if result.warnings:
+            lines.append("")
+            lines.append(f"⚠️  {len(result.warnings)} avvertimento/i:")
+            for w in result.warnings[:5]:  # show max 5
+                lines.append(f"  • {w}")
+            if len(result.warnings) > 5:
+                lines.append(f"  ... e altri {len(result.warnings) - 5}")
+
+        messagebox.showinfo("Simulazione Completata", "\n".join(lines))
+
+        # Refresh relevant tabs so new data is visible
+        try:
+            self._refresh_admin_tab()
+        except Exception:
+            pass
 
     def _show_sku_form(self, mode="new", sku_code=None, batch_sku_codes=None):
         """
