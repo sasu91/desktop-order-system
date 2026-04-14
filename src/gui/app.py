@@ -7034,14 +7034,12 @@ class DesktopOrderApp:
         y = self.root.winfo_y() + (self.root.winfo_height() - 420) // 2
         popup.geometry(f"480x420+{x}+{y}")
 
-        pad = dict(padx=15, pady=6)
-
         # ---- Header ----
         ttk.Label(
             popup,
             text=f"Simulazione Storico — {sku_code}",
             font=("Helvetica", 12, "bold"),
-        ).pack(**pad, pady=(15, 2))
+        ).pack(padx=15, pady=(15, 2))
         ttk.Label(
             popup,
             text=(
@@ -7050,7 +7048,7 @@ class DesktopOrderApp:
             ),
             foreground="gray",
             justify="center",
-        ).pack(**pad)
+        ).pack(padx=15, pady=6)
 
         ttk.Separator(popup, orient="horizontal").pack(fill="x", padx=15, pady=8)
 
