@@ -248,6 +248,27 @@ class HistorySimulationWorkflow:
                     f"receipt={receipt_date} ip_before={ip}"
                 )
 
+        # --- Close any orders that didn't arrive before end_date ---
+        # Orders placed near the end of the period have receipt_date > end_date.
+        # Since this is historical data it must be fully reconciled: force a RECEIPT
+        # on end_date so the ledger shows zero residual on_order for the simulation.
+        for (o_date, r_date, o_id, o_qty) in pending_orders:
+            receipt_txn = Transaction(
+                date=end_date,
+                sku=sku_code,
+                event=EventType.RECEIPT,
+                qty=o_qty,
+                receipt_date=end_date,
+                note=f"{SIM_TAG}|doc={self.SIM_DOC_ID_PREFIX}_{o_id}|order={o_id}|early_close=1",
+            )
+            sim_transactions.append(receipt_txn)
+            result.receipts_created += 1
+            logger.debug(
+                f"[SIM_HIST] Closing undelivered order {o_id} "
+                f"(original receipt={r_date}) as RECEIPT on end_date={end_date}"
+            )
+        pending_orders.clear()
+
         # --- Step 3: Write order_logs for traceability ---
         # We write minimal order log entries so order pipeline and receiving_logs stay consistent.
         self._write_sim_order_logs(sku_code, sim_transactions, start_date, end_date)
