@@ -1,6 +1,125 @@
 {
   "components": {
     "schemas": {
+      "AddArticleRequest": {
+        "description": "Request body for POST /skus — create a new article offline-first.\n\n**Idempotenza con client_add_id**\n\nIl client Android genera un UUID stabile prima di inviare la richiesta.\nSe la stessa richiesta arriva due volte (es. retry di rete), il server\nrisponde **200** con ``already_created=True`` senza duplicare l'articolo.",
+        "properties": {
+          "client_add_id": {
+            "description": "UUID generato dal client per idempotenza. Una seconda richiesta con lo stesso client_add_id restituisce already_created=True senza duplicare l'articolo.",
+            "examples": [
+              "550e8400-e29b-41d4-a716-446655440000"
+            ],
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Client Add Id",
+            "type": "string"
+          },
+          "description": {
+            "description": "Descrizione obbligatoria dell'articolo.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "ean_primary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "EAN primario (8, 12 o 13 cifre numeriche). Opzionale.",
+            "title": "Ean Primary"
+          },
+          "ean_secondary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "EAN secondario (8, 12 o 13 cifre numeriche). Opzionale.",
+            "title": "Ean Secondary"
+          },
+          "sku": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Codice SKU da usare. Il client Android invia un codice provvisorio 'TMP-<epoch>-<4hex>' quando lo SKU non è noto. Il server accetta il codice proposto se non è già in uso.",
+            "title": "Sku"
+          }
+        },
+        "required": [
+          "client_add_id",
+          "description"
+        ],
+        "title": "AddArticleRequest",
+        "type": "object"
+      },
+      "AddArticleResponse": {
+        "description": "Response for POST /skus.",
+        "properties": {
+          "already_created": {
+            "default": false,
+            "description": "True quando la risposta è il replay di un client_add_id già processato.",
+            "title": "Already Created",
+            "type": "boolean"
+          },
+          "client_add_id": {
+            "title": "Client Add Id",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "ean_primary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ean Primary"
+          },
+          "ean_secondary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ean Secondary"
+          },
+          "sku": {
+            "description": "Codice SKU confermato (uguale a quello proposto se non in conflitto).",
+            "title": "Sku",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sku",
+          "description",
+          "client_add_id"
+        ],
+        "title": "AddArticleResponse",
+        "type": "object"
+      },
       "BindSecondaryEanRequest": {
         "description": "Request body for PATCH /skus/{sku}/bind-secondary-ean.",
         "properties": {
@@ -1840,6 +1959,69 @@
         "summary": "Chiudi ricezione merce",
         "tags": [
           "receipts"
+        ]
+      }
+    },
+    "/api/v1/skus": {
+      "post": {
+        "description": "Crea un nuovo articolo nel catalogo SKU.\n\n**Idempotenza con client_add_id**\n\nIl client Android genera un UUID stabile prima dell'invio.  Se la stessa\nrichiesta arriva due volte (es. retry di rete) il server risponde **200**\ncon ``already_created=True`` senza duplicare l'articolo.\n\n**Gestione SKU provvisorio**\n\nIl client può inviare un codice SKU provvisorio nel formato ``TMP-<epoch>-<4hex>``.\nIl server accetta il codice proposto se non è già in uso.  La risposta\nriporta il codice confermato nel campo ``sku``; il client Android usa\nquesto valore per aggiornare la cache locale (riconciliazione SKU).\n\n**Validazioni**\n\n- ``description`` è obbligatoria e non può essere vuota.\n- ``ean_primary`` / ``ean_secondary`` sono opzionali; se presenti, devono\n  essere stringhe di 8, 12 o 13 cifre numeriche.\n- Se un EAN è già associato a un *altro* SKU esistente → **409**.\n- Se il codice SKU è già in uso da un *altro* articolo → **409**.",
+        "operationId": "create_article_api_v1_skus_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddArticleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddArticleResponse"
+                }
+              }
+            },
+            "description": "Già creato — risposta replay (client_add_id duplicato)"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddArticleResponse"
+                }
+              }
+            },
+            "description": "Articolo creato con successo"
+          },
+          "400": {
+            "description": "Input non valido (descrizione vuota, EAN non valido)"
+          },
+          "409": {
+            "description": "Conflitto: EAN già associato ad altro SKU, o codice SKU già esistente"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Crea nuovo articolo nel catalogo SKU",
+        "tags": [
+          "skus"
         ]
       }
     },
