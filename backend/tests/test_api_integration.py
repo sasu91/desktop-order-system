@@ -995,3 +995,190 @@ class TestEodClose:
         details = r.json()["error"]["details"]
         # Should have one error for each unknown SKU
         assert len(details) >= 2
+
+
+# ===========================================================================
+# POST /api/v1/skus — create article
+# ===========================================================================
+
+import uuid as _uuid
+
+
+class TestPostCreateArticle:
+    """POST /skus: create article, idempotency replay, validation, conflicts."""
+
+    _ENDPOINT = f"{_V1}/skus"
+
+    # -- helpers -------------------------------------------------------------
+
+    @staticmethod
+    def _new_id() -> str:
+        return str(_uuid.uuid4())
+
+    # -- 201 happy path ------------------------------------------------------
+
+    def test_201_minimal(self, client: TestClient) -> None:
+        """Description only, no EAN, no SKU → 201 with a server-assigned TMP sku."""
+        payload = {
+            "client_add_id": self._new_id(),
+            "description": "Succo d'arancia 1L",
+        }
+        r = client.post(self._ENDPOINT, json=payload)
+        assert r.status_code == 201
+        body = r.json()
+        assert body["description"] == "Succo d'arancia 1L"
+        assert body["sku"]  # non-empty
+        assert body["already_created"] is False
+
+    def test_201_with_sku_and_primary_ean(self, client: TestClient) -> None:
+        """Explicit SKU + EAN-13 → 201 with sku and ean_primary echoed."""
+        payload = {
+            "client_add_id": self._new_id(),
+            "sku": "NEW-001",
+            "description": "Yogurt Bianco 500g",
+            "ean_primary": "0012345678905",
+        }
+        r = client.post(self._ENDPOINT, json=payload)
+        assert r.status_code == 201
+        body = r.json()
+        assert body["sku"] == "NEW-001"
+        assert body["ean_primary"] == "0012345678905"
+        assert body["ean_secondary"] is None
+
+    def test_201_with_both_eans(self, client: TestClient) -> None:
+        """Both primary and secondary EAN → 201 with both fields populated."""
+        payload = {
+            "client_add_id": self._new_id(),
+            "sku": "NEW-002",
+            "description": "Pane di segale 500g",
+            "ean_primary": "0098765432108",
+            "ean_secondary": "0099999999997",
+        }
+        r = client.post(self._ENDPOINT, json=payload)
+        assert r.status_code == 201
+        body = r.json()
+        assert body["ean_primary"] == "0098765432108"
+        assert body["ean_secondary"] == "0099999999997"
+
+    def test_201_provisional_sku_accepted(self, client: TestClient) -> None:
+        """TMP-... provisional SKU sent by client is accepted and echoed back."""
+        tmp_sku = "TMP-1713312000000-ABCD"
+        payload = {
+            "client_add_id": self._new_id(),
+            "sku": tmp_sku,
+            "description": "Articolo provvisorio",
+        }
+        r = client.post(self._ENDPOINT, json=payload)
+        assert r.status_code == 201
+        assert r.json()["sku"] == tmp_sku
+
+    # -- 200 idempotency replay -----------------------------------------------
+
+    def test_200_idempotency_replay(self, client: TestClient) -> None:
+        """Same client_add_id sent twice → second call returns 200 with already_created=True."""
+        cid = self._new_id()
+        payload = {"client_add_id": cid, "description": "Articolo idempotente"}
+        r1 = client.post(self._ENDPOINT, json=payload)
+        assert r1.status_code == 201
+        confirmed_sku = r1.json()["sku"]
+
+        r2 = client.post(self._ENDPOINT, json=payload)
+        assert r2.status_code == 200
+        body2 = r2.json()
+        assert body2["already_created"] is True
+        assert body2["sku"] == confirmed_sku  # same sku echoed
+
+    def test_200_idempotency_different_payload_ignored(self, client: TestClient) -> None:
+        """Replay with a changed description → server returns stored response (idempotency wins)."""
+        cid = self._new_id()
+        r1 = client.post(self._ENDPOINT, json={"client_add_id": cid, "description": "Originale"})
+        assert r1.status_code == 201
+
+        # Second request changes description — must be ignored
+        r2 = client.post(self._ENDPOINT, json={"client_add_id": cid, "description": "Modificata"})
+        assert r2.status_code == 200
+        assert r2.json()["description"] == "Originale"
+        assert r2.json()["already_created"] is True
+
+    # -- 400 validation errors ------------------------------------------------
+
+    def test_400_empty_description(self, client: TestClient) -> None:
+        """Description empty/whitespace → 400 BAD_REQUEST."""
+        payload = {"client_add_id": self._new_id(), "description": "   "}
+        r = client.post(self._ENDPOINT, json=payload)
+        assert r.status_code == 400
+        assert r.json()["error"]["code"] == "BAD_REQUEST"
+
+    def test_400_missing_description(self, client: TestClient) -> None:
+        """Description field omitted → 422 (Pydantic validation before router)."""
+        r = client.post(self._ENDPOINT, json={"client_add_id": self._new_id()})
+        # FastAPI returns 422 for missing required fields
+        assert r.status_code == 422
+
+    def test_400_invalid_ean_letters(self, client: TestClient) -> None:
+        """EAN with non-digit characters → 400 BAD_REQUEST."""
+        payload = {
+            "client_add_id": self._new_id(),
+            "description": "Test",
+            "ean_primary": "ABCDEF123456",
+        }
+        r = client.post(self._ENDPOINT, json=payload)
+        assert r.status_code == 400
+
+    def test_400_invalid_ean_wrong_length(self, client: TestClient) -> None:
+        """EAN with 10 digits (not 8/12/13) → 400 BAD_REQUEST."""
+        payload = {
+            "client_add_id": self._new_id(),
+            "description": "Test",
+            "ean_primary": "1234567890",
+        }
+        r = client.post(self._ENDPOINT, json=payload)
+        assert r.status_code == 400
+
+    def test_400_primary_equals_secondary_ean(self, client: TestClient) -> None:
+        """Primary EAN identical to secondary → 400 BAD_REQUEST."""
+        payload = {
+            "client_add_id": self._new_id(),
+            "description": "Test",
+            "ean_primary": "1234567890128",
+            "ean_secondary": "1234567890128",
+        }
+        r = client.post(self._ENDPOINT, json=payload)
+        assert r.status_code == 400
+
+    # -- 409 conflict ---------------------------------------------------------
+
+    def test_409_ean_conflict_primary(self, client: TestClient) -> None:
+        """EAN already associated to a seeded SKU → 409 CONFLICT."""
+        payload = {
+            "client_add_id": self._new_id(),
+            "sku": "NEW-EAN-CONFLICT",
+            "description": "Articolo con EAN in conflitto",
+            "ean_primary": SEED_EAN_PLAIN,  # already belongs to 0010001
+        }
+        r = client.post(self._ENDPOINT, json=payload)
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "CONFLICT"
+
+    def test_409_sku_code_already_exists(self, client: TestClient) -> None:
+        """SKU code already in catalogue → 409 CONFLICT."""
+        payload = {
+            "client_add_id": self._new_id(),
+            "sku": "0010001",  # seeded SKU
+            "description": "Duplicato",
+        }
+        r = client.post(self._ENDPOINT, json=payload)
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "CONFLICT"
+
+    def test_409_does_not_apply_to_idempotency_replay(self, client: TestClient) -> None:
+        """A second call with the same client_add_id AND same SKU returns 200 not 409."""
+        cid = self._new_id()
+        sku = "UNIQUE-SKU-88"
+        r1 = client.post(self._ENDPOINT, json={"client_add_id": cid, "sku": sku, "description": "Primo"})
+        assert r1.status_code == 201
+
+        # Same client_add_id and same sku → idempotency replay, not conflict
+        r2 = client.post(self._ENDPOINT, json={"client_add_id": cid, "sku": sku, "description": "Primo"})
+        assert r2.status_code == 200
+        assert r2.json()["already_created"] is True

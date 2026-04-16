@@ -4,7 +4,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Inventory
@@ -27,9 +29,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.*
 import androidx.navigation.compose.*
 import com.sasu91.dosapp.ui.connectivity.ConnectivityViewModel
+import com.sasu91.dosapp.ui.addarticle.AddArticleScreen
 import com.sasu91.dosapp.ui.dispatch.OrderDispatchScreen
 import com.sasu91.dosapp.ui.eod.EodScreen
 import com.sasu91.dosapp.ui.exceptions.ExceptionScreen
+import com.sasu91.dosapp.ui.expiry.ExpiryScreen
 import com.sasu91.dosapp.ui.queue.OfflineQueueScreen
 import com.sasu91.dosapp.ui.queue.OfflineQueueViewModel
 import com.sasu91.dosapp.ui.quickwaste.QuickWasteScreen
@@ -40,6 +44,8 @@ import com.sasu91.dosapp.ui.skubind.SkuEanBindScreen
 /** Navigation route definitions */
 sealed class Screen(val route: String, val label: String, val icon: ImageVector) {
     object Scan      : Screen("scan",           "Scansione",  Icons.Default.CameraAlt)
+    /** Add a new article to the assortment (offline-first). */
+    object AddArticle : Screen("add_article",    "Aggiungi articolo", Icons.Default.Add)
     object Exceptions: Screen("exceptions?sku={sku}", "Eccezioni", Icons.Default.Warning) {
         fun withSku(sku: String) = "exceptions?sku=$sku"
     }
@@ -53,9 +59,11 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector)
     object SkuBind    : Screen("sku_bind",        "Abbina EAN",    Icons.Default.Link)
     /** View order proposals sent from the desktop to Android terminals. */
     object OrderDispatches : Screen("order_dispatches", "Ordini inviati", Icons.Default.Send)
+    /** Local expiry-date tracking — Scadenze feature, no backend sync. */
+    object Expiry     : Screen("expiry",           "Scadenze",      Icons.Default.DateRange)
 }
 
-private val TOP_LEVEL_SCREENS = listOf(Screen.Scan, Screen.QuickWaste, Screen.Exceptions, Screen.Receiving, Screen.Eod, Screen.Queue, Screen.SkuBind, Screen.OrderDispatches)
+private val TOP_LEVEL_SCREENS = listOf(Screen.Scan, Screen.QuickWaste, Screen.Exceptions, Screen.Receiving, Screen.Eod, Screen.Queue, Screen.SkuBind, Screen.AddArticle, Screen.OrderDispatches, Screen.Expiry)
 
 /**
  * Root navigation graph with a Material 3 bottom navigation bar.
@@ -215,9 +223,19 @@ fun DosNavGraph(
                 SkuEanBindScreen()
             }
 
+            // Add new article offline-first (queue + local cache)
+            composable(Screen.AddArticle.route) {
+                AddArticleScreen()
+            }
+
             // Order dispatches — view orders sent from desktop to Android
             composable(Screen.OrderDispatches.route) {
                 OrderDispatchScreen()
+            }
+
+            // Scadenze — local expiry-date tracking (no backend sync)
+            composable(Screen.Expiry.route) {
+                ExpiryScreen()
             }
         }
     }

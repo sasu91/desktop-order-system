@@ -116,6 +116,19 @@ class _MemStorage:
     def close(self) -> None:  # noqa: D401
         """No-op — nothing to close for in-memory storage."""
 
+    # -- SKU write (used by POST /skus) ---------------------------------------
+    def write_sku(self, sku: SKU) -> None:
+        """Upsert a SKU by sku code."""
+        self._skus = [s for s in self._skus if s.sku != sku.sku]
+        self._skus.append(sku)
+
+    def sku_exists(self, sku_id: str) -> bool:
+        return any(s.sku == sku_id for s in self._skus)
+
+    def search_skus(self, query: str) -> list[SKU]:
+        q = query.lower()
+        return [s for s in self._skus if q in s.sku.lower() or q in s.description.lower()]
+
 
 # ---------------------------------------------------------------------------
 # Seed data (shared across all tests; each test gets a fresh _MemStorage copy)

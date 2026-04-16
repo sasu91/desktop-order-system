@@ -10,6 +10,7 @@ import com.sasu91.dosapp.data.api.dto.EodEntryDto
 import com.sasu91.dosapp.data.api.dto.ExceptionRequestDto
 import com.sasu91.dosapp.data.api.dto.SkuDto
 import com.sasu91.dosapp.data.api.dto.StockDetailDto
+import com.sasu91.dosapp.data.db.dao.LocalArticleDao
 import com.sasu91.dosapp.data.repository.EodRepository
 import com.sasu91.dosapp.data.repository.ExceptionRepository
 import com.sasu91.dosapp.data.repository.ScanRepository
@@ -63,6 +64,7 @@ class ScanViewModel @Inject constructor(
     private val prefs: SharedPreferences,
     private val exceptionRepo: ExceptionRepository,
     private val eodRepo: EodRepository,
+    private val localArticleDao: LocalArticleDao,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ScanUiState())
@@ -100,6 +102,40 @@ class ScanViewModel @Inject constructor(
         _state.update { it.copy(isLoading = true, ean = ean, sku = null, stock = null, error = null, paused = true) }
 
         viewModelScope.launch {
+            // ── 1. Local pending article lookup (offline-created articles) ──────
+            // Precedence: local pending > remote cache.  An article created offline
+            // must be scannable immediately even before the server confirms it.
+            val localHit = localArticleDao.getByEan(ean)
+            if (localHit != null) {
+                val skuDto = SkuDto(
+                    sku         = localHit.sku,
+                    description = localHit.description,
+                    ean         = localHit.eanPrimary.ifEmpty { null },
+                    eanSecondary = localHit.eanSecondary.ifEmpty { null },
+                )
+                // Neutral stock: article not yet confirmed by server, counts unknown.
+                val today = java.time.LocalDate.now().toString()
+                val stockDto = StockDetailDto(
+                    sku          = localHit.sku,
+                    description  = localHit.description,
+                    onHand       = 0,
+                    onOrder      = 0,
+                    asof         = today,
+                    mode         = "POINT_IN_TIME",
+                    lastEventDate = null,
+                )
+                _state.update {
+                    it.copy(
+                        isLoading = false,
+                        sku       = skuDto,
+                        stock     = stockDto,
+                        fromCache = true,   // served from local Room, not server
+                    )
+                }
+                return@launch
+            }
+
+            // ── 2. Remote cache / API lookup (existing behaviour) ────────────────
             when (val result = skuCache.resolveEan(ean)) {
                 is SkuCacheRepository.ResolveResult.Hit -> {
                     _state.update {

@@ -138,8 +138,70 @@ class BindSecondaryEanResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Stock
+# Create article (POST /skus)
 # ---------------------------------------------------------------------------
+
+class AddArticleRequest(BaseModel):
+    """
+    Request body for POST /skus — create a new article offline-first.
+
+    **Idempotenza con client_add_id**
+
+    Il client Android genera un UUID stabile prima di inviare la richiesta.
+    Se la stessa richiesta arriva due volte (es. retry di rete), il server
+    risponde **200** con ``already_created=True`` senza duplicare l'articolo.
+    """
+    client_add_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        description=(
+            "UUID generato dal client per idempotenza. "
+            "Una seconda richiesta con lo stesso client_add_id restituisce "
+            "already_created=True senza duplicare l'articolo."
+        ),
+        examples=["550e8400-e29b-41d4-a716-446655440000"],
+    )
+    sku: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description=(
+            "Codice SKU da usare. Il client Android invia un codice provvisorio "
+            "'TMP-<epoch>-<4hex>' quando lo SKU non è noto. "
+            "Il server accetta il codice proposto se non è già in uso."
+        ),
+    )
+    description: str = Field(
+        ...,
+        min_length=1,
+        max_length=256,
+        description="Descrizione obbligatoria dell'articolo.",
+    )
+    ean_primary: Optional[str] = Field(
+        default=None,
+        description="EAN primario (8, 12 o 13 cifre numeriche). Opzionale.",
+    )
+    ean_secondary: Optional[str] = Field(
+        default=None,
+        description="EAN secondario (8, 12 o 13 cifre numeriche). Opzionale.",
+    )
+
+
+class AddArticleResponse(BaseModel):
+    """Response for POST /skus."""
+    sku: str = Field(description="Codice SKU confermato (uguale a quello proposto se non in conflitto).")
+    description: str
+    ean_primary: Optional[str] = None
+    ean_secondary: Optional[str] = None
+    client_add_id: str
+    already_created: bool = Field(
+        default=False,
+        description="True quando la risposta è il replay di un client_add_id già processato.",
+    )
+
+
+
 
 class StockItem(BaseModel):
     sku: str

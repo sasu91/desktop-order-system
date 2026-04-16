@@ -6,15 +6,21 @@ Errors
 400 BAD_REQUEST   EAN contains non-digit characters or has invalid length.
 404 NOT_FOUND     EAN format is valid but no SKU with that code exists.
 """
+import logging
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
+from fastapi.responses import JSONResponse
 
 from ..api.auth import verify_token
-from ..api.deps import get_storage
+from ..api import idempotency
+from ..api.deps import get_db, get_storage
 from ..api.errors import BadRequestError, ConflictError, NotFoundError
 from ..domain.ledger import StockCalculator, normalize_ean_13, validate_ean
+from ..domain.models import SKU
 from ..schemas import (
+    AddArticleRequest,
+    AddArticleResponse,
     BindSecondaryEanRequest,
     BindSecondaryEanResponse,
     SKUResponse,
@@ -23,7 +29,11 @@ from ..schemas import (
     SkuSearchResult,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["skus"])
+
+_CREATE_ENDPOINT_LABEL = "POST /skus"
 
 
 # ---------------------------------------------------------------------------
@@ -298,3 +308,202 @@ def bind_secondary_ean(
         else f"EAN secondario rimosso da SKU '{sku}'."
     )
     return BindSecondaryEanResponse(sku=sku, ean_secondary=stored_ean, message=msg)
+
+
+# ---------------------------------------------------------------------------
+# POST /skus — create article (offline-first, idempotent)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/skus",
+    response_model=AddArticleResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crea nuovo articolo nel catalogo SKU",
+    dependencies=[Depends(verify_token)],
+    responses={
+        200: {
+            "description": "Già creato — risposta replay (client_add_id duplicato)",
+            "model": AddArticleResponse,
+        },
+        201: {"description": "Articolo creato con successo"},
+        400: {"description": "Input non valido (descrizione vuota, EAN non valido)"},
+        409: {"description": "Conflitto: EAN già associato ad altro SKU, o codice SKU già esistente"},
+    },
+)
+def create_article(
+    body: AddArticleRequest,
+    db=Depends(get_db),
+    storage=Depends(get_storage),
+) -> JSONResponse:
+    """
+    Crea un nuovo articolo nel catalogo SKU.
+
+    **Idempotenza con client_add_id**
+
+    Il client Android genera un UUID stabile prima dell'invio.  Se la stessa
+    richiesta arriva due volte (es. retry di rete) il server risponde **200**
+    con ``already_created=True`` senza duplicare l'articolo.
+
+    **Gestione SKU provvisorio**
+
+    Il client può inviare un codice SKU provvisorio nel formato ``TMP-<epoch>-<4hex>``.
+    Il server accetta il codice proposto se non è già in uso.  La risposta
+    riporta il codice confermato nel campo ``sku``; il client Android usa
+    questo valore per aggiornare la cache locale (riconciliazione SKU).
+
+    **Validazioni**
+
+    - ``description`` è obbligatoria e non può essere vuota.
+    - ``ean_primary`` / ``ean_secondary`` sono opzionali; se presenti, devono
+      essere stringhe di 8, 12 o 13 cifre numeriche.
+    - Se un EAN è già associato a un *altro* SKU esistente → **409**.
+    - Se il codice SKU è già in uso da un *altro* articolo → **409**.
+    """
+    # ------------------------------------------------------------------ #
+    # 1. Ensure idempotency schema exists                                 #
+    # ------------------------------------------------------------------ #
+    idempotency.ensure_schema(db)
+
+    # ------------------------------------------------------------------ #
+    # 2. client_add_id fast-path: replay if already processed             #
+    # ------------------------------------------------------------------ #
+    client_add_id: str = body.client_add_id.strip()
+    _claimed_slot: bool = False
+
+    stored = idempotency.lookup(db, client_add_id)
+    if stored is not None:
+        _, response_dict = stored
+        response_dict["already_created"] = True
+        logger.info("idempotency replay: client_add_id=%r endpoint=%s", client_add_id, _CREATE_ENDPOINT_LABEL)
+        return JSONResponse(status_code=status.HTTP_200_OK, content=response_dict)
+
+    if idempotency.try_claim(db, client_add_id, _CREATE_ENDPOINT_LABEL):
+        _claimed_slot = True
+    else:
+        # Lost the INSERT race — wait for the winner to finalize.
+        stored = idempotency.lookup_with_wait(db, client_add_id)
+        if stored is not None:
+            stored[1]["already_created"] = True
+            logger.info(
+                "idempotency concurrent replay: client_add_id=%r endpoint=%s",
+                client_add_id, _CREATE_ENDPOINT_LABEL,
+            )
+            return JSONResponse(status_code=status.HTTP_200_OK, content=stored[1])
+        # lookup_with_wait timed out: fall through and process as fresh.
+        _claimed_slot = True
+        logger.warning("idempotency: lookup_with_wait timed out for %r; processing as fresh", client_add_id)
+
+    # ------------------------------------------------------------------ #
+    # 3. Validate description                                             #
+    # ------------------------------------------------------------------ #
+    description = body.description.strip()
+    if not description:
+        raise BadRequestError("Il campo 'description' non può essere vuoto.")
+
+    # ------------------------------------------------------------------ #
+    # 4. Validate and normalise EAN fields                               #
+    # ------------------------------------------------------------------ #
+    def _validate_and_normalise(ean_raw: str | None, field_name: str) -> str | None:
+        if not ean_raw:
+            return None
+        ean = ean_raw.strip()
+        if not ean:
+            return None
+        ok, err_msg = validate_ean(ean)
+        if not ok:
+            raise BadRequestError(f"'{field_name}' non valido: {err_msg}")
+        return normalize_ean_13(ean) or ean
+
+    ean_primary = _validate_and_normalise(body.ean_primary, "ean_primary")
+    ean_secondary = _validate_and_normalise(body.ean_secondary, "ean_secondary")
+
+    if ean_primary and ean_secondary and ean_primary == ean_secondary:
+        raise BadRequestError("'ean_primary' e 'ean_secondary' non possono essere identici.")
+
+    # ------------------------------------------------------------------ #
+    # 5. EAN conflict check (against existing catalogue)                 #
+    # ------------------------------------------------------------------ #
+    all_skus = storage.read_skus()
+    proposed_sku = (body.sku or "").strip() or None
+
+    for candidate_ean in filter(None, [ean_primary, ean_secondary]):
+        conflict = next(
+            (
+                s for s in all_skus
+                if s.sku != proposed_sku and (
+                    normalize_ean_13((s.ean or "").strip()) == candidate_ean
+                    or normalize_ean_13((s.ean_secondary or "").strip()) == candidate_ean
+                )
+            ),
+            None,
+        )
+        if conflict is not None:
+            raise ConflictError(
+                f"L'EAN '{candidate_ean}' è già associato allo SKU '{conflict.sku}'."
+            )
+
+    # ------------------------------------------------------------------ #
+    # 6. SKU conflict check                                              #
+    # ------------------------------------------------------------------ #
+    if proposed_sku and storage.sku_exists(proposed_sku):
+        # SKU already exists — 409 unless it belongs to the same idempotency
+        # replay (already handled above).  The client should use a different
+        # SKU code or omit it to let the server generate one.
+        raise ConflictError(
+            f"Il codice SKU '{proposed_sku}' è già in uso nel catalogo."
+        )
+
+    # ------------------------------------------------------------------ #
+    # 7. Assign SKU code (use proposed or keep TMP as canonical)         #
+    # ------------------------------------------------------------------ #
+    # Policy: accept the client-proposed code verbatim.  If the client did not
+    # provide a code, generate a server-side provisional id from the
+    # client_add_id (deterministic, no counter state needed).
+    import hashlib
+    if proposed_sku:
+        confirmed_sku = proposed_sku
+    else:
+        short = hashlib.sha1(client_add_id.encode()).hexdigest()[:8].upper()
+        confirmed_sku = f"TMP-{short}"
+
+    # ------------------------------------------------------------------ #
+    # 8. Persist SKU                                                     #
+    # ------------------------------------------------------------------ #
+    new_sku = SKU(
+        sku=confirmed_sku,
+        description=description,
+        ean=ean_primary,
+        ean_secondary=ean_secondary,
+    )
+    storage.write_sku(new_sku)
+    logger.info(
+        "article created: sku=%s description=%r ean_primary=%s ean_secondary=%s client_add_id=%r",
+        confirmed_sku, description, ean_primary, ean_secondary, client_add_id,
+    )
+
+    # ------------------------------------------------------------------ #
+    # 9. Assemble response                                               #
+    # ------------------------------------------------------------------ #
+    response_obj = AddArticleResponse(
+        sku=confirmed_sku,
+        description=description,
+        ean_primary=ean_primary,
+        ean_secondary=ean_secondary,
+        client_add_id=client_add_id,
+        already_created=False,
+    )
+    response_dict = response_obj.model_dump(mode="json")
+
+    # ------------------------------------------------------------------ #
+    # 10. Finalize idempotency slot                                      #
+    # ------------------------------------------------------------------ #
+    if _claimed_slot:
+        idempotency.finalize(
+            conn=db,
+            client_event_id=client_add_id,
+            status_code=status.HTTP_201_CREATED,
+            response_data=response_dict,
+        )
+
+    return JSONResponse(status_code=status.HTTP_201_CREATED, content=response_dict)
+

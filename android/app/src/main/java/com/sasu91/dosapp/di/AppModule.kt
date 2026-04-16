@@ -14,6 +14,9 @@ import com.sasu91.dosapp.data.db.DosDatabase
 import com.sasu91.dosapp.data.db.dao.CachedSkuDao
 import com.sasu91.dosapp.data.db.dao.DraftEodDao
 import com.sasu91.dosapp.data.db.dao.DraftReceiptDao
+import com.sasu91.dosapp.data.db.dao.LocalArticleDao
+import com.sasu91.dosapp.data.db.dao.LocalExpiryDao
+import com.sasu91.dosapp.data.db.dao.PendingAddArticleDao
 import com.sasu91.dosapp.data.db.dao.PendingBindDao
 import com.sasu91.dosapp.data.db.dao.PendingExceptionDao
 import com.sasu91.dosapp.data.db.dao.PendingRequestDao
@@ -150,7 +153,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): DosDatabase =
         Room.databaseBuilder(ctx, DosDatabase::class.java, "dos_offline.db")
-            .addMigrations(DosDatabase.MIGRATION_1_2, DosDatabase.MIGRATION_2_3, DosDatabase.MIGRATION_3_4, DosDatabase.MIGRATION_4_5, DosDatabase.MIGRATION_5_6)
+            .addMigrations(DosDatabase.MIGRATION_1_2, DosDatabase.MIGRATION_2_3, DosDatabase.MIGRATION_3_4, DosDatabase.MIGRATION_4_5, DosDatabase.MIGRATION_5_6, DosDatabase.MIGRATION_6_7, DosDatabase.MIGRATION_7_8)
             .fallbackToDestructiveMigration()            // safety net for dev builds
             .build()
 
@@ -188,4 +191,19 @@ object AppModule {
     @Provides
     fun providePendingBindDao(db: DosDatabase): PendingBindDao =
         db.pendingBindDao()
+
+    /** Typed outbox for add-article operations created offline. */
+    @Provides
+    fun providePendingAddArticleDao(db: DosDatabase): PendingAddArticleDao =
+        db.pendingAddArticleDao()
+
+    /** Local article cache — makes offline-created articles immediately usable. */
+    @Provides
+    fun provideLocalArticleDao(db: DosDatabase): LocalArticleDao =
+        db.localArticleDao()
+
+    /** Local expiry-date entries — Scadenze feature, fully local (no API). */
+    @Provides
+    fun provideLocalExpiryDao(db: DosDatabase): LocalExpiryDao =
+        db.localExpiryDao()
 }

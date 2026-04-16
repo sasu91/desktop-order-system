@@ -7,12 +7,18 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.sasu91.dosapp.data.db.dao.CachedSkuDao
 import com.sasu91.dosapp.data.db.dao.DraftEodDao
 import com.sasu91.dosapp.data.db.dao.DraftReceiptDao
+import com.sasu91.dosapp.data.db.dao.LocalArticleDao
+import com.sasu91.dosapp.data.db.dao.LocalExpiryDao
+import com.sasu91.dosapp.data.db.dao.PendingAddArticleDao
 import com.sasu91.dosapp.data.db.dao.PendingBindDao
 import com.sasu91.dosapp.data.db.dao.PendingExceptionDao
 import com.sasu91.dosapp.data.db.dao.PendingRequestDao
 import com.sasu91.dosapp.data.db.entity.CachedSkuEntity
 import com.sasu91.dosapp.data.db.entity.DraftEodEntity
 import com.sasu91.dosapp.data.db.entity.DraftReceiptEntity
+import com.sasu91.dosapp.data.db.entity.LocalArticleEntity
+import com.sasu91.dosapp.data.db.entity.LocalExpiryEntity
+import com.sasu91.dosapp.data.db.entity.PendingAddArticleEntity
 import com.sasu91.dosapp.data.db.entity.PendingBindEntity
 import com.sasu91.dosapp.data.db.entity.PendingExceptionEntity
 import com.sasu91.dosapp.data.db.entity.PendingRequestEntity
@@ -29,6 +35,8 @@ import com.sasu91.dosapp.data.db.entity.PendingRequestEntity
  * | 4       | Added `cached_skus` table (offline EAN→SKU+stock cache)   |
  * | 5       | Added `pending_binds` table (offline EAN bind queue)      |
  * | 6       | Added `requires_expiry` column to `cached_skus`           |
+ * | 7       | Added `pending_add_articles` + `local_articles` tables    |
+ * | 8       | Added `local_expiry_entries` table (Scadenze feature)      |
  *
  * ## Accessing the singleton
  * Inject [DosDatabase] via Hilt (see `AppModule`).  Never instantiate directly.
@@ -47,8 +55,11 @@ import com.sasu91.dosapp.data.db.entity.PendingRequestEntity
         DraftEodEntity::class,
         CachedSkuEntity::class,
         PendingBindEntity::class,
+        PendingAddArticleEntity::class,
+        LocalArticleEntity::class,
+        LocalExpiryEntity::class,
     ],
-    version = 6,
+    version = 8,
     exportSchema = false,
 )
 abstract class DosDatabase : RoomDatabase() {
@@ -71,6 +82,15 @@ abstract class DosDatabase : RoomDatabase() {
 
     /** Typed outbox for secondary-EAN bind operations. */
     abstract fun pendingBindDao(): PendingBindDao
+
+    /** Typed outbox for add-article operations created offline. */
+    abstract fun pendingAddArticleDao(): PendingAddArticleDao
+
+    /** Local cache for articles created offline — enables immediate usability. */
+    abstract fun localArticleDao(): LocalArticleDao
+
+    /** Local expiry-date entries — Scadenze feature, fully local (no API). */
+    abstract fun localExpiryDao(): LocalExpiryDao
 
     // ── Migrations ────────────────────────────────────────────────────────────
 
@@ -185,6 +205,84 @@ abstract class DosDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE `cached_skus` ADD COLUMN `requires_expiry` INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
+        /**
+         * Migration 6 → 7: add `pending_add_articles` and `local_articles` tables.
+         *
+         * `pending_add_articles` — offline queue for new article creation.
+         * `local_articles`       — local read-model; makes newly created articles
+         *                          immediately usable before server confirmation.
+         */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `pending_add_articles` (
+                        `client_add_id`  TEXT    NOT NULL,
+                        `sku`            TEXT    NOT NULL DEFAULT '',
+                        `description`    TEXT    NOT NULL DEFAULT '',
+                        `ean_primary`    TEXT    NOT NULL DEFAULT '',
+                        `ean_secondary`  TEXT    NOT NULL DEFAULT '',
+                        `confirmed_sku`  TEXT,
+                        `status`         TEXT    NOT NULL DEFAULT 'PENDING',
+                        `created_at`     INTEGER NOT NULL DEFAULT 0,
+                        `retry_count`    INTEGER NOT NULL DEFAULT 0,
+                        `last_error`     TEXT,
+                        PRIMARY KEY(`client_add_id`)
+                    )
+                """.trimIndent())
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `local_articles` (
+                        `client_add_id`   TEXT    NOT NULL,
+                        `sku`             TEXT    NOT NULL DEFAULT '',
+                        `description`     TEXT    NOT NULL DEFAULT '',
+                        `ean_primary`     TEXT    NOT NULL DEFAULT '',
+                        `ean_secondary`   TEXT    NOT NULL DEFAULT '',
+                        `is_pending_sync` INTEGER NOT NULL DEFAULT 1,
+                        `created_at`      INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY(`client_add_id`)
+                    )
+                """.trimIndent())
+
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_local_articles_sku` ON `local_articles` (`sku`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_local_articles_ean_primary` ON `local_articles` (`ean_primary`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_local_articles_ean_secondary` ON `local_articles` (`ean_secondary`)")
+            }
+        }
+
+        /**
+         * Migration 7 → 8: add `local_expiry_entries` table for the Scadenze feature.
+         *
+         * Logical key is (sku + expiry_date) — enforced by the unique index.
+         * qty_colli is nullable: NULL means the operator did not provide a colli count.
+         */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `local_expiry_entries` (
+                        `id`          TEXT    NOT NULL,
+                        `sku`         TEXT    NOT NULL DEFAULT '',
+                        `description` TEXT    NOT NULL DEFAULT '',
+                        `ean`         TEXT    NOT NULL DEFAULT '',
+                        `expiry_date` TEXT    NOT NULL DEFAULT '',
+                        `qty_colli`   INTEGER,
+                        `source`      TEXT    NOT NULL DEFAULT 'MANUAL',
+                        `created_at`  INTEGER NOT NULL DEFAULT 0,
+                        `updated_at`  INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY(`id`)
+                    )
+                """.trimIndent())
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_local_expiry_sku` ON `local_expiry_entries` (`sku`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_local_expiry_date` ON `local_expiry_entries` (`expiry_date`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_local_expiry_sku_date` ON `local_expiry_entries` (`sku`, `expiry_date`)"
                 )
             }
         }

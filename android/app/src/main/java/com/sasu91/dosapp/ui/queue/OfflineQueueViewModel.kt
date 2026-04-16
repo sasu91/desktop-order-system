@@ -4,8 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sasu91.dosapp.data.db.entity.DraftEodEntity
 import com.sasu91.dosapp.data.db.entity.DraftReceiptEntity
+import com.sasu91.dosapp.data.db.entity.PendingAddArticleEntity
 import com.sasu91.dosapp.data.db.entity.PendingBindEntity
 import com.sasu91.dosapp.data.db.entity.PendingExceptionEntity
+import com.sasu91.dosapp.data.repository.AddArticleRepository
 import com.sasu91.dosapp.data.repository.EodRepository
 import com.sasu91.dosapp.data.repository.ExceptionRepository
 import com.sasu91.dosapp.data.repository.ReceivingRepository
@@ -26,7 +28,7 @@ import javax.inject.Inject
 // ---------------------------------------------------------------------------
 
 enum class QueueStatus { PENDING, FAILED, SENT }
-enum class QueueType   { EXCEPTION, RECEIPT, EOD, BIND }
+enum class QueueType   { EXCEPTION, RECEIPT, EOD, BIND, ARTICLE }
 
 /**
  * Flattened row shown in the offline-queue screen.
@@ -100,6 +102,20 @@ private fun PendingBindEntity.toQueueItem() = QueueItem(
     summary    = "Abbinamento EAN · $sku ← $eanSecondary",
 )
 
+private fun PendingAddArticleEntity.toQueueItem() = QueueItem(
+    id         = clientAddId,
+    type       = QueueType.ARTICLE,
+    status     = when (status) {
+        PendingAddArticleEntity.Status.SENT   -> QueueStatus.SENT
+        PendingAddArticleEntity.Status.FAILED -> QueueStatus.FAILED
+        else                                  -> QueueStatus.PENDING
+    },
+    createdAt  = createdAt,
+    retryCount = retryCount,
+    lastError  = lastError,
+    summary    = "Nuovo articolo · $sku · $description",
+)
+
 // ---------------------------------------------------------------------------
 // ViewModel
 // ---------------------------------------------------------------------------
@@ -115,6 +131,7 @@ class OfflineQueueViewModel @Inject constructor(
     private val receivingRepo: ReceivingRepository,
     private val eodRepo: EodRepository,
     private val bindRepo: SkuEanBindRepository,
+    private val addArticleRepo: AddArticleRepository,
 ) : ViewModel() {
 
     private val _busyIds = MutableStateFlow<Set<String>>(emptySet())
@@ -131,17 +148,23 @@ class OfflineQueueViewModel @Inject constructor(
      * Re-emits whenever any DB row changes.
      */
     val uiState: StateFlow<QueueUiState> = combine(
-        exceptionRepo.observeAll(),
-        receivingRepo.observeAll(),
-        eodRepo.observeAll(),
-        bindRepo.observeAll(),
-        _busyIds,
-    ) { exceptions, receipts, eods, binds, busy ->
+        combine(
+            exceptionRepo.observeAll(),
+            receivingRepo.observeAll(),
+            eodRepo.observeAll(),
+        ) { exceptions, receipts, eods -> Triple(exceptions, receipts, eods) },
+        combine(
+            bindRepo.observeAll(),
+            addArticleRepo.observeAll(),
+            _busyIds,
+        ) { binds, articles, busy -> Triple(binds, articles, busy) },
+    ) { (exceptions, receipts, eods), (binds, articles, busy) ->
         val merged = buildList {
             exceptions.forEach { add(it.toQueueItem()) }
             receipts.forEach   { add(it.toQueueItem()) }
             eods.forEach       { add(it.toQueueItem()) }
             binds.forEach      { add(it.toQueueItem()) }
+            articles.forEach   { add(it.toQueueItem()) }
         }.sortedByDescending { it.createdAt }
         QueueUiState(items = merged, busyIds = busy)
     }.stateIn(
@@ -152,11 +175,16 @@ class OfflineQueueViewModel @Inject constructor(
 
     /** Total unsent count across all tables — drives the navigation badge. */
     val pendingCount: StateFlow<Int> = combine(
-        exceptionRepo.observePendingCount(),
-        receivingRepo.observePendingCount(),
-        eodRepo.observePendingCount(),
-        bindRepo.observePendingCount(),
-    ) { exCount, rcCount, eodCount, bindCount -> exCount + rcCount + eodCount + bindCount }
+        combine(
+            exceptionRepo.observePendingCount(),
+            receivingRepo.observePendingCount(),
+            eodRepo.observePendingCount(),
+        ) { a, b, c -> a + b + c },
+        combine(
+            bindRepo.observePendingCount(),
+            addArticleRepo.observePendingCount(),
+        ) { d, e -> d + e },
+    ) { abc, de -> abc + de }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     // -----------------------------------------------------------------------
@@ -171,6 +199,7 @@ class OfflineQueueViewModel @Inject constructor(
                 QueueType.RECEIPT   -> receivingRepo.retry(item.id)
                 QueueType.EOD       -> eodRepo.retry(item.id)
                 QueueType.BIND      -> bindRepo.retry(item.id)
+                QueueType.ARTICLE   -> addArticleRepo.retry(item.id)
             }
             _busyIds.value = _busyIds.value - item.id
         }
@@ -193,6 +222,7 @@ class OfflineQueueViewModel @Inject constructor(
                 val receipts   = receivingRepo.observePending().first()
                 val eods       = eodRepo.observePending().first()
                 val binds      = bindRepo.observePending().first()
+                val articles   = addArticleRepo.observePending().first()
 
                 // Mark them all as busy in the UI
                 val allIds = buildSet<String> {
@@ -200,6 +230,7 @@ class OfflineQueueViewModel @Inject constructor(
                     receipts.forEach   { add(it.clientReceiptId) }
                     eods.forEach       { add(it.clientEodId) }
                     binds.forEach      { add(it.clientBindId) }
+                    articles.forEach   { add(it.clientAddId) }
                 }
                 _busyIds.value = _busyIds.value + allIds
 
@@ -208,6 +239,7 @@ class OfflineQueueViewModel @Inject constructor(
                 receipts.forEach   { receivingRepo.retry(it.clientReceiptId) }
                 eods.forEach       { eodRepo.retry(it.clientEodId) }
                 binds.forEach      { bindRepo.retry(it.clientBindId) }
+                articles.forEach   { addArticleRepo.retry(it.clientAddId) }
 
                 _busyIds.value = _busyIds.value - allIds
             } finally {
@@ -223,6 +255,7 @@ class OfflineQueueViewModel @Inject constructor(
             receivingRepo.deleteSent()
             eodRepo.deleteSent()
             bindRepo.deleteSent()
+            addArticleRepo.deleteSent()
         }
     }
 }

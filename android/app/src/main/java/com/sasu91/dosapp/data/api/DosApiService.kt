@@ -1,6 +1,8 @@
 package com.sasu91.dosapp.data.api
 
 import com.sasu91.dosapp.data.api.dto.*
+import com.sasu91.dosapp.data.api.dto.AddArticleRequestDto
+import com.sasu91.dosapp.data.api.dto.AddArticleResponseDto
 import retrofit2.Response
 import retrofit2.http.*
 
@@ -198,4 +200,22 @@ interface DosApiService {
     // -----------------------------------------------------------------------
     @DELETE("api/v1/order-dispatches")
     suspend fun deleteAllOrderDispatches(): Response<OrderDispatchDeleteResponseDto>
+
+    // -----------------------------------------------------------------------
+    // POST /api/v1/skus  — create new article
+    // -----------------------------------------------------------------------
+    /**
+     * Create a new SKU on the server.
+     *
+     * HTTP 201 = created. HTTP 200 = replay of an already-seen [clientAddId];
+     * [AddArticleResponseDto.alreadyCreated] = true, no new row written.
+     *
+     * The server may assign a different [AddArticleResponseDto.sku] than the
+     * provisional TMP-… code supplied in the request body; callers must
+     * reconcile the local cache with the returned definitive SKU.
+     */
+    @POST("api/v1/skus")
+    suspend fun createArticle(
+        @Body body: AddArticleRequestDto,
+    ): Response<AddArticleResponseDto>
 }

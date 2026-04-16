@@ -101,6 +101,12 @@ dependencies {
 
     // Coroutines
     implementation(libs.coroutines.android)
+
+    // Unit tests
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    testImplementation("io.mockk:mockk:1.13.10")
+    testImplementation("androidx.arch.core:core-testing:2.2.0")
 }
 
 kotlin {
