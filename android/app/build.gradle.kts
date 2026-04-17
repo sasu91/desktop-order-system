@@ -1,5 +1,3 @@
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -110,7 +108,7 @@ dependencies {
 
 kotlin {
     compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_17)
+        // jvmTarget defaults to android.compileOptions.targetCompatibility (Java 17)
         freeCompilerArgs.addAll(
             "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
             "-opt-in=com.google.accompanist.permissions.ExperimentalPermissionsApi",

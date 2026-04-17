@@ -19,7 +19,3 @@
 
 # Hilt
 -keepnames @dagger.hilt.android.lifecycle.HiltViewModel class * extends androidx.lifecycle.ViewModel
-
-# AGP 9.x / R8: disable default repackaging to preserve class package structure
-# (R8 >= AGP 9.1 applies -repackageclasses '' by default)
--dontrepackage
