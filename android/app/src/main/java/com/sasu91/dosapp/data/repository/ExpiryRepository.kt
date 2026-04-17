@@ -56,14 +56,19 @@ class ExpiryRepository @Inject constructor(
      * Normalises 12-digit UPC-A barcodes to 13-digit EAN-13 (prepend '0').
      */
     suspend fun resolveEanCacheOnly(ean: String): CachedSkuResult {
-        val normalized = if (ean.length == 12 && ean.all { it.isDigit() }) "0$ean" else ean
-        val entity = cachedSkuDao.getByEan(normalized)
-            ?: cachedSkuDao.getByEan(ean) // also try the raw form
+        // Normalise: 12-digit UPC-A → EAN-13 by prepending '0'.
+        val ean13 = if (ean.length == 12 && ean.all { it.isDigit() }) "0$ean" else ean
+        // Dual-key probe for EAN-13: mirrors SkuCacheRepository to handle stale
+        // cache rows stored under the 12-digit form (ean13.drop(1)).
+        val entity = if (ean13.length == 13)
+            cachedSkuDao.getByEanOrShort(ean13 = ean13, ean12 = ean13.drop(1))
+        else
+            cachedSkuDao.getByEan(ean13)
         return if (entity != null) {
             CachedSkuResult.Hit(
                 sku         = entity.sku,
                 description = entity.description,
-                ean         = normalized,
+                ean         = ean13,
             )
         } else {
             CachedSkuResult.Miss("EAN $ean non trovato in cache. Effettua il precaricamento oppure scansiona un codice già presente.")

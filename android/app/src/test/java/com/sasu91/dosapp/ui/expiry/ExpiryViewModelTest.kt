@@ -228,6 +228,100 @@ class ExpiryViewModelTest {
         assertTrue(state.pendingEntries.isEmpty())
     }
 
+    // ── Screen mode transitions ───────────────────────────────────────────────
+
+    @Test
+    fun `initial state is LIST mode with camera inactive`() = runTest {
+        testDispatcher.scheduler.advanceUntilIdle()
+        val state = viewModel.state.value
+        assertEquals(ExpiryScreenMode.LIST, state.screenMode)
+        assertFalse(state.isCameraActive)
+    }
+
+    @Test
+    fun `enterScanMode transitions to SCAN with active camera`() = runTest {
+        viewModel.enterScanMode()
+        val state = viewModel.state.value
+        assertEquals(ExpiryScreenMode.SCAN, state.screenMode)
+        assertTrue(state.isCameraActive)
+    }
+
+    @Test
+    fun `exitScanMode returns to LIST and clears scan state`() = runTest {
+        viewModel.enterScanMode()
+        viewModel.exitScanMode()
+        val state = viewModel.state.value
+        assertEquals(ExpiryScreenMode.LIST, state.screenMode)
+        assertFalse(state.isCameraActive)
+        assertNull(state.scannedSku)
+    }
+
+    @Test
+    fun `onBarcodeDetected hit transitions to RESULT mode`() = runTest {
+        coEvery { repo.resolveEanCacheOnly("0012345678905") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte Intero", "0012345678905")
+        viewModel.enterScanMode()
+
+        viewModel.onBarcodeDetected("0012345678905")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.state.value
+        assertEquals(ExpiryScreenMode.RESULT, state.screenMode)
+        assertEquals("SKU001", state.scannedSku)
+        assertFalse(state.isCameraActive)
+    }
+
+    @Test
+    fun `onBarcodeDetected miss stays in SCAN mode with active camera`() = runTest {
+        coEvery { repo.resolveEanCacheOnly(any()) } returns
+            ExpiryRepository.CachedSkuResult.Miss("EAN non trovato in cache.")
+        viewModel.enterScanMode()
+
+        viewModel.onBarcodeDetected("9999999999999")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.state.value
+        assertEquals(ExpiryScreenMode.SCAN, state.screenMode)
+        assertNotNull(state.scanError)
+        assertTrue(state.isCameraActive)
+    }
+
+    @Test
+    fun `resetScan from RESULT returns to SCAN mode`() = runTest {
+        coEvery { repo.resolveEanCacheOnly(any()) } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN")
+        viewModel.enterScanMode()
+        viewModel.onBarcodeDetected("EAN")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.resetScan()
+
+        val state = viewModel.state.value
+        assertEquals(ExpiryScreenMode.SCAN, state.screenMode)
+        assertTrue(state.isCameraActive)
+        assertNull(state.scannedSku)
+    }
+
+    @Test
+    fun `saveAllPending returns to LIST mode after saving`() = runTest {
+        coEvery { repo.resolveEanCacheOnly(any()) } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN")
+        coEvery { repo.addOrMerge(any(), any(), any(), any(), any(), any()) } returns
+            ExpiryRepository.AddResult.Inserted
+        viewModel.enterScanMode()
+        viewModel.onBarcodeDetected("EAN")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-20", 2)
+
+        viewModel.saveAllPending()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.state.value
+        assertEquals(ExpiryScreenMode.LIST, state.screenMode)
+        assertFalse(state.isCameraActive)
+        assertNull(state.scannedSku)
+    }
+
     // ── Bucket classification ─────────────────────────────────────────────────
 
     @Test

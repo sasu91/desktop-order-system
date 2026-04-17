@@ -21,6 +21,15 @@ import javax.inject.Inject
 // ---------------------------------------------------------------------------
 
 /**
+ * Explicit screen modes to keep camera and agenda visually separate.
+ *
+ * - [LIST]   Default: agenda buckets, no camera panel rendered.
+ * - [SCAN]   Full camera active; operator scans barcodes from local cache.
+ * - [RESULT] Camera paused (last frame) + article form + pending entries.
+ */
+enum class ExpiryScreenMode { LIST, SCAN, RESULT }
+
+/**
  * A pending date entry that the operator has added in the form but not yet
  * saved. Multiple pending entries can be accumulated before saving all at once.
  */
@@ -50,7 +59,8 @@ data class PendingExpiryEntry(
  * @param editingEntry           Non-null when the operator is editing an existing entry.
  */
 data class ExpiryUiState(
-    val isCameraActive: Boolean = true,
+    val screenMode: ExpiryScreenMode = ExpiryScreenMode.LIST,
+    val isCameraActive: Boolean = false,
     val isResolving: Boolean = false,
     val scannedSku: String? = null,
     val scannedDescription: String = "",
@@ -145,14 +155,15 @@ class ExpiryViewModel @Inject constructor(
                 is ExpiryRepository.CachedSkuResult.Hit -> {
                     _state.update {
                         it.copy(
-                            isResolving       = false,
-                            isCameraActive    = false,  // stay paused while operator fills date
-                            scannedSku        = result.sku,
+                            screenMode         = ExpiryScreenMode.RESULT,
+                            isResolving        = false,
+                            isCameraActive     = false,
+                            scannedSku         = result.sku,
                             scannedDescription = result.description,
-                            scannedEan        = result.ean,
-                            pendingEntries    = emptyList(),
-                            nextPendingId     = 0,
-                            ocrProposal       = null,
+                            scannedEan         = result.ean,
+                            pendingEntries     = emptyList(),
+                            nextPendingId      = 0,
+                            ocrProposal        = null,
                         )
                     }
                 }
@@ -160,6 +171,7 @@ class ExpiryViewModel @Inject constructor(
                     lastScannedEan = null  // allow retry of the same EAN after error
                     _state.update {
                         it.copy(
+                            screenMode     = ExpiryScreenMode.SCAN,
                             isResolving    = false,
                             isCameraActive = true,
                             scanError      = result.message,
@@ -173,11 +185,46 @@ class ExpiryViewModel @Inject constructor(
     /** Dismiss the scan-error banner and allow a new scan. */
     fun clearScanError() = _state.update { it.copy(scanError = null) }
 
+    /** Enter scan mode — operator tapped the camera button from the agenda list. */
+    fun enterScanMode() {
+        lastScannedEan = null
+        _state.update {
+            it.copy(
+                screenMode         = ExpiryScreenMode.SCAN,
+                isCameraActive     = true,
+                scannedSku         = null,
+                scannedDescription = "",
+                scannedEan         = "",
+                pendingEntries     = emptyList(),
+                ocrProposal        = null,
+                scanError          = null,
+            )
+        }
+    }
+
+    /** Exit scan/result mode and return to the agenda list. Clears all scan state. */
+    fun exitScanMode() {
+        lastScannedEan = null
+        _state.update {
+            it.copy(
+                screenMode         = ExpiryScreenMode.LIST,
+                isCameraActive     = false,
+                scannedSku         = null,
+                scannedDescription = "",
+                scannedEan         = "",
+                pendingEntries     = emptyList(),
+                ocrProposal        = null,
+                scanError          = null,
+            )
+        }
+    }
+
     /** Reset the current SKU so the operator can scan a different article. */
     fun resetScan() {
         lastScannedEan = null
         _state.update {
             it.copy(
+                screenMode         = ExpiryScreenMode.SCAN,
                 isCameraActive     = true,
                 scannedSku         = null,
                 scannedDescription = "",
@@ -277,8 +324,14 @@ class ExpiryViewModel @Inject constructor(
             val msg = if (toSave.size == 1) "Scadenza salvata" else "${toSave.size} scadenze salvate"
             _state.update {
                 it.copy(
-                    pendingEntries = emptyList(),
-                    feedbackMessage = msg,
+                    screenMode         = ExpiryScreenMode.LIST,
+                    isCameraActive     = false,
+                    scannedSku         = null,
+                    scannedDescription = "",
+                    scannedEan         = "",
+                    pendingEntries     = emptyList(),
+                    ocrProposal        = null,
+                    feedbackMessage    = msg,
                 )
             }
         }

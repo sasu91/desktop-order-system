@@ -35,8 +35,7 @@ class ExpiryRepositoryTest {
     @Test
     fun `resolveEanCacheOnly returns Hit when ean found in cache`() = runTest {
         val entity = fakeCachedSku("0012345678905", "SKU001", "Latte Intero")
-        coEvery { cachedSkuDao.getByEan("0012345678905") } returns entity
-        coEvery { cachedSkuDao.getByEan("012345678905") } returns null
+        coEvery { cachedSkuDao.getByEanOrShort("0012345678905", "012345678905") } returns entity
 
         val result = repo.resolveEanCacheOnly("0012345678905")
 
@@ -50,7 +49,7 @@ class ExpiryRepositoryTest {
     fun `resolveEanCacheOnly normalises 12-digit UPC-A to EAN-13`() = runTest {
         // UPC-A input: 12 digits → prepend '0' → 13 digits
         val entity = fakeCachedSku("0012345678905", "SKU001", "Burro")
-        coEvery { cachedSkuDao.getByEan("0012345678905") } returns entity
+        coEvery { cachedSkuDao.getByEanOrShort("0012345678905", "012345678905") } returns entity
 
         val result = repo.resolveEanCacheOnly("012345678905")  // 12-digit input
 
@@ -60,11 +59,35 @@ class ExpiryRepositoryTest {
 
     @Test
     fun `resolveEanCacheOnly returns Miss when not in cache`() = runTest {
-        coEvery { cachedSkuDao.getByEan(any()) } returns null
+        coEvery { cachedSkuDao.getByEanOrShort(any(), any()) } returns null
 
         val result = repo.resolveEanCacheOnly("9999999999999")
 
         assertTrue(result is ExpiryRepository.CachedSkuResult.Miss)
+    }
+
+    @Test
+    fun `resolveEanCacheOnly finds stale 12-digit cache entry via dual-key probe`() = runTest {
+        // EAN-13 scanned; cache stores the entry under the shorter 12-digit key (ean13.drop(1))
+        val entity = fakeCachedSku("805404572000", "SKU002", "Formaggio")
+        coEvery { cachedSkuDao.getByEanOrShort("8054045720005", "805404572000") } returns entity
+
+        val result = repo.resolveEanCacheOnly("8054045720005")
+
+        assertTrue(result is ExpiryRepository.CachedSkuResult.Hit)
+        assertEquals("8054045720005", (result as ExpiryRepository.CachedSkuResult.Hit).ean)
+        assertEquals("SKU002", (result as ExpiryRepository.CachedSkuResult.Hit).sku)
+    }
+
+    @Test
+    fun `resolveEanCacheOnly uses dual-key probe and finds EAN-13 direct hit`() = runTest {
+        val entity = fakeCachedSku("8054045720005", "SKU002", "Formaggio")
+        coEvery { cachedSkuDao.getByEanOrShort("8054045720005", "805404572000") } returns entity
+
+        val result = repo.resolveEanCacheOnly("8054045720005")
+
+        assertTrue(result is ExpiryRepository.CachedSkuResult.Hit)
+        assertEquals("8054045720005", (result as ExpiryRepository.CachedSkuResult.Hit).ean)
     }
 
     // ── addOrMerge — insert path ───────────────────────────────────────────────

@@ -7,6 +7,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -34,12 +35,10 @@ private val COLOR_DAY_AFTER  = Color(0xFFF9A825)   // amber
 /**
  * Scadenze screen — local-only expiry date tracking.
  *
- * Layout (top → bottom):
- *  1. Camera panel (scan EAN from local cache + OCR date detection)
- *  2. Scan-error / resolving feedback
- *  3. Scanned-SKU card with date-entry form (date picker + optional colli)
- *  4. Pending entries list (multi-date before save) + Save button
- *  5. Agenda: Oggi / Domani / Dopodomani bucket cards
+ * Uses a three-mode state machine ([ExpiryScreenMode]):
+ *  - LIST   Default: agenda buckets + “Scansiona” button in the TopAppBar.
+ *  - SCAN   Full camera panel; operator scans a barcode from the local cache.
+ *  - RESULT Camera paused (last frame) + article form + pending entries list.
  */
 @Composable
 fun ExpiryScreen(
@@ -65,174 +64,281 @@ fun ExpiryScreen(
     }
 
     Scaffold(
-        topBar        = { TopAppBar(title = { Text("Scadenze") }) },
-        snackbarHost  = { SnackbarHost(snackbarHostState) },
-    ) { padding ->
-        LazyColumn(
-            modifier       = Modifier
-                .padding(padding)
-                .fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 24.dp),
-        ) {
-            // ─── 1. Camera panel ─────────────────────────────────────────
-            item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(if (state.scannedSku != null) 140.dp else 200.dp),
-                ) {
-                    BarcodeCameraPanel(
-                        onBarcodeDetected  = viewModel::onBarcodeDetected,
-                        paused             = !state.isCameraActive,
-                        onOcrTextAvailable = if (state.scannedSku != null) viewModel::onOcrText else null,
-                        modifier           = Modifier.fillMaxSize(),
-                    )
-                    // Camera hint overlay when no SKU yet
-                    if (state.scannedSku == null && !state.isResolving) {
-                        Surface(
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 8.dp),
-                            color = Color.Black.copy(alpha = 0.45f),
-                            shape = MaterialTheme.shapes.small,
-                        ) {
-                            Row(
-                                modifier          = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                Icon(
-                                    imageVector        = Icons.Default.CameraAlt,
-                                    contentDescription = null,
-                                    tint               = Color.White,
-                                    modifier           = Modifier.size(14.dp),
-                                )
-                                Text(
-                                    "Scansiona un articolo in cache",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.White,
-                                )
-                            }
+        topBar = {
+            TopAppBar(
+                title = { Text("Scadenze") },
+                navigationIcon = {
+                    if (state.screenMode != ExpiryScreenMode.LIST) {
+                        IconButton(onClick = viewModel::exitScanMode) {
+                            Icon(Icons.Default.Close, contentDescription = "Chiudi scansione")
                         }
                     }
-                }
-            }
-
-            // ─── Resolving indicator ──────────────────────────────────────
-            item {
-                if (state.isResolving) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
-            }
-
-            // ─── Scan error banner ────────────────────────────────────────
-            item {
-                if (state.scanError != null) {
-                    Card(
-                        colors   = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                        onClick  = viewModel::clearScanError,
-                    ) {
-                        Text(
-                            text     = "⚠ ${state.scanError}  (tocca per chiudere)",
-                            modifier = Modifier.padding(10.dp),
-                            style    = MaterialTheme.typography.bodySmall,
-                            color    = MaterialTheme.colorScheme.onErrorContainer,
-                        )
+                },
+                actions = {
+                    if (state.screenMode == ExpiryScreenMode.LIST) {
+                        IconButton(onClick = viewModel::enterScanMode) {
+                            Icon(Icons.Default.CameraAlt, contentDescription = "Scansiona")
+                        }
                     }
-                }
-            }
+                },
+            )
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+    ) { padding ->
+        when (state.screenMode) {
+            ExpiryScreenMode.LIST   -> ListModeContent(state, viewModel, padding)
+            ExpiryScreenMode.SCAN   -> ScanModeContent(state, viewModel, padding)
+            ExpiryScreenMode.RESULT -> ResultModeContent(state, viewModel, padding)
+        }
+    }
+}
 
-            // ─── 2. Scanned SKU card + date form ─────────────────────────
-            if (state.scannedSku != null) {
-                item {
-                    ScannedSkuCard(
-                        sku            = state.scannedSku!!,
-                        description    = state.scannedDescription,
-                        ean            = state.scannedEan,
-                        ocrProposal    = state.ocrProposal,
-                        onAcceptOcr    = viewModel::acceptOcrProposal,
-                        onDismissOcr   = viewModel::dismissOcrProposal,
-                        onAddEntry     = { date, qty -> viewModel.addPendingEntry(date, qty) },
-                        onResetScan    = viewModel::resetScan,
-                        modifier       = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+// ---------------------------------------------------------------------------
+// Mode-specific content composables
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun ListModeContent(
+    state: ExpiryUiState,
+    viewModel: ExpiryViewModel,
+    padding: PaddingValues,
+) {
+    LazyColumn(
+        modifier       = Modifier
+            .padding(padding)
+            .fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 24.dp),
+    ) {
+        // Scan call-to-action button
+        item {
+            FilledTonalButton(
+                onClick  = viewModel::enterScanMode,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+                Icon(Icons.Default.CameraAlt, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Scansiona un articolo")
+            }
+        }
+
+        // Agenda header
+        item {
+            Text(
+                text       = "Agenda scadenze",
+                style      = MaterialTheme.typography.titleSmall,
+                modifier   = Modifier.padding(horizontal = 16.dp),
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+
+        item {
+            BucketSection(
+                label    = "Oggi",
+                color    = COLOR_TODAY,
+                items    = state.todayItems,
+                onEdit   = viewModel::startEdit,
+                onDelete = viewModel::deleteEntry,
+            )
+        }
+
+        item {
+            BucketSection(
+                label    = "Domani",
+                color    = COLOR_TOMORROW,
+                items    = state.tomorrowItems,
+                onEdit   = viewModel::startEdit,
+                onDelete = viewModel::deleteEntry,
+            )
+        }
+
+        item {
+            BucketSection(
+                label    = "Dopodomani",
+                color    = COLOR_DAY_AFTER,
+                items    = state.dayAfterItems,
+                onEdit   = viewModel::startEdit,
+                onDelete = viewModel::deleteEntry,
+            )
+        }
+
+        if (state.todayItems.isEmpty() && state.tomorrowItems.isEmpty() && state.dayAfterItems.isEmpty()) {
+            item {
+                Box(
+                    modifier         = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text  = "Nessuna scadenza nei prossimi 3 giorni",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.outline,
                     )
                 }
+            }
+        }
+    }
+}
 
-                // Pending entries before save
-                if (state.pendingEntries.isNotEmpty()) {
-                    item {
-                        PendingEntriesSection(
-                            entries    = state.pendingEntries,
-                            onRemove   = viewModel::removePendingEntry,
-                            onSaveAll  = viewModel::saveAllPending,
-                            modifier   = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+@Composable
+private fun ScanModeContent(
+    state: ExpiryUiState,
+    viewModel: ExpiryViewModel,
+    padding: PaddingValues,
+) {
+    Column(
+        modifier = Modifier
+            .padding(padding)
+            .fillMaxSize(),
+    ) {
+        // Camera panel fills the available space
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+        ) {
+            BarcodeCameraPanel(
+                onBarcodeDetected  = viewModel::onBarcodeDetected,
+                paused             = !state.isCameraActive,
+                onOcrTextAvailable = null,
+                modifier           = Modifier.fillMaxSize(),
+            )
+            // Scan hint overlay
+            if (!state.isResolving) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 16.dp),
+                    color = Color.Black.copy(alpha = 0.45f),
+                    shape = MaterialTheme.shapes.small,
+                ) {
+                    Row(
+                        modifier              = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment     = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(
+                            imageVector        = Icons.Default.CameraAlt,
+                            contentDescription = null,
+                            tint               = Color.White,
+                            modifier           = Modifier.size(16.dp),
+                        )
+                        Text(
+                            "Inquadra il barcode dell'articolo",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White,
                         )
                     }
                 }
             }
+        }
 
-            // ─── 3. Agenda buckets ────────────────────────────────────────
-            item {
-                Spacer(Modifier.height(8.dp))
+        // Resolving indicator
+        if (state.isResolving) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+
+        // Scan error banner
+        if (state.scanError != null) {
+            Card(
+                colors   = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                onClick  = viewModel::clearScanError,
+            ) {
                 Text(
-                    text     = "Agenda scadenze",
-                    style    = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    fontWeight = FontWeight.SemiBold,
+                    text     = "⚠ ${state.scanError}  (tocca per chiudere)",
+                    modifier = Modifier.padding(10.dp),
+                    style    = MaterialTheme.typography.bodySmall,
+                    color    = MaterialTheme.colorScheme.onErrorContainer,
                 )
             }
+        }
+    }
+}
 
-            // Oggi
+@Composable
+private fun ResultModeContent(
+    state: ExpiryUiState,
+    viewModel: ExpiryViewModel,
+    padding: PaddingValues,
+) {
+    LazyColumn(
+        modifier       = Modifier
+            .padding(padding)
+            .fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 24.dp),
+    ) {
+        // Compact camera preview (paused — shows last frame)
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(140.dp),
+            ) {
+                BarcodeCameraPanel(
+                    onBarcodeDetected  = viewModel::onBarcodeDetected,
+                    paused             = true,
+                    onOcrTextAvailable = viewModel::onOcrText,
+                    modifier           = Modifier.fillMaxSize(),
+                )
+            }
+        }
+
+        // Resolving indicator
+        item {
+            if (state.isResolving) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+        }
+
+        // Scan error banner (edge case: error while in result mode)
+        item {
+            if (state.scanError != null) {
+                Card(
+                    colors   = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    onClick  = viewModel::clearScanError,
+                ) {
+                    Text(
+                        text     = "⚠ ${state.scanError}  (tocca per chiudere)",
+                        modifier = Modifier.padding(10.dp),
+                        style    = MaterialTheme.typography.bodySmall,
+                        color    = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+            }
+        }
+
+        // Scanned SKU card + date entry form
+        if (state.scannedSku != null) {
             item {
-                BucketSection(
-                    label    = "Oggi",
-                    color    = COLOR_TODAY,
-                    items    = state.todayItems,
-                    onEdit   = viewModel::startEdit,
-                    onDelete = viewModel::deleteEntry,
+                ScannedSkuCard(
+                    sku          = state.scannedSku!!,
+                    description  = state.scannedDescription,
+                    ean          = state.scannedEan,
+                    ocrProposal  = state.ocrProposal,
+                    onAcceptOcr  = viewModel::acceptOcrProposal,
+                    onDismissOcr = viewModel::dismissOcrProposal,
+                    onAddEntry   = { date, qty -> viewModel.addPendingEntry(date, qty) },
+                    onResetScan  = viewModel::resetScan,
+                    modifier     = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
 
-            // Domani
-            item {
-                BucketSection(
-                    label    = "Domani",
-                    color    = COLOR_TOMORROW,
-                    items    = state.tomorrowItems,
-                    onEdit   = viewModel::startEdit,
-                    onDelete = viewModel::deleteEntry,
-                )
-            }
-
-            // Dopodomani
-            item {
-                BucketSection(
-                    label    = "Dopodomani",
-                    color    = COLOR_DAY_AFTER,
-                    items    = state.dayAfterItems,
-                    onEdit   = viewModel::startEdit,
-                    onDelete = viewModel::deleteEntry,
-                )
-            }
-
-            // Empty state when all buckets are empty
-            if (state.todayItems.isEmpty() && state.tomorrowItems.isEmpty() && state.dayAfterItems.isEmpty()) {
+            if (state.pendingEntries.isNotEmpty()) {
                 item {
-                    Box(
-                        modifier          = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        contentAlignment  = Alignment.Center,
-                    ) {
-                        Text(
-                            text  = "Nessuna scadenza nei prossimi 3 giorni",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                    }
+                    PendingEntriesSection(
+                        entries   = state.pendingEntries,
+                        onRemove  = viewModel::removePendingEntry,
+                        onSaveAll = viewModel::saveAllPending,
+                        modifier  = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
                 }
             }
         }
