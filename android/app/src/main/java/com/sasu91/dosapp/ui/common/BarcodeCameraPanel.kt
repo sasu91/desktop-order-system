@@ -31,8 +31,14 @@ private const val TAG = "BarcodeCameraPanel"
  * Reusable CameraX + ML Kit barcode scanning panel.
  *
  * Scans EAN-13 / EAN-8 / Code-128 / QR codes continuously.
- * Pauses processing (but keeps the camera preview live) when [paused] is true,
- * so the operator can read the result card without the camera hammering [onBarcodeDetected].
+ * When [paused] is true the camera preview stays live and the analyser keeps running,
+ * but the [onBarcodeDetected] callback is suppressed so the operator can read a result
+ * card without the camera hammering new detections.
+ *
+ * NOTE: [paused] only gates the *barcode* callback.  If [onOcrTextAvailable] is provided,
+ * OCR continues running even while paused — this is intentional so that screens which
+ * pause after a scan (e.g. ExpiryScreen RESULT mode) can still auto-fill expiry dates
+ * via OCR.  Screens that don't need this simply leave [onOcrTextAvailable] = null.
  *
  * Usage: embed in any Composable that needs scan input.  Pass [paused]=true while
  * handling a result and [paused]=false when ready for the next scan.
@@ -99,6 +105,11 @@ fun BarcodeCameraPanel(
 
 /** ML Kit barcode analyser with optional throttled OCR text pass for expiry-date detection.
  *
+ * Pause semantics: [isPaused] gates only the barcode [onDetected] callback.  The analyser
+ * itself keeps running and, when [onOcrTextAvailable] is non-null, OCR continues regardless
+ * of pause state.  This lets the caller freeze barcode detection (e.g. while showing a
+ * result card) while still receiving OCR text for auto-fill flows.
+ *
  * When [onOcrTextAvailable] is non-null:
  *  - A [com.google.mlkit.vision.text.TextRecognizer] is instantiated once and reused.
  *  - OCR runs every [OCR_FRAME_INTERVAL] frames (≈ 2 fps at 30 fps camera) to limit CPU load.
@@ -107,12 +118,14 @@ fun BarcodeCameraPanel(
  *  - Raw ML Kit [com.google.mlkit.vision.text.Text.text] is forwarded unchanged;  the caller
  *    decides how to parse it (see ExpiryDateParser).
  *
- * When [onOcrTextAvailable] is null, behaviour is identical to the original implementation.
+ * When [onOcrTextAvailable] is null, behaviour is identical to the original implementation
+ * (barcode-only, paused fully suppresses the callback).
  */
 internal class BarcodeImageAnalyser(
     /**
-     * Checked on the analyser thread before any ML Kit work.
+     * Checked on the analyser thread before invoking [onDetected].
      * Must be thread-safe (read an [AtomicBoolean] or similar).
+     * Does NOT gate OCR — see class KDoc.
      */
     private val isPaused: () -> Boolean,
     private val onDetected: (String) -> Unit,
@@ -145,24 +158,26 @@ internal class BarcodeImageAnalyser(
 
     @OptIn(ExperimentalGetImage::class)
     override fun analyze(imageProxy: ImageProxy) {
-        if (isPaused()) {
-            imageProxy.close()
-            return
-        }
         val mediaImage = imageProxy.image ?: run { imageProxy.close(); return }
         val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
 
         frameCount++
         val runOcr = textRecognizer != null && (frameCount % OCR_FRAME_INTERVAL == 0)
+        // Capture once so the pause decision is consistent across both ML Kit callbacks
+        // for this frame (avoids TOCTOU if the flag flips mid-frame).
+        val barcodePaused = isPaused()
 
         scanner.process(image)
             .addOnSuccessListener { barcodes ->
-                barcodes.firstNotNullOfOrNull { it.rawValue }?.let(onDetected)
+                if (!barcodePaused) {
+                    barcodes.firstNotNullOfOrNull { it.rawValue }?.let(onDetected)
+                }
             }
             .addOnCompleteListener {
                 if (runOcr) {
                     // Sequential: barcode completes first, then OCR on the same camera frame.
-                    // imageProxy stays open until the OCR task's addOnCompleteListener fires.
+                    // OCR runs even while paused (see class KDoc) — imageProxy stays open
+                    // until the OCR task's addOnCompleteListener fires.
                     textRecognizer!!.process(image)
                         .addOnSuccessListener { visionText ->
                             val raw = visionText.text

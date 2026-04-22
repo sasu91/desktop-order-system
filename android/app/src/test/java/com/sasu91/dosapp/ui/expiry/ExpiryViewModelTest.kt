@@ -188,6 +188,32 @@ class ExpiryViewModelTest {
         assertEquals("2026-04-16", viewModel.state.value.ocrProposal)
     }
 
+    /**
+     * Regression for the "OCR non funziona in Scadenze" bug (April 2026):
+     * BarcodeCameraPanel previously short-circuited the analyser when paused=true,
+     * which blocked OCR in RESULT mode (isCameraActive=false).  The fix moved the
+     * pause gating to the barcode callback only.  This test pins the VM contract:
+     * once a SKU is set (RESULT mode, camera paused), OCR text must still produce
+     * a proposal.
+     */
+    @Test
+    fun `onOcrText proposes date in RESULT mode with camera paused`() = runTest {
+        coEvery { repo.resolveEanCacheOnly(any()) } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN")
+        viewModel.onBarcodeDetected("EAN")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Sanity: VM is now in RESULT mode (camera paused from the panel's POV).
+        assertFalse(viewModel.state.value.isCameraActive)
+        assertEquals("SKU001", viewModel.state.value.scannedSku)
+
+        // OCR arrives while the camera is paused — must still produce a proposal.
+        viewModel.onOcrText("16/04/2026")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals("2026-04-16", viewModel.state.value.ocrProposal)
+    }
+
     @Test
     fun `acceptOcrProposal adds pending entry with OCR source`() = runTest {
         coEvery { repo.resolveEanCacheOnly(any()) } returns
