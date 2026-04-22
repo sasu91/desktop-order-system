@@ -6,7 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.sasu91.dosapp.data.api.dto.ExceptionRequestDto
 import com.sasu91.dosapp.data.api.dto.SkuDto
 import com.sasu91.dosapp.data.repository.ExceptionRepository
-import com.sasu91.dosapp.data.repository.SkuCacheRepository
+import com.sasu91.dosapp.data.repository.SkuLookupRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -54,7 +54,7 @@ data class QuickWasteUiState(
 
 @HiltViewModel
 class QuickWasteViewModel @Inject constructor(
-    private val skuCache: SkuCacheRepository,
+    private val skuLookup: SkuLookupRepository,
     private val exceptionRepo: ExceptionRepository,
 ) : ViewModel() {
 
@@ -115,11 +115,11 @@ class QuickWasteViewModel @Inject constructor(
                     _state.update { it.copy(discardedCount = it.discardedCount + 1) }
                 }
                 else -> {
-                    when (val result = skuCache.resolveEan(ean)) {
-                        is SkuCacheRepository.ResolveResult.Hit -> {
+                    when (val result = skuLookup.resolveByEan(ean)) {
+                        is SkuLookupRepository.ResolveResult.Hit -> {
                             acceptScan(result.sku)
                         }
-                        is SkuCacheRepository.ResolveResult.Miss -> {
+                        is SkuLookupRepository.ResolveResult.Miss -> {
                             Log.d(TAG, "EAN $ean not resolvable: ${result.message} (offline=${result.isOffline})")
                             if (!result.isOffline) {
                                 // Real 404 / bad EAN — blacklist for this session

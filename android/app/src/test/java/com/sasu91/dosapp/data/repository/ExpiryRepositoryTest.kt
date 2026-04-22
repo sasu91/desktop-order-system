@@ -1,8 +1,10 @@
 package com.sasu91.dosapp.data.repository
 
 import com.sasu91.dosapp.data.db.dao.CachedSkuDao
+import com.sasu91.dosapp.data.db.dao.LocalArticleDao
 import com.sasu91.dosapp.data.db.dao.LocalExpiryDao
 import com.sasu91.dosapp.data.db.entity.CachedSkuEntity
+import com.sasu91.dosapp.data.db.entity.LocalArticleEntity
 import com.sasu91.dosapp.data.db.entity.LocalExpiryEntity
 import io.mockk.coEvery
 import io.mockk.coJustRun
@@ -21,13 +23,16 @@ class ExpiryRepositoryTest {
 
     private lateinit var dao: LocalExpiryDao
     private lateinit var cachedSkuDao: CachedSkuDao
+    private lateinit var localArticleDao: LocalArticleDao
     private lateinit var repo: ExpiryRepository
 
     @Before
     fun setup() {
-        dao          = mockk(relaxed = true)
-        cachedSkuDao = mockk(relaxed = true)
-        repo         = ExpiryRepository(dao, cachedSkuDao)
+        dao             = mockk(relaxed = true)
+        cachedSkuDao    = mockk(relaxed = true)
+        localArticleDao = mockk(relaxed = true)
+        coEvery { localArticleDao.getByEan(any()) } returns null  // default: no local match
+        repo            = ExpiryRepository(dao, cachedSkuDao, localArticleDao)
     }
 
     // ── EAN resolution ────────────────────────────────────────────────────────
@@ -88,6 +93,42 @@ class ExpiryRepositoryTest {
 
         assertTrue(result is ExpiryRepository.CachedSkuResult.Hit)
         assertEquals("8054045720005", (result as ExpiryRepository.CachedSkuResult.Hit).ean)
+    }
+
+    @Test
+    fun `resolveEanCacheOnly returns Hit from local_articles before consulting cache`() = runTest {
+        val local = LocalArticleEntity(
+            clientAddId   = "cid-1",
+            sku           = "TMP-123",
+            description   = "Articolo offline",
+            eanPrimary    = "8001234567895",
+            eanSecondary  = "",
+            isPendingSync = true,
+            createdAt     = 0L,
+        )
+        coEvery { localArticleDao.getByEan("8001234567895") } returns local
+
+        val result = repo.resolveEanCacheOnly("8001234567895")
+
+        assertTrue(result is ExpiryRepository.CachedSkuResult.Hit)
+        val hit = result as ExpiryRepository.CachedSkuResult.Hit
+        assertEquals("TMP-123", hit.sku)
+        assertEquals("Articolo offline", hit.description)
+        // Cache must not be consulted when local_articles already answered.
+        coVerify(exactly = 0) { cachedSkuDao.getByEanOrShort(any(), any()) }
+        coVerify(exactly = 0) { cachedSkuDao.getByEan(any()) }
+    }
+
+    @Test
+    fun `resolveEanCacheOnly falls through to cache when local_articles empty`() = runTest {
+        coEvery { localArticleDao.getByEan(any()) } returns null
+        val entity = fakeCachedSku("0012345678905", "SKU009", "Prodotto cache")
+        coEvery { cachedSkuDao.getByEanOrShort("0012345678905", "012345678905") } returns entity
+
+        val result = repo.resolveEanCacheOnly("0012345678905")
+
+        assertTrue(result is ExpiryRepository.CachedSkuResult.Hit)
+        assertEquals("SKU009", (result as ExpiryRepository.CachedSkuResult.Hit).sku)
     }
 
     // ── addOrMerge — insert path ───────────────────────────────────────────────

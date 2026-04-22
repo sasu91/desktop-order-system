@@ -2,6 +2,7 @@ package com.sasu91.dosapp.data.repository
 
 import android.util.Log
 import com.sasu91.dosapp.data.db.dao.CachedSkuDao
+import com.sasu91.dosapp.data.db.dao.LocalArticleDao
 import com.sasu91.dosapp.data.db.dao.LocalExpiryDao
 import com.sasu91.dosapp.data.db.entity.LocalExpiryEntity
 import kotlinx.coroutines.flow.Flow
@@ -29,15 +30,19 @@ private const val TAG = "ExpiryRepo"
  * It is called by [ExpiryViewModel] on screen open.
  *
  * ## EAN lookup
- * EAN resolution for this feature is cache-only ([CachedSkuDao.getByEan]).
- * There is no API fallback — only SKUs already in the offline cache can
- * have expiry entries. Scans of unknown EANs produce an error message
+ * EAN resolution for this feature is local-only (no network):
+ *   1. `local_articles` ([LocalArticleDao.getByEan]) — articles created offline
+ *      and still pending sync remain usable for expiry tracking.
+ *   2. `cached_skus` ([CachedSkuDao.getByEan]) — server preload cache.
+ *
+ * There is no API fallback.  Scans of unknown EANs produce an error message
  * without a network request.
  */
 @Singleton
 class ExpiryRepository @Inject constructor(
     private val dao: LocalExpiryDao,
     private val cachedSkuDao: CachedSkuDao,
+    private val localArticleDao: LocalArticleDao,
 ) {
 
     // ── Sources ───────────────────────────────────────────────────────────────
@@ -47,17 +52,36 @@ class ExpiryRepository @Inject constructor(
         const val SOURCE_OCR    = "OCR"
     }
 
-    // ── EAN lookup (cache-only, no API fallback) ───────────────────────────────
+    // ── EAN lookup (local-only, no API fallback) ───────────────────────────────
 
     /**
-     * Resolve [ean] from the local SKU cache.
+     * Resolve [ean] from local sources, in precedence order:
+     *   1. `local_articles` (articles created offline, possibly not yet synced).
+     *   2. `cached_skus` (server preload cache, including stale 12-digit entries).
      *
-     * Returns [CachedSkuResult.Hit] when found, [CachedSkuResult.Miss] otherwise.
-     * Normalises 12-digit UPC-A barcodes to 13-digit EAN-13 (prepend '0').
+     * Returns [CachedSkuResult.Hit] when found in either source,
+     * [CachedSkuResult.Miss] otherwise.  Normalises 12-digit UPC-A barcodes to
+     * 13-digit EAN-13 (prepend '0').
+     *
+     * Method name preserved for API compatibility; the semantics now include
+     * `local_articles` in addition to the scanner cache.
      */
     suspend fun resolveEanCacheOnly(ean: String): CachedSkuResult {
         // Normalise: 12-digit UPC-A → EAN-13 by prepending '0'.
         val ean13 = if (ean.length == 12 && ean.all { it.isDigit() }) "0$ean" else ean
+
+        // ── 1. local_articles (offline-created / pending sync) ─────────────
+        val local = localArticleDao.getByEan(ean13)
+            ?: if (ean13 != ean) localArticleDao.getByEan(ean) else null
+        if (local != null) {
+            return CachedSkuResult.Hit(
+                sku         = local.sku,
+                description = local.description,
+                ean         = ean13,
+            )
+        }
+
+        // ── 2. cached_skus (server preload) ────────────────────────────────
         // Dual-key probe for EAN-13: mirrors SkuCacheRepository to handle stale
         // cache rows stored under the 12-digit form (ean13.drop(1)).
         val entity = if (ean13.length == 13)

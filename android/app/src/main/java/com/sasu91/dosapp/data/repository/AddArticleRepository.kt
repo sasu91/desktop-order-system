@@ -44,6 +44,7 @@ class AddArticleRepository @Inject constructor(
     private val api: DosApiService,
     private val pendingDao: PendingAddArticleDao,
     private val localDao: LocalArticleDao,
+    private val skuCache: SkuCacheRepository,
 ) {
 
     // -----------------------------------------------------------------------
@@ -179,6 +180,23 @@ class AddArticleRepository @Inject constructor(
                     localDao.reconcileSku(id, confirmedSku)
                 } else {
                     localDao.markSynced(id)
+                }
+                // Post-sync coherence: populate the scanner cache so the newly
+                // confirmed SKU is immediately resolvable across every feature
+                // that still reads `cached_skus` directly (no wait for the next
+                // manual refreshAll).  Stock stays neutral (0/0) until the real
+                // preload overwrites it.
+                runCatching {
+                    skuCache.upsertSyncedArticle(
+                        sku           = confirmedSku,
+                        description   = row.description,
+                        eanPrimary    = row.eanPrimary,
+                        eanSecondary  = row.eanSecondary,
+                    )
+                }.onFailure { e ->
+                    // Non-fatal: sync already succeeded; the scanner cache will
+                    // self-heal on the next refreshAll.  Log for diagnosis.
+                    Log.w(TAG, "post-sync cache upsert failed for sku=$confirmedSku: ${e.message}")
                 }
                 RetryResult.Success(confirmedSku)
             }

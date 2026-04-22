@@ -308,6 +308,57 @@ class SkuCacheRepository @Inject constructor(
     }
 
     /**
+     * Upsert a just-synced local article into the Room scanner cache.
+     *
+     * Called from [AddArticleRepository.retry] after a successful server-side
+     * creation so that the newly-confirmed SKU is immediately resolvable by
+     * every cache-only feature (Scan, Receiving, QuickWaste, Exceptions,
+     * EOD, Scadenze, SkuBind) without waiting for the next full [refreshAll].
+     *
+     * Writes one row per non-empty EAN with neutral stock (`on_hand = 0`,
+     * `on_order = 0`, `pack_size = 1`, `requires_expiry = false`) — authoritative
+     * stock values will be populated the next time the operator triggers a
+     * cache refresh or resolves the EAN online via [resolveEan].
+     *
+     * When the article has neither a primary nor a secondary EAN the method
+     * is a no-op (nothing to index by) and returns 0.
+     *
+     * @return Number of rows written (0, 1 or 2).
+     */
+    suspend fun upsertSyncedArticle(
+        sku: String,
+        description: String,
+        eanPrimary: String,
+        eanSecondary: String,
+    ): Int {
+        val now = System.currentTimeMillis()
+        var written = 0
+        for (rawEan in listOf(eanPrimary, eanSecondary)) {
+            if (rawEan.isBlank()) continue
+            val canonical = normalizeEan13(rawEan)
+            dao.upsert(
+                CachedSkuEntity(
+                    ean            = canonical,
+                    sku            = sku,
+                    description    = description,
+                    onHand         = 0,
+                    onOrder        = 0,
+                    packSize       = 1,
+                    requiresExpiry = false,
+                    cachedAt       = now,
+                )
+            )
+            written++
+        }
+        if (written > 0) {
+            Log.i(TAG, "upsertSyncedArticle: sku='$sku' cached ($written EAN row(s))")
+        } else {
+            Log.d(TAG, "upsertSyncedArticle: sku='$sku' has no EAN — skipped cache write")
+        }
+        return written
+    }
+
+    /**
      * Add a new EAN alias for an existing SKU in the Room cache.
      *
      * Called after a successful `PATCH /skus/{sku}/bind-secondary-ean` so

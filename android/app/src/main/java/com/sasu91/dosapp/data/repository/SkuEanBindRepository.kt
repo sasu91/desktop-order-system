@@ -19,8 +19,10 @@ private const val TAG = "SkuEanBindRepo"
  *
  * - [searchSkus]: drives the SKU autocomplete text field via
  *   `GET /api/v1/skus/search`.  When offline, automatically falls back to the
- *   local Room cache ([SkuCacheRepository.searchSkus]) so the operator can
- *   always search and select SKUs regardless of network status.
+ *   unified local lookup ([SkuLookupRepository.search] — merges `local_articles`
+ *   with the scanner preload cache) so the operator can always search and
+ *   select SKUs regardless of network status, including articles just created
+ *   offline and still awaiting sync.
  * - [bindSecondaryEan]: triggers the server-side association of a secondary
  *   barcode to a SKU via `PATCH /api/v1/skus/{sku}/bind-secondary-ean`.
  *   This operation requires network connectivity (intentional operator action
@@ -29,7 +31,7 @@ private const val TAG = "SkuEanBindRepo"
 @Singleton
 class SkuEanBindRepository @Inject constructor(
     private val api: DosApiService,
-    private val skuCache: SkuCacheRepository,
+    private val skuLookup: SkuLookupRepository,
     private val bindDao: PendingBindDao,
 ) {
 
@@ -63,26 +65,28 @@ class SkuEanBindRepository @Inject constructor(
     /**
      * Search SKUs by [query] (empty = first [limit] SKUs alphabetically).
      *
-     * **Cache-first strategy**: the local Room cache is queried first and
-     * returned immediately if it contains matches (fast, always works offline).
-     * The API is called only when the cache returns no results for the given
-     * query — typically on first run before any preload, or after a cache clear.
+     * **Local-first strategy**: the unified [SkuLookupRepository.search]
+     * merges `local_articles` (queued/created offline) with the Room scanner
+     * cache and is returned immediately when it contains matches.  The API is
+     * called only when the unified lookup returns nothing — typically on
+     * first run before any preload, or after a cache clear.
      *
-     * This ensures the autocomplete field is always responsive and never blocks
-     * on network latency during normal operation.
+     * This ensures the autocomplete field is always responsive, never blocks
+     * on network latency, and includes articles created offline (SKU in queue
+     * but not yet sent to the server).
      */
     suspend fun searchSkus(query: String, limit: Int = 20): SearchResult {
         Log.d(TAG, "searchSkus(query='$query', limit=$limit)")
 
-        // ── 1. Cache first ────────────────────────────────────────────────
-        val cached = skuCache.searchSkus(query, limit)
-        if (cached.isNotEmpty()) {
-            Log.d(TAG, "searchSkus: cache hit (${cached.size} results)")
-            return SearchResult.Success(cached)
+        // ── 1. Unified local-first lookup (local_articles ∪ cached_skus) ───
+        val local = skuLookup.search(query, limit)
+        if (local.isNotEmpty()) {
+            Log.d(TAG, "searchSkus: local/cache hit (${local.size} results)")
+            return SearchResult.Success(local)
         }
 
-        // ── 2. Cache miss → try API ───────────────────────────────────────
-        Log.d(TAG, "searchSkus: cache empty — querying API")
+        // ── 2. Cold start → try API ───────────────────────────────────────
+        Log.d(TAG, "searchSkus: local/cache empty — querying API")
         return when (val result = safeCall { api.searchSkus(query, limit).toApiResult() }) {
             is ApiResult.Success      -> SearchResult.Success(result.data.results)
             is ApiResult.ApiError     -> SearchResult.Error("${result.code}: ${result.message}")

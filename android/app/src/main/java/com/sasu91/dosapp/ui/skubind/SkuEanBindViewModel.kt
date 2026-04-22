@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.sasu91.dosapp.data.api.dto.SkuSearchResultDto
 import com.sasu91.dosapp.data.repository.SkuCacheRepository
 import com.sasu91.dosapp.data.repository.SkuEanBindRepository
+import com.sasu91.dosapp.data.repository.SkuLookupRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
@@ -26,6 +27,7 @@ import javax.inject.Inject
 class SkuEanBindViewModel @Inject constructor(
     private val bindRepo: SkuEanBindRepository,
     private val cacheRepo: SkuCacheRepository,
+    private val skuLookup: SkuLookupRepository,
 ) : ViewModel() {
 
     // -----------------------------------------------------------------------
@@ -88,10 +90,12 @@ class SkuEanBindViewModel @Inject constructor(
             return
         }
         _state.update { it.copy(isSearching = true) }
-        // Always search Room cache — covers SKU code, description, primary EAN and
-        // secondary EAN (stored as a separate row; same sku/description, different ean).
-        // Never calls the API for autocomplete; bindRepo is used only for the actual bind.
-        val items = cacheRepo.searchSkus(query.trim())
+        // Unified search: merges `local_articles` (queued/created offline) with
+        // the Room scanner cache (covers sku, description, primary/secondary EAN),
+        // dedup by SKU.  Never calls the API — autocomplete is fully offline-capable.
+        // The bind API call itself is still performed via bindRepo when the
+        // operator confirms; cacheRepo.addEanAlias updates Room after success.
+        val items = skuLookup.search(query.trim())
         _state.update { it.copy(isSearching = false, suggestions = items) }
     }
 

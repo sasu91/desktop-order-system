@@ -5,7 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.sasu91.dosapp.data.api.dto.ReceiptLineDto
 import com.sasu91.dosapp.data.api.dto.ReceiptsCloseRequestDto
 import com.sasu91.dosapp.data.repository.ReceivingRepository
-import com.sasu91.dosapp.data.repository.SkuCacheRepository
+import com.sasu91.dosapp.data.repository.SkuLookupRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -85,7 +85,7 @@ data class ReceivingUiState(
 @HiltViewModel
 class ReceivingViewModel @Inject constructor(
     private val repo: ReceivingRepository,
-    private val skuCache: SkuCacheRepository,
+    private val skuLookup: SkuLookupRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ReceivingUiState())
@@ -112,7 +112,7 @@ class ReceivingViewModel @Inject constructor(
      * Strategy:
      * 1. Debounce: ignore the same EAN if re-detected within [SCAN_DEBOUNCE_MS].
      * 2. Pause the camera while resolving so the same EAN is not re-triggered.
-     * 3. Resolve EAN via [SkuCacheRepository] (cache-first, API fallback).
+     * 3. Resolve EAN via [SkuLookupRepository] (local_articles → cached_skus → API).
      * 4. If the SKU is already in the lines list: scroll/highlight only — do NOT change qty.
      *    Otherwise: create a new line with qty = 1 (operator adjusts with +/− or keyboard).
      * 5. Re-activate the camera after the line is ready (operator can scan next item).
@@ -130,8 +130,8 @@ class ReceivingViewModel @Inject constructor(
         _state.update { it.copy(isResolving = true, lastScanError = null, isCameraActive = false) }
 
         viewModelScope.launch {
-            when (val result = skuCache.resolveEan(ean)) {
-                is SkuCacheRepository.ResolveResult.Hit -> {
+            when (val result = skuLookup.resolveByEan(ean)) {
+                is SkuLookupRepository.ResolveResult.Hit -> {
                     val skuDto   = result.sku
                     val stockDto = result.stock
                     val packSize = skuDto.packSize.coerceAtLeast(1)
@@ -171,7 +171,7 @@ class ReceivingViewModel @Inject constructor(
                     }
                 }
 
-                is SkuCacheRepository.ResolveResult.Miss -> {
+                is SkuLookupRepository.ResolveResult.Miss -> {
                     _state.update {
                         it.copy(
                             isResolving    = false,
