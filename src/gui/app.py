@@ -57,6 +57,7 @@ from ..domain.models import SKU, EventType, OrderProposal, Stock, Transaction, P
 from ..domain.validation import colli_to_pezzi, format_pezzi_colli
 from ..domain.promo_uplift import estimate_uplift, UpliftReport
 from ..workflows.order import OrderWorkflow, calculate_daily_sales_average
+from ..workflows.projection import build_projection_series
 from ..workflows.receiving import ExceptionWorkflow
 from ..workflows.receiving_v2 import ReceivingWorkflow
 from ..workflows.daily_close import DailyCloseWorkflow
@@ -1693,11 +1694,24 @@ class DesktopOrderApp:
 
         legend_row = ttk.Frame(chart_lf)
         legend_row.pack(fill="x", pady=(2, 0))
-        for dot_color, dot_label in [("#94a3b8", "Storico"), ("#3b82f6", "Proj. Stock"), ("#f87171", "Safety"), ("#f59e0b", "Ric. confermati")]:
+        for dot_color, dot_label in [
+            ("#94a3b8", "Storico"),
+            ("#3b82f6", "Proj. Stock"),
+            ("#f87171", "Safety"),
+            ("#a855f7", "Max Stock"),
+            ("#f59e0b", "Ric. confermati"),
+        ]:
             _dc = tk.Canvas(legend_row, width=10, height=10, highlightthickness=0)
             _dc.create_oval(1, 1, 9, 9, fill=dot_color, outline="")
             _dc.pack(side="left", padx=(4, 1))
             ttk.Label(legend_row, text=dot_label, font=("Helvetica", 7)).pack(side="left", padx=(0, 6))
+
+        ttk.Label(
+            chart_lf,
+            text="Storico da ledger • Proiezione policy-aware (MC se attivo, altrimenti SMA)",
+            font=("Helvetica", 7, "italic"), foreground="#64748b",
+            wraplength=310,
+        ).pack(anchor="w", pady=(2, 0))
 
         # ── Section 3 : Demand Simulation ────────────────────────────────
         sim_lf = ttk.LabelFrame(details_scroll_frame, text="🔬 Demand Simulation", padding=8)
@@ -1768,7 +1782,14 @@ class DesktopOrderApp:
     # ── Detail panel helpers ────────────────────────────────────────────────
 
     def _draw_projection_chart(self, proposal):
-        """Redraw the stock projection chart in the detail sidebar."""
+        """Redraw the stock projection chart in the detail sidebar.
+
+        Uses the pure helper ``build_projection_series`` so the chart data
+        logic is unit-testable. Semantics:
+        - Historical series: real ledger as-of values (not synthetic).
+        - Future series: policy-aware demand (Monte Carlo when MC is the
+          primary forecast method; SMA otherwise).
+        """
         if not MATPLOTLIB_AVAILABLE or self.detail_chart_canvas is None:
             return
         ax = self.detail_ax
@@ -1791,68 +1812,43 @@ class DesktopOrderApp:
             return
 
         today = date.today()
-        daily_avg = max(proposal.daily_sales_avg, 0.01)
         receipt_date = proposal.receipt_date
-        proposed_qty = proposal.proposed_qty
 
-        # Past 7-day synthetic history (stock was higher by daily_avg * days_ago)
-        past_days = 7
-        past_x = list(range(-past_days, 1))
-        past_stock = [proposal.current_on_hand + daily_avg * abs(d) for d in past_x]
-
-        # Future: project day-by-day until receipt_date + 5 extra days (may expand below)
-        receipt_offset = (receipt_date - today).days if receipt_date else 14
-        future_end = max(receipt_offset + 5, 10)
-
-        # Load already-confirmed pending pipeline orders for this SKU.
-        # These are ORDER events in the ledger not yet received.
-        # Use as_of_date = tomorrow so orders confirmed TODAY are included
-        # (on_order_by_date filters out txn.date >= cutoff, so today's orders
-        # would otherwise be silently dropped).
-        pipeline_by_day: dict[int, int] = {}
-        pipeline_load_ok = False
+        # Build series via pure helper (real ledger history + policy-aware demand)
         try:
-            pipeline_txns = self.csv_layer.read_transactions()
-            pipeline_pending = StockCalculator.on_order_by_date(
-                proposal.sku, pipeline_txns,
-                as_of_date=today + timedelta(days=1),  # include today's confirmed orders
-            )
-            for p_receipt_date, p_qty in pipeline_pending.items():
-                p_offset = (p_receipt_date - today).days
-                if p_offset > 0:  # only future receipts
-                    pipeline_by_day[p_offset] = pipeline_by_day.get(p_offset, 0) + p_qty
-            pipeline_load_ok = True
+            transactions = self.csv_layer.read_transactions()
         except Exception:
-            pass  # Never crash the chart
+            transactions = []
+        try:
+            sales_records = self.csv_layer.read_sales()
+        except Exception:
+            sales_records = None
 
-        # Extend the chart window to cover all pipeline receipt dates
-        if pipeline_by_day:
-            future_end = max(future_end, max(pipeline_by_day.keys()) + 5)
+        try:
+            series = build_projection_series(
+                proposal, today, transactions, sales_records,
+            )
+        except Exception:
+            # Never crash the chart: show placeholder and return.
+            ax.text(0.5, 0.5, "Errore grafico",
+                    transform=ax.transAxes, ha="center", va="center",
+                    fontsize=8, color="#ef4444")
+            ax.set_xticks([])
+            ax.set_yticks([])
+            fig.tight_layout(pad=0.3)
+            self.detail_chart_canvas.draw()
+            return
 
-        # If current_on_order > 0 but no future receipt dates resolved, the pipeline
-        # has orders without a receipt_date (or all in the past already absorbed into
-        # current_on_hand). Flag this so we can annotate the chart.
-        pipeline_qty_resolved = sum(pipeline_by_day.values())
-        pipeline_unresolved = max(0, proposal.current_on_order - pipeline_qty_resolved)
+        past_x = series.past_x
+        past_stock = series.past_stock
+        future_x = series.future_x
+        future_stock = series.future_stock
+        pipeline_by_day = series.pipeline_by_day
+        pipeline_unresolved = series.pipeline_unresolved
+        receipt_offset = series.receipt_offset if series.receipt_offset is not None else 14
+        future_end = series.future_end
 
-        future_x: list[int] = []
-        future_stock: list[float] = []
-        for d in range(0, future_end + 1):
-            if d == 0:
-                s = float(proposal.current_on_hand)
-            else:
-                s = future_stock[-1] - daily_avg
-                # Add already-confirmed pipeline receipts (ORDER events in ledger)
-                if d in pipeline_by_day:
-                    s += pipeline_by_day[d]
-                # Add current proposal's receipt (not yet in ledger)
-                if receipt_date and d == receipt_offset and proposed_qty > 0:
-                    s += proposed_qty
-                s = max(s, 0.0)
-            future_x.append(d)
-            future_stock.append(s)
-
-        # Plot history (dashed grey) and projection (solid blue)
+        # Plot history (dashed grey, real ledger) and projection (solid blue)
         ax.plot(past_x, past_stock, color="#94a3b8", linewidth=1.5,
                 linestyle="--", zorder=2)
         ax.plot(future_x, future_stock, color="#3b82f6", linewidth=2, zorder=3)
@@ -1874,7 +1870,7 @@ class DesktopOrderApp:
             except Exception:
                 pass
 
-        # Annotation: on-order stock with no known receipt date (orders missing receipt_date)
+        # Annotation: on-order stock with no known receipt date
         if pipeline_unresolved > 0:
             try:
                 ax.text(0.02, 0.04,
@@ -1889,16 +1885,16 @@ class DesktopOrderApp:
             ax.axvline(x=receipt_offset, color="#10b981", linewidth=0.8,
                        linestyle=":", alpha=0.7, zorder=4)
 
-        # Safety stock
+        # Safety stock (red dashed)
         safety = proposal.safety_stock
         all_xmin = past_x[0]
         ax.axhline(y=safety, color="#f87171", linewidth=1.0, linestyle="--",
                    alpha=0.85, zorder=2)
 
-        # Max stock cap
+        # Max stock cap (purple, distinct from pipeline orange)
         if proposal.max_stock > 0:
-            ax.axhline(y=proposal.max_stock, color="#f59e0b", linewidth=0.8,
-                       linestyle=":", alpha=0.5, zorder=2)
+            ax.axhline(y=proposal.max_stock, color="#a855f7", linewidth=0.8,
+                       linestyle=":", alpha=0.6, zorder=2)
 
         # Axis ticks
         x_ticks = [past_x[0], 0]
@@ -1910,6 +1906,7 @@ class DesktopOrderApp:
         ax.set_xticklabels(x_labels, fontsize=6)
         ax.tick_params(axis="y", labelsize=6)
         ax.tick_params(length=0)
+        ax.set_ylabel("pz", fontsize=6, color="#64748b")
 
         # Clean spines
         ax.spines["top"].set_visible(False)
@@ -1923,6 +1920,16 @@ class DesktopOrderApp:
             if ylim[1] > ylim[0]:
                 ax.text(all_xmin, safety, " Safety", fontsize=5,
                         color="#f87171", va="bottom", alpha=0.85)
+        except Exception:
+            pass
+
+        # Policy-aware demand annotation (top-left corner)
+        try:
+            src_tag = "MC" if series.demand_source == "monte_carlo" else "SMA"
+            ax.text(0.02, 0.96,
+                    f"Demand: {src_tag} {series.daily_demand:.1f} pz/g",
+                    transform=ax.transAxes, fontsize=5,
+                    color="#475569", va="top", alpha=0.85)
         except Exception:
             pass
 
