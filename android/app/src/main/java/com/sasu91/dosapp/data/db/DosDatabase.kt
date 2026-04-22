@@ -6,6 +6,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.sasu91.dosapp.data.db.dao.CachedSkuDao
 import com.sasu91.dosapp.data.db.dao.DraftEodDao
+import com.sasu91.dosapp.data.db.dao.DraftPendingExpiryDao
 import com.sasu91.dosapp.data.db.dao.DraftReceiptDao
 import com.sasu91.dosapp.data.db.dao.LocalArticleDao
 import com.sasu91.dosapp.data.db.dao.LocalExpiryDao
@@ -15,6 +16,7 @@ import com.sasu91.dosapp.data.db.dao.PendingExceptionDao
 import com.sasu91.dosapp.data.db.dao.PendingRequestDao
 import com.sasu91.dosapp.data.db.entity.CachedSkuEntity
 import com.sasu91.dosapp.data.db.entity.DraftEodEntity
+import com.sasu91.dosapp.data.db.entity.DraftPendingExpiryEntity
 import com.sasu91.dosapp.data.db.entity.DraftReceiptEntity
 import com.sasu91.dosapp.data.db.entity.LocalArticleEntity
 import com.sasu91.dosapp.data.db.entity.LocalExpiryEntity
@@ -37,6 +39,7 @@ import com.sasu91.dosapp.data.db.entity.PendingRequestEntity
  * | 6       | Added `requires_expiry` column to `cached_skus`           |
  * | 7       | Added `pending_add_articles` + `local_articles` tables    |
  * | 8       | Added `local_expiry_entries` table (Scadenze feature)      |
+ * | 9       | Added `draft_pending_expiry` (per-SKU staging for Scadenze)|
  *
  * ## Accessing the singleton
  * Inject [DosDatabase] via Hilt (see `AppModule`).  Never instantiate directly.
@@ -58,8 +61,9 @@ import com.sasu91.dosapp.data.db.entity.PendingRequestEntity
         PendingAddArticleEntity::class,
         LocalArticleEntity::class,
         LocalExpiryEntity::class,
+        DraftPendingExpiryEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = false,
 )
 abstract class DosDatabase : RoomDatabase() {
@@ -91,6 +95,9 @@ abstract class DosDatabase : RoomDatabase() {
 
     /** Local expiry-date entries — Scadenze feature, fully local (no API). */
     abstract fun localExpiryDao(): LocalExpiryDao
+
+    /** Per-SKU draft (unsaved) expiry entries — Scadenze "Cambia articolo" staging. */
+    abstract fun draftPendingExpiryDao(): DraftPendingExpiryDao
 
     // ── Migrations ────────────────────────────────────────────────────────────
 
@@ -283,6 +290,38 @@ abstract class DosDatabase : RoomDatabase() {
                 )
                 db.execSQL(
                     "CREATE UNIQUE INDEX IF NOT EXISTS `index_local_expiry_sku_date` ON `local_expiry_entries` (`sku`, `expiry_date`)"
+                )
+            }
+        }
+
+        /**
+         * Migration 8 → 9: create `draft_pending_expiry`.
+         *
+         * Persists per-SKU unsaved expiry entries so that pressing "Cambia
+         * articolo" (or restarting the app) no longer discards staged rows.
+         * Grouping key is [sku]; (sku, expiry_date) is unique to avoid
+         * accidental duplicates while staging.
+         */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `draft_pending_expiry` (
+                        `id`          TEXT    NOT NULL,
+                        `sku`         TEXT    NOT NULL DEFAULT '',
+                        `description` TEXT    NOT NULL DEFAULT '',
+                        `ean`         TEXT    NOT NULL DEFAULT '',
+                        `expiry_date` TEXT    NOT NULL DEFAULT '',
+                        `qty_colli`   INTEGER,
+                        `source`      TEXT    NOT NULL DEFAULT 'MANUAL',
+                        `created_at`  INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY(`id`)
+                    )
+                """.trimIndent())
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_draft_pending_expiry_sku` ON `draft_pending_expiry` (`sku`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_draft_pending_expiry_sku_date` ON `draft_pending_expiry` (`sku`, `expiry_date`)"
                 )
             }
         }

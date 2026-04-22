@@ -13,6 +13,7 @@ import com.sasu91.dosapp.data.api.TokenProvider
 import com.sasu91.dosapp.data.db.DosDatabase
 import com.sasu91.dosapp.data.db.dao.CachedSkuDao
 import com.sasu91.dosapp.data.db.dao.DraftEodDao
+import com.sasu91.dosapp.data.db.dao.DraftPendingExpiryDao
 import com.sasu91.dosapp.data.db.dao.DraftReceiptDao
 import com.sasu91.dosapp.data.db.dao.LocalArticleDao
 import com.sasu91.dosapp.data.db.dao.LocalExpiryDao
@@ -153,7 +154,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): DosDatabase =
         Room.databaseBuilder(ctx, DosDatabase::class.java, "dos_offline.db")
-            .addMigrations(DosDatabase.MIGRATION_1_2, DosDatabase.MIGRATION_2_3, DosDatabase.MIGRATION_3_4, DosDatabase.MIGRATION_4_5, DosDatabase.MIGRATION_5_6, DosDatabase.MIGRATION_6_7, DosDatabase.MIGRATION_7_8)
+            .addMigrations(DosDatabase.MIGRATION_1_2, DosDatabase.MIGRATION_2_3, DosDatabase.MIGRATION_3_4, DosDatabase.MIGRATION_4_5, DosDatabase.MIGRATION_5_6, DosDatabase.MIGRATION_6_7, DosDatabase.MIGRATION_7_8, DosDatabase.MIGRATION_8_9)
             .fallbackToDestructiveMigration()            // safety net for dev builds
             .build()
 
@@ -206,4 +207,9 @@ object AppModule {
     @Provides
     fun provideLocalExpiryDao(db: DosDatabase): LocalExpiryDao =
         db.localExpiryDao()
+
+    /** Per-SKU draft expiry entries — Scadenze "Cambia articolo" staging. */
+    @Provides
+    fun provideDraftPendingExpiryDao(db: DosDatabase): DraftPendingExpiryDao =
+        db.draftPendingExpiryDao()
 }

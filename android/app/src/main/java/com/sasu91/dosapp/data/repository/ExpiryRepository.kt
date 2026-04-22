@@ -2,8 +2,10 @@ package com.sasu91.dosapp.data.repository
 
 import android.util.Log
 import com.sasu91.dosapp.data.db.dao.CachedSkuDao
+import com.sasu91.dosapp.data.db.dao.DraftPendingExpiryDao
 import com.sasu91.dosapp.data.db.dao.LocalArticleDao
 import com.sasu91.dosapp.data.db.dao.LocalExpiryDao
+import com.sasu91.dosapp.data.db.entity.DraftPendingExpiryEntity
 import com.sasu91.dosapp.data.db.entity.LocalExpiryEntity
 import kotlinx.coroutines.flow.Flow
 import java.util.UUID
@@ -43,6 +45,7 @@ class ExpiryRepository @Inject constructor(
     private val dao: LocalExpiryDao,
     private val cachedSkuDao: CachedSkuDao,
     private val localArticleDao: LocalArticleDao,
+    private val draftDao: DraftPendingExpiryDao,
 ) {
 
     // ── Sources ───────────────────────────────────────────────────────────────
@@ -209,5 +212,116 @@ class ExpiryRepository @Inject constructor(
         val deleted = runCatching { dao.purgeExpired(today) }
         deleted.onFailure { Log.e(TAG, "purgeExpired failed: ${it.message}") }
         Log.d(TAG, "purgeExpired(before=$today)")
+    }
+
+    // ── Drafts (per-SKU staging) ──────────────────────────────────────────────
+    //
+    // Draft entries live in `draft_pending_expiry` and are grouped by SKU.
+    // They survive "Cambia articolo" and app restarts; they are moved into
+    // `local_expiry_entries` (with normal merge semantics) on commit.
+
+    /** Observe unsaved drafts for [sku], in insertion order. */
+    fun observeDraftsBySku(sku: String): Flow<List<DraftPendingExpiryEntity>> =
+        draftDao.observeBySku(sku)
+
+    /** Snapshot of drafts for [sku] (non-Flow). */
+    suspend fun getDraftsBySku(sku: String): List<DraftPendingExpiryEntity> =
+        draftDao.getBySku(sku)
+
+    /** Count of drafts for [sku] — useful for UI badges. */
+    suspend fun countDraftsBySku(sku: String): Int =
+        draftDao.countBySku(sku)
+
+    /**
+     * Add or replace a draft entry. (sku + expiryDate) is a unique key; re-adding
+     * the same date for the same SKU overwrites the staged row (last-write-wins).
+     * Summing happens at commit time via [addOrMerge].
+     */
+    suspend fun addDraft(
+        sku: String,
+        description: String,
+        ean: String,
+        expiryDate: String,
+        qtyColli: Int?,
+        source: String,
+    ): DraftResult {
+        val now = System.currentTimeMillis()
+        val existing = draftDao.getBySkuAndDate(sku, expiryDate)
+        val entity = DraftPendingExpiryEntity(
+            id          = existing?.id ?: UUID.randomUUID().toString(),
+            sku         = sku,
+            description = description,
+            ean         = ean,
+            expiryDate  = expiryDate,
+            qtyColli    = qtyColli,
+            source      = source,
+            createdAt   = existing?.createdAt ?: now,
+        )
+        draftDao.insert(entity)
+        return if (existing == null) {
+            Log.d(TAG, "Inserted draft: sku=$sku date=$expiryDate qty=$qtyColli")
+            DraftResult.Inserted(entity.id)
+        } else {
+            Log.d(TAG, "Replaced draft: sku=$sku date=$expiryDate qty=$qtyColli")
+            DraftResult.Replaced(entity.id)
+        }
+    }
+
+    sealed class DraftResult {
+        data class Inserted(val id: String) : DraftResult()
+        data class Replaced(val id: String) : DraftResult()
+    }
+
+    /** Update a draft row identified by [id]. */
+    suspend fun updateDraft(
+        id: String,
+        expiryDate: String,
+        qtyColli: Int?,
+        source: String,
+    ) {
+        val existing = draftDao.getById(id) ?: return
+        draftDao.insert(
+            existing.copy(
+                expiryDate = expiryDate,
+                qtyColli   = qtyColli,
+                source     = source,
+            )
+        )
+    }
+
+    /** Delete a single draft row by id. */
+    suspend fun deleteDraft(id: String) {
+        draftDao.deleteById(id)
+    }
+
+    /** Discard all drafts for [sku] — explicit user action. */
+    suspend fun discardDraftsForSku(sku: String) {
+        draftDao.deleteAllBySku(sku)
+    }
+
+    /**
+     * Commit all drafts staged for [sku] into `local_expiry_entries`,
+     * applying normal merge semantics (sum qty on duplicate (sku, expiryDate)),
+     * then clear the staging bucket for that SKU only.
+     *
+     * Returns the number of draft rows committed. Drafts from other SKUs are
+     * left untouched.
+     */
+    suspend fun commitDraftsForSku(sku: String): Int {
+        val drafts = draftDao.getBySku(sku)
+        if (drafts.isEmpty()) return 0
+        for (d in drafts) {
+            addOrMerge(
+                sku         = d.sku,
+                description = d.description,
+                ean         = d.ean,
+                expiryDate  = d.expiryDate,
+                qtyColli    = d.qtyColli,
+                source      = d.source,
+            )
+        }
+        draftDao.deleteAllBySku(sku)
+        Log.d(TAG, "Committed ${drafts.size} drafts for sku=$sku")
+        return drafts.size
     }
 }

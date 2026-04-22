@@ -6,6 +6,7 @@ import com.sasu91.dosapp.data.db.entity.LocalExpiryEntity
 import com.sasu91.dosapp.data.repository.ExpiryRepository
 import com.sasu91.dosapp.ui.receiving.ExpiryDateParser
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,10 +32,12 @@ enum class ExpiryScreenMode { LIST, SCAN, RESULT }
 
 /**
  * A pending date entry that the operator has added in the form but not yet
- * saved. Multiple pending entries can be accumulated before saving all at once.
+ * saved. Drafts are persisted per-SKU in Room (`draft_pending_expiry`) and
+ * survive "Cambia articolo" and app restarts; they are cleared only when
+ * the operator saves them or explicitly discards.
  */
 data class PendingExpiryEntry(
-    val localId: Int,
+    val id: String,          // UUID from DraftPendingExpiryEntity
     val expiryDate: String,  // YYYY-MM-DD
     val qtyColli: Int?,
     val source: String,      // ExpiryRepository.SOURCE_MANUAL | SOURCE_OCR
@@ -50,8 +53,7 @@ data class PendingExpiryEntry(
  * @param scannedEan             Normalised EAN that was scanned.
  * @param scanError              Non-null when the last scan produced no result.
  * @param ocrProposal            Date string proposed by OCR (Usa/Ignora pending).
- * @param pendingEntries         Date entries accumulated in the form before saving.
- * @param nextPendingId          Counter for [PendingExpiryEntry.localId].
+ * @param pendingEntries         Drafts staged for the current [scannedSku], sourced from DB.
  * @param todayItems             Bucket for today's expiry entries (from Room).
  * @param tomorrowItems          Bucket for tomorrow's expiry entries.
  * @param dayAfterItems          Bucket for day-after-tomorrow entries.
@@ -68,7 +70,6 @@ data class ExpiryUiState(
     val scanError: String? = null,
     val ocrProposal: String? = null,    // ISO date proposed by OCR
     val pendingEntries: List<PendingExpiryEntry> = emptyList(),
-    val nextPendingId: Int = 0,
     val todayItems: List<LocalExpiryEntity> = emptyList(),
     val tomorrowItems: List<LocalExpiryEntity> = emptyList(),
     val dayAfterItems: List<LocalExpiryEntity> = emptyList(),
@@ -93,9 +94,44 @@ class ExpiryViewModel @Inject constructor(
     private var lastScanTime: Long = 0L
     private val SCAN_DEBOUNCE_MS = 2_000L
 
+    /** Active drafts-observation job — restarted whenever scannedSku changes. */
+    private var draftsJob: Job? = null
+
     init {
         // Auto-purge past dates and start observing the 3-day agenda on first load.
         viewModelScope.launch { purgeAndRefresh() }
+    }
+
+    // -----------------------------------------------------------------------
+    // Drafts observation (per-SKU)
+    // -----------------------------------------------------------------------
+
+    /**
+     * (Re)subscribe to the drafts Flow for [sku], cancelling any previous
+     * subscription. Passing null clears the pending list and stops observing.
+     *
+     * Called whenever [scannedSku] changes — switching article must show the
+     * drafts belonging to the new SKU, and previous-SKU drafts remain on disk.
+     */
+    private fun observeDraftsFor(sku: String?) {
+        draftsJob?.cancel()
+        if (sku == null) {
+            _state.update { it.copy(pendingEntries = emptyList()) }
+            return
+        }
+        draftsJob = viewModelScope.launch {
+            repo.observeDraftsBySku(sku).collectLatest { drafts ->
+                val entries = drafts.map {
+                    PendingExpiryEntry(
+                        id         = it.id,
+                        expiryDate = it.expiryDate,
+                        qtyColli   = it.qtyColli,
+                        source     = it.source,
+                    )
+                }
+                _state.update { it.copy(pendingEntries = entries) }
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -161,11 +197,12 @@ class ExpiryViewModel @Inject constructor(
                             scannedSku         = result.sku,
                             scannedDescription = result.description,
                             scannedEan         = result.ean,
-                            pendingEntries     = emptyList(),
-                            nextPendingId      = 0,
                             ocrProposal        = null,
                         )
                     }
+                    // Drafts for the new SKU (may be empty or may contain rows
+                    // staged in a previous session — both are valid and kept).
+                    observeDraftsFor(result.sku)
                 }
                 is ExpiryRepository.CachedSkuResult.Miss -> {
                     lastScannedEan = null  // allow retry of the same EAN after error
@@ -188,6 +225,7 @@ class ExpiryViewModel @Inject constructor(
     /** Enter scan mode — operator tapped the camera button from the agenda list. */
     fun enterScanMode() {
         lastScannedEan = null
+        observeDraftsFor(null)  // no active SKU → no drafts displayed
         _state.update {
             it.copy(
                 screenMode         = ExpiryScreenMode.SCAN,
@@ -195,16 +233,22 @@ class ExpiryViewModel @Inject constructor(
                 scannedSku         = null,
                 scannedDescription = "",
                 scannedEan         = "",
-                pendingEntries     = emptyList(),
                 ocrProposal        = null,
                 scanError          = null,
             )
         }
     }
 
-    /** Exit scan/result mode and return to the agenda list. Clears all scan state. */
+    /**
+     * Exit scan/result mode and return to the agenda list.
+     *
+     * Per UX policy "Restano su chiusura tab": drafts remain on disk and will
+     * reappear when the operator scans the same SKU again. Only the in-memory
+     * scan state is cleared here.
+     */
     fun exitScanMode() {
         lastScannedEan = null
+        observeDraftsFor(null)
         _state.update {
             it.copy(
                 screenMode         = ExpiryScreenMode.LIST,
@@ -212,16 +256,22 @@ class ExpiryViewModel @Inject constructor(
                 scannedSku         = null,
                 scannedDescription = "",
                 scannedEan         = "",
-                pendingEntries     = emptyList(),
                 ocrProposal        = null,
                 scanError          = null,
             )
         }
     }
 
-    /** Reset the current SKU so the operator can scan a different article. */
+    /**
+     * Reset the current SKU so the operator can scan a different article.
+     *
+     * Per UX policy "Switch diretto": no confirmation dialog. Drafts for the
+     * current SKU are intentionally preserved on disk — they will reappear
+     * when the same SKU is scanned again.
+     */
     fun resetScan() {
         lastScannedEan = null
+        observeDraftsFor(null)  // drop current subscription; keep DB rows intact
         _state.update {
             it.copy(
                 screenMode         = ExpiryScreenMode.SCAN,
@@ -229,7 +279,6 @@ class ExpiryViewModel @Inject constructor(
                 scannedSku         = null,
                 scannedDescription = "",
                 scannedEan         = "",
-                pendingEntries     = emptyList(),
                 ocrProposal        = null,
                 scanError          = null,
             )
@@ -268,9 +317,11 @@ class ExpiryViewModel @Inject constructor(
     // -----------------------------------------------------------------------
 
     /**
-     * Add a date (+ optional qty) to the in-memory pending list.
+     * Add a date (+ optional qty) as a draft for the current SKU.
      *
-     * Called when the operator taps "Aggiungi" in the form.
+     * Persisted to `draft_pending_expiry`; the pending list flow re-emits
+     * automatically. If the same (sku + expiryDate) draft already exists it
+     * is replaced (last-write-wins while staging — sums happen at commit).
      */
     fun addPendingEntry(
         expiryDate: String,
@@ -278,50 +329,42 @@ class ExpiryViewModel @Inject constructor(
         source: String = ExpiryRepository.SOURCE_MANUAL,
     ) {
         val s = _state.value
-        if (s.scannedSku == null) return  // guard: no SKU selected
-        _state.update {
-            val entry = PendingExpiryEntry(
-                localId    = it.nextPendingId,
-                expiryDate = expiryDate,
-                qtyColli   = qtyColli,
-                source     = source,
-            )
-            it.copy(
-                pendingEntries = it.pendingEntries + entry,
-                nextPendingId  = it.nextPendingId + 1,
+        val sku  = s.scannedSku ?: return   // guard: no SKU selected
+        val desc = s.scannedDescription
+        val ean  = s.scannedEan
+        viewModelScope.launch {
+            repo.addDraft(
+                sku         = sku,
+                description = desc,
+                ean         = ean,
+                expiryDate  = expiryDate,
+                qtyColli    = qtyColli,
+                source      = source,
             )
         }
     }
 
-    /** Remove a pending entry before it is saved (operator changed their mind). */
-    fun removePendingEntry(localId: Int) = _state.update {
-        it.copy(pendingEntries = it.pendingEntries.filter { e -> e.localId != localId })
+    /** Remove a draft entry before it is saved (operator changed their mind). */
+    fun removePendingEntry(id: String) {
+        viewModelScope.launch { repo.deleteDraft(id) }
     }
 
     /**
-     * Save all pending entries to Room, applying merge logic per entry.
-     * Clears the pending list and shows a transient feedback message.
+     * Commit all drafts staged for the current SKU into `local_expiry_entries`
+     * (applying normal merge semantics) and clear only that SKU's staging bucket.
+     *
+     * Drafts for other SKUs remain untouched on disk.
      */
     fun saveAllPending() {
         val s = _state.value
-        val sku   = s.scannedSku ?: return
-        val desc  = s.scannedDescription
-        val ean   = s.scannedEan
-        val toSave = s.pendingEntries.toList()
-        if (toSave.isEmpty()) return
+        val sku = s.scannedSku ?: return
+        val count = s.pendingEntries.size
+        if (count == 0) return
 
         viewModelScope.launch {
-            toSave.forEach { entry ->
-                repo.addOrMerge(
-                    sku         = sku,
-                    description = desc,
-                    ean         = ean,
-                    expiryDate  = entry.expiryDate,
-                    qtyColli    = entry.qtyColli,
-                    source      = entry.source,
-                )
-            }
-            val msg = if (toSave.size == 1) "Scadenza salvata" else "${toSave.size} scadenze salvate"
+            repo.commitDraftsForSku(sku)
+            observeDraftsFor(null)
+            val msg = if (count == 1) "Scadenza salvata" else "$count scadenze salvate"
             _state.update {
                 it.copy(
                     screenMode         = ExpiryScreenMode.LIST,
@@ -329,12 +372,17 @@ class ExpiryViewModel @Inject constructor(
                     scannedSku         = null,
                     scannedDescription = "",
                     scannedEan         = "",
-                    pendingEntries     = emptyList(),
                     ocrProposal        = null,
                     feedbackMessage    = msg,
                 )
             }
         }
+    }
+
+    /** Explicitly discard all drafts for the current SKU (if UI exposes it). */
+    fun discardDraftsForCurrentSku() {
+        val sku = _state.value.scannedSku ?: return
+        viewModelScope.launch { repo.discardDraftsForSku(sku) }
     }
 
     /** Clear the transient feedback message after it has been shown. */

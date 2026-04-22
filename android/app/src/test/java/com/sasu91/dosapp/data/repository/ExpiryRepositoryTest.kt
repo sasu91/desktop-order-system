@@ -1,9 +1,11 @@
 package com.sasu91.dosapp.data.repository
 
 import com.sasu91.dosapp.data.db.dao.CachedSkuDao
+import com.sasu91.dosapp.data.db.dao.DraftPendingExpiryDao
 import com.sasu91.dosapp.data.db.dao.LocalArticleDao
 import com.sasu91.dosapp.data.db.dao.LocalExpiryDao
 import com.sasu91.dosapp.data.db.entity.CachedSkuEntity
+import com.sasu91.dosapp.data.db.entity.DraftPendingExpiryEntity
 import com.sasu91.dosapp.data.db.entity.LocalArticleEntity
 import com.sasu91.dosapp.data.db.entity.LocalExpiryEntity
 import io.mockk.coEvery
@@ -24,6 +26,7 @@ class ExpiryRepositoryTest {
     private lateinit var dao: LocalExpiryDao
     private lateinit var cachedSkuDao: CachedSkuDao
     private lateinit var localArticleDao: LocalArticleDao
+    private lateinit var draftDao: DraftPendingExpiryDao
     private lateinit var repo: ExpiryRepository
 
     @Before
@@ -31,8 +34,9 @@ class ExpiryRepositoryTest {
         dao             = mockk(relaxed = true)
         cachedSkuDao    = mockk(relaxed = true)
         localArticleDao = mockk(relaxed = true)
+        draftDao        = mockk(relaxed = true)
         coEvery { localArticleDao.getByEan(any()) } returns null  // default: no local match
-        repo            = ExpiryRepository(dao, cachedSkuDao, localArticleDao)
+        repo            = ExpiryRepository(dao, cachedSkuDao, localArticleDao, draftDao)
     }
 
     // ── EAN resolution ────────────────────────────────────────────────────────
@@ -240,6 +244,119 @@ class ExpiryRepositoryTest {
         repo.updateEntry("missing-id", "2026-04-18", 3, ExpiryRepository.SOURCE_MANUAL)
 
         coVerify(exactly = 0) { dao.update(any()) }
+    }
+
+    // ── Drafts (per-SKU staging) ─────────────────────────────────────────────
+
+    @Test
+    fun `addDraft inserts new row when no existing draft for sku+date`() = runTest {
+        coEvery { draftDao.getBySkuAndDate("SKU001", "2026-04-16") } returns null
+        coJustRun { draftDao.insert(any()) }
+
+        val result = repo.addDraft(
+            sku         = "SKU001",
+            description = "Latte",
+            ean         = "0012345678905",
+            expiryDate  = "2026-04-16",
+            qtyColli    = 3,
+            source      = ExpiryRepository.SOURCE_MANUAL,
+        )
+
+        assertTrue(result is ExpiryRepository.DraftResult.Inserted)
+        val captured = slot<DraftPendingExpiryEntity>()
+        coVerify { draftDao.insert(capture(captured)) }
+        assertEquals("SKU001", captured.captured.sku)
+        assertEquals("2026-04-16", captured.captured.expiryDate)
+        assertEquals(3, captured.captured.qtyColli)
+    }
+
+    @Test
+    fun `addDraft preserves id and createdAt when replacing same sku+date`() = runTest {
+        val existing = DraftPendingExpiryEntity(
+            id = "existing-uuid", sku = "SKU001", description = "Latte",
+            ean = "EAN", expiryDate = "2026-04-16", qtyColli = 2,
+            source = ExpiryRepository.SOURCE_MANUAL, createdAt = 1_000L,
+        )
+        coEvery { draftDao.getBySkuAndDate("SKU001", "2026-04-16") } returns existing
+        coJustRun { draftDao.insert(any()) }
+
+        val result = repo.addDraft(
+            sku = "SKU001", description = "Latte", ean = "EAN",
+            expiryDate = "2026-04-16", qtyColli = 5,
+            source = ExpiryRepository.SOURCE_OCR,
+        )
+
+        assertTrue(result is ExpiryRepository.DraftResult.Replaced)
+        val captured = slot<DraftPendingExpiryEntity>()
+        coVerify { draftDao.insert(capture(captured)) }
+        assertEquals("existing-uuid", captured.captured.id)   // stable UUID
+        assertEquals(1_000L, captured.captured.createdAt)      // stable ordering
+        assertEquals(5, captured.captured.qtyColli)            // new value wins
+        assertEquals(ExpiryRepository.SOURCE_OCR, captured.captured.source)
+    }
+
+    @Test
+    fun `commitDraftsForSku moves all drafts into committed table and clears bucket`() = runTest {
+        val drafts = listOf(
+            DraftPendingExpiryEntity("id-1", "SKU001", "Latte", "EAN", "2026-04-16", 2, ExpiryRepository.SOURCE_MANUAL, 0L),
+            DraftPendingExpiryEntity("id-2", "SKU001", "Latte", "EAN", "2026-04-17", null, ExpiryRepository.SOURCE_OCR, 0L),
+        )
+        coEvery { draftDao.getBySku("SKU001") } returns drafts
+        coEvery { dao.getBySkuAndDate(any(), any()) } returns null   // all inserts
+        coJustRun { dao.insert(any()) }
+        coJustRun { draftDao.deleteAllBySku("SKU001") }
+
+        val count = repo.commitDraftsForSku("SKU001")
+
+        assertEquals(2, count)
+        coVerify(exactly = 2) { dao.insert(any()) }
+        coVerify(exactly = 1) { draftDao.deleteAllBySku("SKU001") }
+    }
+
+    @Test
+    fun `commitDraftsForSku does not touch drafts of other SKUs`() = runTest {
+        coEvery { draftDao.getBySku("SKU001") } returns emptyList()
+
+        val count = repo.commitDraftsForSku("SKU001")
+
+        assertEquals(0, count)
+        coVerify(exactly = 0) { draftDao.deleteAllBySku(any()) }
+        coVerify(exactly = 0) { draftDao.deleteAllBySku("SKU002") }
+    }
+
+    @Test
+    fun `commitDraftsForSku applies merge semantics on duplicate sku+date`() = runTest {
+        val drafts = listOf(
+            DraftPendingExpiryEntity("id-1", "SKU001", "Latte", "EAN", "2026-04-16", 2, ExpiryRepository.SOURCE_MANUAL, 0L),
+        )
+        val existing = fakeExpiryEntity("SKU001", "2026-04-16", qtyColli = 3)
+        coEvery { draftDao.getBySku("SKU001") } returns drafts
+        coEvery { dao.getBySkuAndDate("SKU001", "2026-04-16") } returns existing
+        coJustRun { dao.mergeQty(any(), any(), any(), any(), any()) }
+        coJustRun { draftDao.deleteAllBySku(any()) }
+
+        repo.commitDraftsForSku("SKU001")
+
+        coVerify { dao.mergeQty("SKU001", "2026-04-16", 2, ExpiryRepository.SOURCE_MANUAL, any()) }
+        coVerify(exactly = 0) { dao.insert(any()) }
+    }
+
+    @Test
+    fun `discardDraftsForSku delegates to dao deleteAllBySku`() = runTest {
+        coJustRun { draftDao.deleteAllBySku(any()) }
+
+        repo.discardDraftsForSku("SKU001")
+
+        coVerify(exactly = 1) { draftDao.deleteAllBySku("SKU001") }
+    }
+
+    @Test
+    fun `deleteDraft delegates id to dao`() = runTest {
+        coJustRun { draftDao.deleteById(any()) }
+
+        repo.deleteDraft("draft-uuid")
+
+        coVerify { draftDao.deleteById("draft-uuid") }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

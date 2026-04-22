@@ -334,10 +334,11 @@ private fun ResultModeContent(
             if (state.pendingEntries.isNotEmpty()) {
                 item {
                     PendingEntriesSection(
-                        entries   = state.pendingEntries,
-                        onRemove  = viewModel::removePendingEntry,
-                        onSaveAll = viewModel::saveAllPending,
-                        modifier  = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        entries    = state.pendingEntries,
+                        onRemove   = viewModel::removePendingEntry,
+                        onSaveAll  = viewModel::saveAllPending,
+                        onDiscardAll = viewModel::discardDraftsForCurrentSku,
+                        modifier   = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     )
                 }
             }
@@ -443,8 +444,9 @@ private fun ScannedSkuCard(
 @Composable
 private fun PendingEntriesSection(
     entries: List<PendingExpiryEntry>,
-    onRemove: (Int) -> Unit,
+    onRemove: (String) -> Unit,
     onSaveAll: () -> Unit,
+    onDiscardAll: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Card(modifier = modifier.fillMaxWidth()) {
@@ -467,7 +469,7 @@ private fun PendingEntriesSection(
                         modifier = Modifier.weight(1f),
                         style    = MaterialTheme.typography.bodySmall,
                     )
-                    IconButton(onClick = { onRemove(entry.localId) }) {
+                    IconButton(onClick = { onRemove(entry.id) }) {
                         Icon(
                             imageVector        = Icons.Default.Delete,
                             contentDescription = "Rimuovi",
@@ -477,11 +479,17 @@ private fun PendingEntriesSection(
                     }
                 }
             }
-            Button(
-                onClick  = onSaveAll,
-                modifier = Modifier.align(Alignment.End),
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalAlignment     = Alignment.CenterVertically,
             ) {
-                Text("Salva tutto")
+                TextButton(onClick = onDiscardAll) {
+                    Text("Scarta tutte", style = MaterialTheme.typography.labelSmall)
+                }
+                Button(onClick = onSaveAll) {
+                    Text("Salva tutto")
+                }
             }
         }
     }

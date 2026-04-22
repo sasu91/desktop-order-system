@@ -1,6 +1,7 @@
 package com.sasu91.dosapp.ui.expiry
 
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule
+import com.sasu91.dosapp.data.db.entity.DraftPendingExpiryEntity
 import com.sasu91.dosapp.data.db.entity.LocalExpiryEntity
 import com.sasu91.dosapp.data.repository.ExpiryRepository
 import io.mockk.coEvery
@@ -9,6 +10,7 @@ import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -23,6 +25,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import java.util.UUID
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ExpiryViewModelTest {
@@ -35,13 +38,73 @@ class ExpiryViewModelTest {
     private lateinit var repo: ExpiryRepository
     private lateinit var viewModel: ExpiryViewModel
 
+    /**
+     * In-memory draft store keyed by sku → flow. [setup] wires [repo] so that
+     * `addDraft`, `deleteDraft`, `discardDraftsForSku`, and `commitDraftsForSku`
+     * mutate these flows, and `observeDraftsBySku(sku)` returns the matching
+     * flow. This mirrors the real DB-backed behaviour the VM relies on.
+     */
+    private val draftFlows = mutableMapOf<String, MutableStateFlow<List<DraftPendingExpiryEntity>>>()
+
+    private fun draftFlow(sku: String) =
+        draftFlows.getOrPut(sku) { MutableStateFlow(emptyList()) }
+
     @Before
     fun setup() {
         Dispatchers.setMain(testDispatcher)
+        draftFlows.clear()
         repo = mockk(relaxed = true)
         // Default: observeByDates returns empty list; purgeExpired is a no-op
         coEvery { repo.observeByDates(any()) } returns flowOf(emptyList())
         coJustRun { repo.purgeExpired(any()) }
+
+        coEvery { repo.observeDraftsBySku(any()) } answers { draftFlow(firstArg()) }
+
+        coEvery { repo.addDraft(any(), any(), any(), any(), any(), any()) } answers {
+            val sku  = firstArg<String>()
+            val desc = secondArg<String>()
+            val ean  = thirdArg<String>()
+            val date = arg<String>(3)
+            val qty  = arg<Int?>(4)
+            val src  = arg<String>(5)
+            val flow = draftFlow(sku)
+            val now  = System.currentTimeMillis()
+            val current = flow.value
+            val existing = current.firstOrNull { it.expiryDate == date }
+            val entity = DraftPendingExpiryEntity(
+                id          = existing?.id ?: UUID.randomUUID().toString(),
+                sku         = sku,
+                description = desc,
+                ean         = ean,
+                expiryDate  = date,
+                qtyColli    = qty,
+                source      = src,
+                createdAt   = existing?.createdAt ?: now,
+            )
+            flow.value = if (existing == null) current + entity
+                         else current.map { if (it.id == entity.id) entity else it }
+            ExpiryRepository.DraftResult.Inserted(entity.id)
+        }
+
+        coEvery { repo.deleteDraft(any()) } answers {
+            val id = firstArg<String>()
+            draftFlows.values.forEach { flow ->
+                flow.value = flow.value.filterNot { it.id == id }
+            }
+        }
+
+        coEvery { repo.discardDraftsForSku(any()) } answers {
+            val sku = firstArg<String>()
+            draftFlow(sku).value = emptyList()
+        }
+
+        coEvery { repo.commitDraftsForSku(any()) } answers {
+            val sku = firstArg<String>()
+            val n = draftFlow(sku).value.size
+            draftFlow(sku).value = emptyList()
+            n
+        }
+
         viewModel = ExpiryViewModel(repo)
     }
 
@@ -134,6 +197,7 @@ class ExpiryViewModelTest {
         viewModel.onOcrText("16/04/2026")
 
         viewModel.acceptOcrProposal("2026-04-16")
+        testDispatcher.scheduler.advanceUntilIdle()
 
         val state = viewModel.state.value
         assertNull(state.ocrProposal)
@@ -151,6 +215,7 @@ class ExpiryViewModelTest {
         viewModel.onOcrText("16/04/2026")
 
         viewModel.dismissOcrProposal()
+        testDispatcher.scheduler.advanceUntilIdle()
 
         val state = viewModel.state.value
         assertNull(state.ocrProposal)
@@ -169,12 +234,13 @@ class ExpiryViewModelTest {
         viewModel.addPendingEntry("2026-04-16", 2)
         viewModel.addPendingEntry("2026-04-17", null)
         viewModel.addPendingEntry("2026-04-18", 5)
+        testDispatcher.scheduler.advanceUntilIdle()
 
         assertEquals(3, viewModel.state.value.pendingEntries.size)
     }
 
     @Test
-    fun `removePendingEntry removes the correct entry by localId`() = runTest {
+    fun `removePendingEntry removes the correct entry by id`() = runTest {
         coEvery { repo.resolveEanCacheOnly(any()) } returns
             ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN")
         viewModel.onBarcodeDetected("EAN")
@@ -182,9 +248,11 @@ class ExpiryViewModelTest {
 
         viewModel.addPendingEntry("2026-04-16", 2)
         viewModel.addPendingEntry("2026-04-17", 3)
-        val idToRemove = viewModel.state.value.pendingEntries.first().localId
+        testDispatcher.scheduler.advanceUntilIdle()
+        val idToRemove = viewModel.state.value.pendingEntries.first().id
 
         viewModel.removePendingEntry(idToRemove)
+        testDispatcher.scheduler.advanceUntilIdle()
 
         val remaining = viewModel.state.value.pendingEntries
         assertEquals(1, remaining.size)
@@ -192,26 +260,25 @@ class ExpiryViewModelTest {
     }
 
     @Test
-    fun `saveAllPending calls addOrMerge for each entry and clears list`() = runTest {
+    fun `saveAllPending delegates to commitDraftsForSku and clears list`() = runTest {
         coEvery { repo.resolveEanCacheOnly(any()) } returns
             ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN")
-        coEvery { repo.addOrMerge(any(), any(), any(), any(), any(), any()) } returns
-            ExpiryRepository.AddResult.Inserted
         viewModel.onBarcodeDetected("EAN")
         testDispatcher.scheduler.advanceUntilIdle()
 
         viewModel.addPendingEntry("2026-04-16", 2)
         viewModel.addPendingEntry("2026-04-17", null)
+        testDispatcher.scheduler.advanceUntilIdle()
 
         viewModel.saveAllPending()
         testDispatcher.scheduler.advanceUntilIdle()
 
-        coVerify(exactly = 2) { repo.addOrMerge(any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 1) { repo.commitDraftsForSku("SKU001") }
         assertTrue(viewModel.state.value.pendingEntries.isEmpty())
         assertNotNull(viewModel.state.value.feedbackMessage)
     }
 
-    // ── resetScan ─────────────────────────────────────────────────────────────
+    // ── resetScan: drafts preservation (the core bug fix) ─────────────────────
 
     @Test
     fun `resetScan clears scanned SKU and re-activates camera`() = runTest {
@@ -221,11 +288,110 @@ class ExpiryViewModelTest {
         testDispatcher.scheduler.advanceUntilIdle()
 
         viewModel.resetScan()
+        testDispatcher.scheduler.advanceUntilIdle()
 
         val state = viewModel.state.value
         assertNull(state.scannedSku)
         assertTrue(state.isCameraActive)
         assertTrue(state.pendingEntries.isEmpty())
+    }
+
+    @Test
+    fun `resetScan preserves drafts on disk - they reappear for same SKU`() = runTest {
+        coEvery { repo.resolveEanCacheOnly("EAN1") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN1")
+
+        // 1. Scan SKU001 and add two drafts.
+        viewModel.onBarcodeDetected("EAN1")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-16", 2)
+        viewModel.addPendingEntry("2026-04-17", 3)
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(2, viewModel.state.value.pendingEntries.size)
+
+        // 2. Press "Cambia articolo" → resetScan.
+        viewModel.resetScan()
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertNull(viewModel.state.value.scannedSku)
+        assertTrue(viewModel.state.value.pendingEntries.isEmpty())
+
+        // 3. DB must still hold the drafts (no discard happened).
+        assertEquals(2, draftFlow("SKU001").value.size)
+
+        // 4. Scan SKU001 again → drafts re-appear via Flow.
+        viewModel.onBarcodeDetected("EAN1")
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(2, viewModel.state.value.pendingEntries.size)
+    }
+
+    @Test
+    fun `switching SKU shows only target SKU drafts other SKU untouched`() = runTest {
+        coEvery { repo.resolveEanCacheOnly("EAN1") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN1")
+        coEvery { repo.resolveEanCacheOnly("EAN2") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU002", "Burro", "EAN2")
+
+        // SKU001 drafts
+        viewModel.onBarcodeDetected("EAN1")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-16", 2)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Switch to SKU002 without saving
+        viewModel.resetScan()
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.onBarcodeDetected("EAN2")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // SKU002 has no drafts, SKU001's are intact on disk
+        assertEquals(0, viewModel.state.value.pendingEntries.size)
+        assertEquals(1, draftFlow("SKU001").value.size)
+
+        viewModel.addPendingEntry("2026-04-20", 5)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Save SKU002 only — SKU001 drafts must remain
+        viewModel.saveAllPending()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        coVerify(exactly = 1) { repo.commitDraftsForSku("SKU002") }
+        coVerify(exactly = 0) { repo.commitDraftsForSku("SKU001") }
+        assertEquals(1, draftFlow("SKU001").value.size)
+        assertEquals(0, draftFlow("SKU002").value.size)
+    }
+
+    @Test
+    fun `exitScanMode preserves drafts on disk`() = runTest {
+        coEvery { repo.resolveEanCacheOnly("EAN1") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN1")
+        viewModel.onBarcodeDetected("EAN1")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-16", 1)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.exitScanMode()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, draftFlow("SKU001").value.size)
+        coVerify(exactly = 0) { repo.discardDraftsForSku(any()) }
+    }
+
+    @Test
+    fun `discardDraftsForCurrentSku empties current SKU drafts`() = runTest {
+        coEvery { repo.resolveEanCacheOnly("EAN1") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN1")
+        viewModel.onBarcodeDetected("EAN1")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-16", 1)
+        viewModel.addPendingEntry("2026-04-17", 2)
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(2, viewModel.state.value.pendingEntries.size)
+
+        viewModel.discardDraftsForCurrentSku()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(viewModel.state.value.pendingEntries.isEmpty())
+        assertEquals(0, draftFlow("SKU001").value.size)
     }
 
     // ── Screen mode transitions ───────────────────────────────────────────────
@@ -306,12 +472,11 @@ class ExpiryViewModelTest {
     fun `saveAllPending returns to LIST mode after saving`() = runTest {
         coEvery { repo.resolveEanCacheOnly(any()) } returns
             ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN")
-        coEvery { repo.addOrMerge(any(), any(), any(), any(), any(), any()) } returns
-            ExpiryRepository.AddResult.Inserted
         viewModel.enterScanMode()
         viewModel.onBarcodeDetected("EAN")
         testDispatcher.scheduler.advanceUntilIdle()
         viewModel.addPendingEntry("2026-04-20", 2)
+        testDispatcher.scheduler.advanceUntilIdle()
 
         viewModel.saveAllPending()
         testDispatcher.scheduler.advanceUntilIdle()

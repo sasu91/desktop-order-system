@@ -2,7 +2,7 @@
 
 Stock reordering management system — ledger-driven, multi-client architecture.
 
-> **Status**: desktop client operational · backend API (planned) · Android client (planned)
+> **Status**: desktop client operational · backend API (planned) · Android client **in development**
 
 ---
 
@@ -31,6 +31,11 @@ Stock reordering management system — ledger-driven, multi-client architecture.
     │  Windows    │                     │  Compose    │
     │  (current)  │                     │  (planned)  │
     └─────────────┘                     └─────────────┘
+
+**Android client** is under active development. It operates **fully offline**
+(Room + Hilt) and syncs to the backend when connectivity is restored.
+Current features: Receiving, Exceptions, End-of-Day close, SKU management,
+EAN bind, Scadenze (expiry tracking with per-SKU draft persistence).
 ```
 
 **Ledger-driven design** — stock state is never stored; it is always *calculated*
@@ -46,7 +51,7 @@ from a transaction ledger (`transactions.csv` / SQLite) as-of a given date.
 | GUI | `src/gui/` | Tkinter desktop UI (tabs: Stock, Orders, Receiving, Exceptions, …) |
 | Analytics | `src/analytics/` | KPI, scoring, service level, closed-loop |
 | Backend API | `backend/` | FastAPI REST — **planned** |
-| Android | `android/` | Kotlin mobile client — **planned** |
+| Android | `android/` | Kotlin mobile client — **in development** (see [Android architecture](#android-architecture)) |
 
 ---
 
@@ -74,7 +79,7 @@ Optional visual features (graceful degradation if absent):
 | FastAPI | ≥ 0.110 |
 | SQLite | 3.x (stdlib) |
 
-### Android client (planned)
+### Android client
 
 | Requirement | Version |
 |-------------|---------|
@@ -82,6 +87,13 @@ Optional visual features (graceful degradation if absent):
 | Kotlin | 1.9+ |
 | Min SDK | API 26 (Android 8.0) |
 | Jetpack Compose | 1.6+ |
+
+```bash
+cd android/
+./gradlew assembleDebug
+```
+
+APK output: `android/app/build/outputs/apk/debug/app-debug.apk`
 
 ---
 
@@ -135,11 +147,12 @@ python -m uvicorn dos_backend.api.main:app --reload --host 127.0.0.1 --port 8000
 
 API docs: <http://127.0.0.1:8000/api/docs>
 
-### Build Android APK  _(placeholder — not yet implemented)_
+### Build Android APK
 
 ```bash
-# cd android/
-# ./gradlew assembleDebug
+cd android/
+./gradlew assembleDebug
+# APK: android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
 ### Run tests
@@ -173,7 +186,21 @@ pyinstaller DesktopOrderSystem-onefile.spec --clean --noconfirm
 desktop-order-system/
 ├── backend/                  # future REST API (FastAPI)
 ├── desktop/                  # future: desktop client moved here
-├── android/                  # future Android client (Kotlin)
+├── android/                  # Android client (Kotlin + Jetpack Compose)
+│   └── app/src/main/java/com/sasu91/dosapp/
+│       ├── data/
+│       │   ├── api/          # Retrofit service + DTOs
+│       │   ├── db/           # Room database (v9), DAOs, entities
+│       │   │   ├── dao/      # 11 DAOs (outbox, cache, local tables)
+│       │   │   └── entity/   # 10 entities incl. DraftPendingExpiryEntity
+│       │   └── repository/   # ExpiryRepository, SkuCacheRepository, …
+│       ├── di/               # Hilt AppModule (DB, DAOs, Retrofit)
+│       └── ui/               # Jetpack Compose screens + ViewModels
+│           ├── expiry/       # Scadenze (per-SKU draft persistence)
+│           ├── receiving/    # Ricevimento merci
+│           ├── exceptions/   # WASTE / ADJUST / UNFULFILLED
+│           ├── eod/          # Chiusura giornaliera
+│           └── …
 ├── docs/                     # runbooks, ADRs, operational guides
 │   └── runbook.md
 ├── src/                      # current desktop application source
@@ -255,6 +282,50 @@ Full docs: [HOLIDAY_SYSTEM.md](HOLIDAY_SYSTEM.md)
 3. **No `datetime.now()` in domain logic** — date always passed as parameter
 4. **Transparent storage routing** — `StorageAdapter` wraps both CSV and SQLite backends
 5. **Frozen-aware paths** — `src/utils/paths.py` works both in dev and PyInstaller `.exe`
+
+---
+
+## Android architecture
+
+Stack: **Kotlin · Jetpack Compose · Hilt · Room · Retrofit · CameraX**
+
+### Offline-first principle
+
+All write operations are enqueued locally first (Room outbox tables) and synced
+to the backend when connectivity is restored. The UI is always responsive even
+with no network.
+
+### Room database — version history
+
+| Version | Change |
+|---------|--------|
+| 1 | Initial schema — `pending_requests` |
+| 2 | `draft_receipts` + `pending_exceptions` |
+| 3 | `draft_eod` |
+| 4 | `cached_skus` (offline EAN→SKU cache) |
+| 5 | `pending_binds` (offline EAN bind queue) |
+| 6 | `requires_expiry` column on `cached_skus` |
+| 7 | `pending_add_articles` + `local_articles` |
+| 8 | `local_expiry_entries` (Scadenze committed entries) |
+| 9 | `draft_pending_expiry` (per-SKU Scadenze staging) |
+
+All migrations are additive-only and registered in `DosDatabase.MIGRATION_*` constants.
+
+### Scadenze — per-SKU draft persistence
+
+The Scadenze screen tracks expiry dates offline. Pending entries (staged before
+"Salva tutto") are persisted in `draft_pending_expiry` grouped by SKU:
+
+- **"Cambia articolo"** switches the active SKU without discarding drafts — rows for the
+  previous SKU remain on disk and reappear when that SKU is scanned again.
+- **"Salva tutto"** commits the current SKU's drafts into `local_expiry_entries` (with
+  qty merge semantics) and clears only that SKU's staging bucket.
+- **"Scarta tutte"** is the only explicit destructive action.
+- App restart preserves all staged drafts (Room persistence).
+
+Key types: `DraftPendingExpiryEntity`, `DraftPendingExpiryDao`, `ExpiryRepository`,
+`ExpiryViewModel` (observes `observeDraftsBySku` Flow; `draftsJob` cancels/resubscribes
+on SKU change).
 
 ---
 
