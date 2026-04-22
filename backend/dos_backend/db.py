@@ -980,9 +980,17 @@ def apply_migrations(conn: Optional[sqlite3.Connection] = None, dry_run: bool = 
                     if all(line.strip().startswith("--") or line.strip() == ""
                            for line in s.splitlines()):
                         continue
-                    # Strip top-level transaction control: the runner owns BEGIN/COMMIT
-                    normalized = s.upper().lstrip()
-                    if normalized in ("BEGIN", "BEGIN TRANSACTION", "COMMIT", "ROLLBACK"):
+                    # Strip top-level transaction control: the runner owns BEGIN/COMMIT.
+                    # A "statement" may be a comment block + keyword (e.g. the file header
+                    # comments immediately followed by BEGIN TRANSACTION with no separating
+                    # semicolon). Strip all SQL line-comments before comparing so we catch
+                    # mixed comment+keyword blocks as well as bare keywords.
+                    _content_lines = [
+                        ln for ln in s.splitlines()
+                        if ln.strip() and not ln.strip().startswith("--")
+                    ]
+                    _clean_sql = " ".join(_content_lines).strip().upper()
+                    if _clean_sql in ("BEGIN", "BEGIN TRANSACTION", "COMMIT", "ROLLBACK"):
                         continue
                     statements.append(s)
 
