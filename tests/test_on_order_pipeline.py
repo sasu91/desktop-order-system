@@ -10,8 +10,8 @@ Validates:
 import pytest
 from datetime import date as Date, timedelta
 
-from backend.src.domain.ledger import StockCalculator
-from backend.src.domain.models import Transaction, EventType, Stock
+from src.domain.ledger import StockCalculator
+from src.domain.models import Transaction, EventType, Stock
 
 
 class TestOnOrderPipeline:
@@ -443,7 +443,7 @@ class TestInventoryPosition:
     
     def test_inventory_position_with_sales(self):
         """IP decreases with sales (on_hand reduces)."""
-        from backend.src.domain.models import SalesRecord
+        from src.domain.models import SalesRecord
         
         transactions = [
             Transaction(
@@ -561,7 +561,7 @@ class TestOnOrderPipelineIntegration:
         Day 4 (Thu): sell 15
         Day 5 (Fri): receive 30, sell 10
         """
-        from backend.src.domain.models import SalesRecord
+        from src.domain.models import SalesRecord
         
         mon = Date(2024, 2, 5)
         tue = Date(2024, 2, 6)

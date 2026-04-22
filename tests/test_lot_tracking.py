@@ -6,10 +6,10 @@ from datetime import date, timedelta
 from pathlib import Path
 import tempfile
 
-from backend.src.domain.models import Lot, Transaction, EventType, SKU
-from backend.src.persistence.csv_layer import CSVLayer
-from backend.src.workflows.receiving_v2 import ReceivingWorkflow
-from backend.src.domain.ledger import LotConsumptionManager
+from src.domain.models import Lot, Transaction, EventType, SKU
+from src.persistence.csv_layer import CSVLayer
+from src.workflows.receiving_v2 import ReceivingWorkflow
+from src.domain.ledger import LotConsumptionManager
 
 
 class TestLotModel:

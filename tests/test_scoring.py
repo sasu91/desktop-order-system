@@ -16,7 +16,7 @@ import math
 import pytest
 from datetime import date
 
-from backend.src.analytics.scoring import (
+from src.analytics.scoring import (
     FeatureRow,
     SKUScoringResult,
     SCORING_VERSION,

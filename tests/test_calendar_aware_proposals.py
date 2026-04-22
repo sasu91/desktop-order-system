@@ -11,11 +11,11 @@ from datetime import date, timedelta
 from pathlib import Path
 import pytest
 
-from backend.src.domain.models import SKU, Transaction, EventType, Stock, SalesRecord, DemandVariability
-from backend.src.domain.ledger import StockCalculator
-from backend.src.domain.calendar import Lane, next_receipt_date, calculate_protection_period_days, resolve_receipt_and_protection, DEFAULT_CONFIG
-from backend.src.workflows.order import OrderWorkflow
-from backend.src.persistence.csv_layer import CSVLayer
+from src.domain.models import SKU, Transaction, EventType, Stock, SalesRecord, DemandVariability
+from src.domain.ledger import StockCalculator
+from src.domain.calendar import Lane, next_receipt_date, calculate_protection_period_days, resolve_receipt_and_protection, DEFAULT_CONFIG
+from src.workflows.order import OrderWorkflow
+from src.persistence.csv_layer import CSVLayer
 
 
 def test_inventory_position_filters_by_receipt_date():
@@ -419,7 +419,7 @@ def test_resolve_receipt_and_protection_override():
 
     # No override: verify output matches protection_window
     r1_std, P_std = resolve_receipt_and_protection(fri, Lane.SATURDAY, cfg)
-    from backend.src.domain.calendar import protection_window
+    from src.domain.calendar import protection_window
     r1_pw, _, P_pw = protection_window(fri, Lane.SATURDAY, cfg)
     assert r1_std == r1_pw
     assert P_std == P_pw

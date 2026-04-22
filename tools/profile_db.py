@@ -24,8 +24,8 @@ import argparse
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend.src.db import DB_PATH, open_connection, close_connection
-from backend.src.repositories import SKURepository, LedgerRepository, OrdersRepository
+from src.db import DB_PATH, open_connection, close_connection
+from src.repositories import SKURepository, LedgerRepository, OrdersRepository
 
 
 # ============================================================

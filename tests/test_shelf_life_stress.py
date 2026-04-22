@@ -23,9 +23,9 @@ import psutil
 import os
 import time
 
-from backend.src.domain.models import SKU, Transaction, EventType, DemandVariability, Stock, SalesRecord
-from backend.src.persistence.csv_layer import CSVLayer
-from backend.src.workflows.order import OrderWorkflow, calculate_daily_sales_average
+from src.domain.models import SKU, Transaction, EventType, DemandVariability, Stock, SalesRecord
+from src.persistence.csv_layer import CSVLayer
+from src.workflows.order import OrderWorkflow, calculate_daily_sales_average
 
 
 class TestStressLargeCatalog:

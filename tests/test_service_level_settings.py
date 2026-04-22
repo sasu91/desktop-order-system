@@ -3,7 +3,7 @@ Test for Service Level settings validation and defaults.
 """
 
 import pytest
-from backend.src.analytics.service_level import (
+from src.analytics.service_level import (
     ServiceLevelMetric,
     validate_service_level_settings,
     DEFAULT_CSL,

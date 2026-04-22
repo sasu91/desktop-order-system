@@ -162,8 +162,15 @@ class HolidayCalendar:
     Unified holiday and closure calendar.
     
     Manages system holidays (Italian public) + custom closures with precedence.
+    
+    Attributes:
+        disabled_system_holidays: Set of system holiday names that the user has
+            explicitly disabled (e.g. {"Natale", "Pasqua"}). These are stored in
+            holidays.json under the key "disabled_system_holidays" and respected
+            by is_holiday(), effects_on(), and list_holidays().
     """
     rules: List[HolidayRule] = field(default_factory=list)
+    disabled_system_holidays: Set[str] = field(default_factory=set)
     _cache: Dict[int, Dict[date, Set[HolidayEffect]]] = field(default_factory=dict, repr=False)
     
     @classmethod
@@ -244,12 +251,24 @@ class HolidayCalendar:
                 print(f"Warning: Could not load holidays config from {config_path}: {e}")
                 print("Falling back to Italian public holidays only.")
         
-        # Add Italian public holidays as system rules if not in config
-        # (config can override by using same date with different effect)
-        italian_rules = cls._italian_system_rules()
+        # Add Italian public holidays as system rules, skipping any the user
+        # has explicitly disabled via "disabled_system_holidays" in the config.
+        disabled = set()
+        if config_path.exists():
+            try:
+                with open(config_path, 'r', encoding='utf-8') as _f:
+                    _cfg = json.load(_f)
+                    disabled = set(_cfg.get("disabled_system_holidays", []))
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        italian_rules = [
+            r for r in cls._italian_system_rules()
+            if r.name not in disabled
+        ]
         rules.extend(italian_rules)
-        
-        return cls(rules=rules)
+
+        return cls(rules=rules, disabled_system_holidays=disabled)
     
     @staticmethod
     def _italian_system_rules() -> List[HolidayRule]:
@@ -303,16 +322,18 @@ class HolidayCalendar:
         # Check Easter-based holidays first (not in rules list)
         easter = easter_sunday(check_date.year)
         easter_monday = easter + timedelta(days=1)
-        
+
         if check_date == easter or check_date == easter_monday:
-            # Easter is always system scope with BOTH effect
-            if scope is not None and scope != "system":
-                pass  # Skip if filtering for different scope
-            elif effect is not None and effect != HolidayEffect.BOTH:
-                pass  # Skip if filtering for specific effect
-            else:
-                return True
-        
+            easter_name = "Pasqua" if check_date == easter else "Lunedì dell'Angelo"
+            if easter_name not in self.disabled_system_holidays:
+                # Easter is always system scope with BOTH effect
+                if scope is not None and scope != "system":
+                    pass  # Skip if filtering for different scope
+                elif effect is not None and effect != HolidayEffect.BOTH:
+                    pass  # Skip if filtering for specific effect
+                else:
+                    return True
+
         # Check configured rules
         for rule in self.rules:
             if not rule.applies_to_date(check_date):
@@ -344,12 +365,14 @@ class HolidayCalendar:
         # Check Easter-based holidays
         easter = easter_sunday(check_date.year)
         easter_monday = easter + timedelta(days=1)
-        
+
         if check_date == easter or check_date == easter_monday:
-            if scope is None or scope == "system":
-                effects.add("no_order")
-                effects.add("no_receipt")
-        
+            easter_name = "Pasqua" if check_date == easter else "Lunedì dell'Angelo"
+            if easter_name not in self.disabled_system_holidays:
+                if scope is None or scope == "system":
+                    effects.add("no_order")
+                    effects.add("no_receipt")
+
         # Check configured rules
         for rule in self.rules:
             if not rule.applies_to_date(check_date):
@@ -380,11 +403,13 @@ class HolidayCalendar:
         """
         holidays = set()
         
-        # Add Easter-based holidays
+        # Add Easter-based holidays (respects disabled_system_holidays)
         if scope is None or scope == "system":
             easter = easter_sunday(year)
-            holidays.add(easter)
-            holidays.add(easter + timedelta(days=1))
+            if "Pasqua" not in self.disabled_system_holidays:
+                holidays.add(easter)
+            if "Lunedì dell'Angelo" not in self.disabled_system_holidays:
+                holidays.add(easter + timedelta(days=1))
         
         # Add configured rules
         for rule in self.rules:

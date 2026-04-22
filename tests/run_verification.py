@@ -71,8 +71,8 @@ def _compute_golden_summary() -> List[Dict[str, Any]]:
     sys.path.insert(0, str(WORKSPACE))
     import csv as csv_mod
 
-    from backend.src.domain.demand_builder import build_demand_distribution
-    from backend.src.domain.intermittent_forecast import classify_intermittent
+    from src.domain.demand_builder import build_demand_distribution
+    from src.domain.intermittent_forecast import classify_intermittent
 
     results = []
 

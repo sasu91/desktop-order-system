@@ -13,8 +13,8 @@ Tests:
 
 import pytest
 from datetime import date
-from backend.src.domain.models import SKU, PromoWindow, SalesRecord, Transaction
-from backend.src.domain.promo_uplift import estimate_cannibalization_downlift, DownliftReport
+from src.domain.models import SKU, PromoWindow, SalesRecord, Transaction
+from src.domain.promo_uplift import estimate_cannibalization_downlift, DownliftReport
 
 
 # === FIXTURES ===

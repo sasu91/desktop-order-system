@@ -6,7 +6,7 @@ Verifies that FIXED_DATE holiday rules support both:
 - Annual recurrence (month + day): applies to same date every year
 """
 from datetime import date
-from backend.src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
+from src.domain.holidays import HolidayCalendar, HolidayRule, HolidayType, HolidayEffect
 
 
 def test_monthly_recurrence():

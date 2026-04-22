@@ -23,8 +23,8 @@ import sys
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend.src.domain.models import SKU, Transaction, EventType, SalesRecord, DemandVariability
-from backend.src.domain.ledger import StockCalculator
+from src.domain.models import SKU, Transaction, EventType, SalesRecord, DemandVariability
+from src.domain.ledger import StockCalculator
 
 
 # Seed for reproducibility

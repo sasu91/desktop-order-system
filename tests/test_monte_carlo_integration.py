@@ -14,10 +14,10 @@ import os
 import json
 from pathlib import Path
 
-from backend.src.domain.models import SKU, DemandVariability, SalesRecord
-from backend.src.persistence.csv_layer import CSVLayer
-from backend.src.forecast import monte_carlo_forecast, monte_carlo_forecast_with_stats
-from backend.src.workflows.order import OrderWorkflow
+from src.domain.models import SKU, DemandVariability, SalesRecord
+from src.persistence.csv_layer import CSVLayer
+from src.forecast import monte_carlo_forecast, monte_carlo_forecast_with_stats
+from src.workflows.order import OrderWorkflow
 
 
 def test_monte_carlo_forecast_empirical():
@@ -223,7 +223,7 @@ def test_order_workflow_mc_integration():
         workflow = OrderWorkflow(csv_layer, lead_time_days=7)
         
         # Generate proposal (should use Monte Carlo)
-        from backend.src.domain.models import Stock
+        from src.domain.models import Stock
         stock = Stock(sku="MC001", on_hand=50, on_order=0, unfulfilled_qty=0)
         
         proposal = workflow.generate_proposal(
@@ -267,7 +267,7 @@ def test_order_workflow_simple_vs_mc():
         for i in range(1, 31):
             csv_layer.write_sales([SalesRecord(date=date(2024, 1, i), sku="TEST002", qty_sold=15)])
         
-        from backend.src.domain.models import Stock
+        from src.domain.models import Stock
         stock = Stock(sku="TEST002", on_hand=100, on_order=0, unfulfilled_qty=0)
         
         # Test 1: Simple forecast
@@ -345,7 +345,7 @@ class TestMCPriorityOverSimulation:
             csv_layer = CSVLayer(data_dir=Path(tmpdir))
             sku = self._make_intermittent_sku(csv_layer, "MC_LATTE", "monte_carlo")
 
-            from backend.src.domain.models import Stock
+            from src.domain.models import Stock
             stock = Stock(sku="MC_LATTE", on_hand=12, on_order=0)
 
             workflow = OrderWorkflow(csv_layer, lead_time_days=1)
@@ -379,7 +379,7 @@ class TestMCPriorityOverSimulation:
 
             sku = self._make_intermittent_sku(csv_layer, "SIMPLE_LATTE", "")  # use global
 
-            from backend.src.domain.models import Stock
+            from src.domain.models import Stock
             stock = Stock(sku="SIMPLE_LATTE", on_hand=3, on_order=0)
 
             workflow = OrderWorkflow(csv_layer, lead_time_days=1)
@@ -405,7 +405,7 @@ class TestMCPriorityOverSimulation:
             csv_layer = CSVLayer(data_dir=Path(tmpdir))
             sku = self._make_intermittent_sku(csv_layer, "MC_EXPL", "monte_carlo")
 
-            from backend.src.domain.models import Stock
+            from src.domain.models import Stock
             stock = Stock(sku="MC_EXPL", on_hand=6, on_order=0)
 
             workflow = OrderWorkflow(csv_layer, lead_time_days=1)

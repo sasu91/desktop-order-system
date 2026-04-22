@@ -17,9 +17,9 @@ import csv
 import pytest
 from pathlib import Path
 from datetime import date
-from backend.src.workflows.sku_import import SKUImporter, ImportRow, ImportPreview, COLUMN_ALIASES
-from backend.src.persistence.csv_layer import CSVLayer
-from backend.src.domain.models import SKU, DemandVariability
+from src.workflows.sku_import import SKUImporter, ImportRow, ImportPreview, COLUMN_ALIASES
+from src.persistence.csv_layer import CSVLayer
+from src.domain.models import SKU, DemandVariability
 
 
 @pytest.fixture

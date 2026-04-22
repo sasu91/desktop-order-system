@@ -56,7 +56,7 @@ def _make_settings_mc_csl(alpha: float = 0.95, seed: int = 42) -> dict:
 
 
 def _make_sku_obj_mc(sku: str = "MC001", target_csl: float = 0.95):
-    from backend.src.domain.models import SKU, DemandVariability
+    from src.domain.models import SKU, DemandVariability
     return SKU(
         sku=sku,
         description="MC Test SKU",
@@ -73,7 +73,7 @@ def _make_sku_obj_mc(sku: str = "MC001", target_csl: float = 0.95):
 
 
 def _make_stock(on_hand: float = 50.0):
-    from backend.src.domain.models import Stock
+    from src.domain.models import Stock
     return Stock(
         sku="MC001",
         on_hand=on_hand,
@@ -92,7 +92,7 @@ class TestCSLMCDeterminism:
 
     def test_same_seed_produces_identical_order(self):
         """Due esecuzioni con seed=42 devono produrre Q identico."""
-        from backend.src.workflows.order import propose_order_for_sku
+        from src.workflows.order import propose_order_for_sku
 
         history = _make_history(days=90, daily_qty=10.0)
         sku_obj = _make_sku_obj_mc(target_csl=0.95)
@@ -135,7 +135,7 @@ class TestCSLMCDeterminism:
 
     def test_different_seed_produces_different_order(self):
         """Seed diverso deve produrre Q diverso (con alta probabilità)."""
-        from backend.src.workflows.order import propose_order_for_sku
+        from src.workflows.order import propose_order_for_sku
 
         history = _make_history(days=90, daily_qty=10.0)
         sku_obj = _make_sku_obj_mc(target_csl=0.95)
@@ -181,7 +181,7 @@ class TestCSLMCMonotonicity:
 
     def test_alpha_increase_monotonic_csl_mc(self):
         """Alpha 0.90 → 0.95 → S e Q non decrescono."""
-        from backend.src.workflows.order import propose_order_for_sku
+        from src.workflows.order import propose_order_for_sku
 
         history = _make_history(days=90, daily_qty=10.0)
         stock = _make_stock(on_hand=50.0)
@@ -219,7 +219,7 @@ class TestCSLMCMonotonicity:
 
     def test_quantile_method_used_when_available(self):
         """Se quantile disponibile per alpha target, deve essere usato."""
-        from backend.src.workflows.order import propose_order_for_sku
+        from src.workflows.order import propose_order_for_sku
 
         history = _make_history(days=90, daily_qty=10.0)
         sku_obj = _make_sku_obj_mc(target_csl=0.95)
@@ -259,7 +259,7 @@ class TestCSLMCCoherence:
 
     def test_mu_sigma_from_same_distribution(self):
         """mu_P e sigma_P devono provenire dalla stessa distribuzione D_P."""
-        from backend.src.workflows.order import propose_order_for_sku
+        from src.workflows.order import propose_order_for_sku
 
         history = _make_history(days=90, daily_qty=10.0)
         sku_obj = _make_sku_obj_mc(target_csl=0.95)
@@ -296,7 +296,7 @@ class TestCSLMCCoherence:
 
     def test_sigma_not_from_residuals(self):
         """sigma_P non deve provenire da residui del modello simple."""
-        from backend.src.workflows.order import propose_order_for_sku
+        from src.workflows.order import propose_order_for_sku
 
         history = _make_history(days=90, daily_qty=10.0)
         sku_obj = _make_sku_obj_mc(target_csl=0.95)
@@ -330,8 +330,8 @@ class TestCSLMCLegacyRegression:
 
     def test_legacy_mode_unaffected_by_mc_changes(self):
         """policy_mode=legacy deve produrre output identico a prima."""
-        from backend.src.workflows.order import propose_order_for_sku
-        from backend.src.domain.models import SKU, DemandVariability
+        from src.workflows.order import propose_order_for_sku
+        from src.domain.models import SKU, DemandVariability
 
         history = _make_history(days=90, daily_qty=10.0)
         
@@ -393,7 +393,7 @@ class TestCSLMCExportability:
 
     def test_explain_to_dict_has_mc_fields(self):
         """OrderExplain.to_dict() deve includere tutti i campi MC."""
-        from backend.src.workflows.order import propose_order_for_sku
+        from src.workflows.order import propose_order_for_sku
         import json
 
         history = _make_history(days=90, daily_qty=10.0)

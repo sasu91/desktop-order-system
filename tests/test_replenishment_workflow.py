@@ -9,14 +9,14 @@ Critical tests:
 """
 import pytest
 from datetime import date, timedelta
-from backend.src.workflows.replenishment import (
+from src.workflows.replenishment import (
     generate_orders_for_date,
     generate_order_for_sku,
     calculate_inventory_position_asof,
     OrderSuggestion
 )
-from backend.src.replenishment_policy import OrderConstraints
-from backend.src.domain.calendar import Lane
+from src.replenishment_policy import OrderConstraints
+from src.domain.calendar import Lane
 
 
 # ============================================================================

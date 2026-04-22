@@ -15,9 +15,9 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from backend.src.domain.models import EventType, Transaction, SalesRecord
-from backend.src.persistence.csv_layer import CSVLayer
-from backend.src.analytics.kpi import (
+from src.domain.models import EventType, Transaction, SalesRecord
+from src.persistence.csv_layer import CSVLayer
+from src.analytics.kpi import (
     compute_oos_kpi,
     estimate_lost_sales,
     compute_forecast_accuracy,

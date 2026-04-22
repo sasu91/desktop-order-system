@@ -2379,15 +2379,71 @@ class CSVLayer:
     
     def write_holidays(self, holidays: List[Dict[str, Any]]):
         """
-        Write holidays to holidays.json.
+        Write holidays to holidays.json, preserving disabled_system_holidays.
         
         Args:
             holidays: List of holiday dictionaries
         """
         holidays_file = self.data_dir / "holidays.json"
-        
+
+        # Preserve disabled_system_holidays from the existing file
+        disabled: List[str] = []
+        if holidays_file.exists():
+            try:
+                with open(holidays_file, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                    disabled = existing.get("disabled_system_holidays", [])
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        data: Dict[str, Any] = {"holidays": holidays}
+        if disabled:
+            data["disabled_system_holidays"] = disabled
+
         with open(holidays_file, "w", encoding="utf-8") as f:
-            json.dump({"holidays": holidays}, f, indent=2, ensure_ascii=False)
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+    def get_disabled_system_holidays(self) -> List[str]:
+        """
+        Read the list of disabled Italian system holiday names from holidays.json.
+
+        Returns:
+            List of holiday names (e.g. ["Natale", "Pasqua"]) that are disabled.
+        """
+        holidays_file = self.data_dir / "holidays.json"
+        if not holidays_file.exists():
+            return []
+        try:
+            with open(holidays_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return list(data.get("disabled_system_holidays", []))
+        except (json.JSONDecodeError, IOError):
+            return []
+
+    def set_disabled_system_holidays(self, disabled: List[str]):
+        """
+        Persist the disabled Italian system holiday names to holidays.json.
+
+        Preserves all other keys (holidays list, etc.).
+
+        Args:
+            disabled: List of holiday names to disable (empty list re-enables all).
+        """
+        holidays_file = self.data_dir / "holidays.json"
+        # Read existing content
+        data: Dict[str, Any] = {"holidays": []}
+        if holidays_file.exists():
+            try:
+                with open(holidays_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+        if disabled:
+            data["disabled_system_holidays"] = sorted(set(disabled))
+        else:
+            data.pop("disabled_system_holidays", None)
+        with open(holidays_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
     
     def add_holiday(self, holiday: Dict[str, Any]):
         """

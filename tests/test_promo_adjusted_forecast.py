@@ -16,9 +16,9 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from backend.src.domain.models import SKU, SalesRecord, PromoWindow, Transaction, EventType
-from backend.src.persistence.csv_layer import CSVLayer
-from backend.src.forecast import promo_adjusted_forecast
+from src.domain.models import SKU, SalesRecord, PromoWindow, Transaction, EventType
+from src.persistence.csv_layer import CSVLayer
+from src.forecast import promo_adjusted_forecast
 
 
 @pytest.fixture

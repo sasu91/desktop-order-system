@@ -10,10 +10,10 @@ from datetime import date, timedelta
 from pathlib import Path
 import pytest
 
-from backend.src.domain.models import SKU, Transaction, EventType, Stock, SalesRecord, DemandVariability, Lot
-from backend.src.domain.ledger import StockCalculator
-from backend.src.workflows.order import OrderWorkflow
-from backend.src.persistence.csv_layer import CSVLayer
+from src.domain.models import SKU, Transaction, EventType, Stock, SalesRecord, DemandVariability, Lot
+from src.domain.ledger import StockCalculator
+from src.workflows.order import OrderWorkflow
+from src.persistence.csv_layer import CSVLayer
 
 
 def test_projected_ip_subtracts_forecast_sales():

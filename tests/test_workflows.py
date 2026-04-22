@@ -9,11 +9,11 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from backend.src.domain.models import Stock, Transaction, EventType, SalesRecord
-from backend.src.persistence.csv_layer import CSVLayer
-from backend.src.workflows.order import OrderWorkflow, calculate_daily_sales_average
-from backend.src.workflows.receiving import ReceivingWorkflow, ExceptionWorkflow
-from backend.src.workflows.daily_close import DailyCloseWorkflow
+from src.domain.models import Stock, Transaction, EventType, SalesRecord
+from src.persistence.csv_layer import CSVLayer
+from src.workflows.order import OrderWorkflow, calculate_daily_sales_average
+from src.workflows.receiving import ReceivingWorkflow, ExceptionWorkflow
+from src.workflows.daily_close import DailyCloseWorkflow
 
 
 @pytest.fixture
@@ -284,7 +284,7 @@ class TestDailyCloseWorkflow:
     def test_process_eod_stock_basic(self, csv_layer):
         """Process basic EOD stock entry with sales calculation."""
         # Setup: Add a SKU
-        from backend.src.domain.models import SKU, DemandVariability
+        from src.domain.models import SKU, DemandVariability
         csv_layer.write_sku(SKU(
             sku="SKU001",
             description="Test Product",
@@ -328,7 +328,7 @@ class TestDailyCloseWorkflow:
     
     def test_process_eod_stock_with_adjustment(self, csv_layer):
         """Process EOD with stock discrepancy (shrinkage)."""
-        from backend.src.domain.models import SKU, DemandVariability
+        from src.domain.models import SKU, DemandVariability
         csv_layer.write_sku(SKU(
             sku="SKU001",
             description="Test Product",
@@ -367,7 +367,7 @@ class TestDailyCloseWorkflow:
     
     def test_process_eod_stock_idempotency(self, csv_layer):
         """Process same EOD twice should update, not duplicate."""
-        from backend.src.domain.models import SKU, DemandVariability
+        from src.domain.models import SKU, DemandVariability
         csv_layer.write_sku(SKU(
             sku="SKU001",
             description="Test Product",
@@ -403,7 +403,7 @@ class TestDailyCloseWorkflow:
     
     def test_process_bulk_eod_stock(self, csv_layer):
         """Process multiple SKUs at once."""
-        from backend.src.domain.models import SKU, DemandVariability
+        from src.domain.models import SKU, DemandVariability
         
         # Add multiple SKUs
         for i in range(3):
@@ -452,7 +452,7 @@ class TestDailyCloseWorkflow:
     
     def test_process_eod_negative_stock(self, csv_layer):
         """Process EOD with negative stock should raise error."""
-        from backend.src.domain.models import SKU, DemandVariability
+        from src.domain.models import SKU, DemandVariability
         csv_layer.write_sku(SKU(
             sku="SKU001",
             description="Test",

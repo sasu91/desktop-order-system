@@ -765,6 +765,14 @@ class StorageAdapter(CSVLayer):
     def delete_holiday(self, index: int):
         """Delete holiday by index"""
         self.csv_layer.delete_holiday(index)
+
+    def get_disabled_system_holidays(self) -> List[str]:
+        """Return list of disabled Italian system holiday names"""
+        return self.csv_layer.get_disabled_system_holidays()
+
+    def set_disabled_system_holidays(self, disabled: List[str]):
+        """Persist disabled Italian system holiday names"""
+        self.csv_layer.set_disabled_system_holidays(disabled)
     
     # ============================================================
     # Delegation methods (always use CSV)

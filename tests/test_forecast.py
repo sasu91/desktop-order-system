@@ -10,7 +10,7 @@ Validates:
 
 import pytest
 from datetime import date, timedelta
-from backend.src.forecast import (
+from src.forecast import (
     fit_forecast_model,
     predict,
     predict_single_day,

@@ -78,7 +78,7 @@ def _make_sku_obj(
     forecast_method: str = "",
     target_csl: float = 0.0,
 ):
-    from backend.src.domain.models import SKU, DemandVariability
+    from src.domain.models import SKU, DemandVariability
     return SKU(
         sku=sku,
         description="Golden Test SKU",
@@ -95,7 +95,7 @@ def _make_sku_obj(
 
 
 def _make_stock(on_hand: float = 50.0, on_order: float = 0.0):
-    from backend.src.domain.models import Stock
+    from src.domain.models import Stock
     return Stock(
         sku="GOLDEN001",
         on_hand=on_hand,
@@ -127,8 +127,8 @@ class TestGoldenLegacySimpleInvariance:
         position) is a distinct feature that requires real transaction data and
         is not part of the facade interface.
         """
-        from backend.src.workflows.order import OrderWorkflow
-        from backend.src.domain.models import SalesRecord
+        from src.workflows.order import OrderWorkflow
+        from src.domain.models import SalesRecord
 
         # Build mock csv_layer
         mock_layer = MagicMock()
@@ -161,7 +161,7 @@ class TestGoldenLegacySimpleInvariance:
         return proposal
 
     def _run_facade(self, history, sku_obj, stock, settings):
-        from backend.src.workflows.order import propose_order_for_sku
+        from src.workflows.order import propose_order_for_sku
         proposal, explain = propose_order_for_sku(
             sku_obj=sku_obj,
             history=history,
@@ -262,8 +262,8 @@ class TestNonSilentForecastMethodDifference:
     """
 
     def _run_csl(self, forecast_method: str, on_hand: float = 50.0):
-        from backend.src.workflows.order import propose_order_for_sku
-        from backend.src.analytics.target_resolver import TargetServiceLevelResolver
+        from src.workflows.order import propose_order_for_sku
+        from src.analytics.target_resolver import TargetServiceLevelResolver
 
         history = _make_history(days=90, daily_qty=10.0)
         sku_obj = _make_sku_obj(safety_stock=20, forecast_method=forecast_method, target_csl=0.95)
@@ -339,7 +339,7 @@ class TestNoInternalForecastInComputeOrderV2:
     """
 
     def _make_distribution(self, mu: float = 9999.0, sigma: float = 50.0):
-        from backend.src.domain.contracts import DemandDistribution
+        from src.domain.contracts import DemandDistribution
         return DemandDistribution(
             mu_P=mu,
             sigma_P=sigma,
@@ -348,7 +348,7 @@ class TestNoInternalForecastInComputeOrderV2:
         )
 
     def _make_position(self, on_hand: float = 50.0):
-        from backend.src.domain.contracts import InventoryPosition
+        from src.domain.contracts import InventoryPosition
         return InventoryPosition(
             on_hand=on_hand,
             on_order=0.0,
@@ -361,8 +361,8 @@ class TestNoInternalForecastInComputeOrderV2:
         Sentinel test: pass mu_P=9999 and assert result["forecast_demand"]==9999.
         If the policy re-estimated internally, it would return a realistic value (~140).
         """
-        from backend.src.replenishment_policy import compute_order_v2, OrderConstraints
-        from backend.src.domain.calendar import Lane
+        from src.replenishment_policy import compute_order_v2, OrderConstraints
+        from src.domain.calendar import Lane
 
         demand = self._make_distribution(mu=9999.0)
         position = self._make_position(on_hand=50.0)
@@ -383,8 +383,8 @@ class TestNoInternalForecastInComputeOrderV2:
 
     def test_compute_order_v2_does_not_call_fit_forecast_model(self):
         """Patch fit_forecast_model to raise; compute_order_v2 must not trigger it."""
-        from backend.src.replenishment_policy import compute_order_v2, OrderConstraints
-        from backend.src.domain.calendar import Lane
+        from src.replenishment_policy import compute_order_v2, OrderConstraints
+        from src.domain.calendar import Lane
 
         demand = self._make_distribution(mu=100.0)
         position = self._make_position(on_hand=50.0)
@@ -406,8 +406,8 @@ class TestNoInternalForecastInComputeOrderV2:
 
     def test_compute_order_v2_does_not_call_estimate_demand_uncertainty(self):
         """Patch estimate_demand_uncertainty to raise; compute_order_v2 must not trigger it."""
-        from backend.src.replenishment_policy import compute_order_v2, OrderConstraints
-        from backend.src.domain.calendar import Lane
+        from src.replenishment_policy import compute_order_v2, OrderConstraints
+        from src.domain.calendar import Lane
 
         demand = self._make_distribution(mu=100.0)
         position = self._make_position(on_hand=50.0)
@@ -428,8 +428,8 @@ class TestNoInternalForecastInComputeOrderV2:
 
     def test_compute_order_v2_rejects_wrong_types(self):
         """Passing a plain dict instead of DemandDistribution must raise TypeError."""
-        from backend.src.replenishment_policy import compute_order_v2, OrderConstraints
-        from backend.src.domain.calendar import Lane
+        from src.replenishment_policy import compute_order_v2, OrderConstraints
+        from src.domain.calendar import Lane
 
         with pytest.raises(TypeError):
             compute_order_v2(
@@ -443,8 +443,8 @@ class TestNoInternalForecastInComputeOrderV2:
 
     def test_compute_order_v2_rejects_wrong_position_type(self):
         """Passing a plain dict instead of InventoryPosition must raise TypeError."""
-        from backend.src.replenishment_policy import compute_order_v2, OrderConstraints
-        from backend.src.domain.calendar import Lane
+        from src.replenishment_policy import compute_order_v2, OrderConstraints
+        from src.domain.calendar import Lane
 
         with pytest.raises(TypeError):
             compute_order_v2(
@@ -473,9 +473,9 @@ class TestModifierBuilderNoDoubleEvent:
         promo path applied event uplift internally AND the independent branch also applied it.
         With modifier_builder, it must appear exactly once in applied list.
         """
-        from backend.src.domain.modifier_builder import apply_modifiers
-        from backend.src.domain.contracts import DemandDistribution
-        from backend.src.domain.models import SKU, DemandVariability, EventUpliftRule
+        from src.domain.modifier_builder import apply_modifiers
+        from src.domain.contracts import DemandDistribution
+        from src.domain.models import SKU, DemandVariability, EventUpliftRule
 
         # Build a DemandDistribution with known mu_P
         base = DemandDistribution(
@@ -525,9 +525,9 @@ class TestModifierBuilderNoDoubleEvent:
         When event_rules is non-empty but no rule matches, exactly 0 event modifiers.
         The no-match path must not double-count.
         """
-        from backend.src.domain.modifier_builder import apply_modifiers
-        from backend.src.domain.contracts import DemandDistribution
-        from backend.src.domain.models import SKU, DemandVariability
+        from src.domain.modifier_builder import apply_modifiers
+        from src.domain.contracts import DemandDistribution
+        from src.domain.models import SKU, DemandVariability
 
         base = DemandDistribution(mu_P=100.0, sigma_P=20.0, protection_period_days=14,
                                    forecast_method="simple")
@@ -567,7 +567,7 @@ class TestDemandDistributionContract:
 
     def test_with_modifiers_applied_empty_list(self):
         """Empty modifiers → distribution unchanged, multiplier=1.0."""
-        from backend.src.domain.contracts import DemandDistribution
+        from src.domain.contracts import DemandDistribution
         d = DemandDistribution(mu_P=100.0, sigma_P=20.0, protection_period_days=14,
                                 forecast_method="simple")
         new_d, cum = d.with_modifiers_applied([])
@@ -576,7 +576,7 @@ class TestDemandDistributionContract:
 
     def test_with_modifiers_applied_uplift(self):
         """Uplift modifier increases mu_P and sigma_P (scope=both)."""
-        from backend.src.domain.contracts import DemandDistribution, AppliedModifier
+        from src.domain.contracts import DemandDistribution, AppliedModifier
         d = DemandDistribution(mu_P=100.0, sigma_P=20.0, protection_period_days=14,
                                 forecast_method="simple")
         mod = AppliedModifier(name="promo", modifier_type="promo", scope="both",
@@ -588,7 +588,7 @@ class TestDemandDistributionContract:
 
     def test_with_modifiers_applied_downlift_sigma_not_reduced(self):
         """Downlift (cannibalization) with scope=mu_only → sigma unchanged."""
-        from backend.src.domain.contracts import DemandDistribution, AppliedModifier
+        from src.domain.contracts import DemandDistribution, AppliedModifier
         d = DemandDistribution(mu_P=100.0, sigma_P=20.0, protection_period_days=14,
                                 forecast_method="simple")
         mod = AppliedModifier(name="cannibalization", modifier_type="cannibalization",
@@ -600,7 +600,7 @@ class TestDemandDistributionContract:
 
     def test_sigma_clamp_prevents_extreme_scaling(self):
         """sigma_adj multiplier is clamped at 2.5 to prevent extreme sigma inflation."""
-        from backend.src.domain.contracts import DemandDistribution, AppliedModifier
+        from src.domain.contracts import DemandDistribution, AppliedModifier
         d = DemandDistribution(mu_P=100.0, sigma_P=20.0, protection_period_days=14,
                                 forecast_method="simple")
         mod = AppliedModifier(name="huge_event", modifier_type="event", scope="both",
@@ -611,14 +611,14 @@ class TestDemandDistributionContract:
 
     def test_negative_mu_validation(self):
         """mu_P < 0 must raise ValueError."""
-        from backend.src.domain.contracts import DemandDistribution
+        from src.domain.contracts import DemandDistribution
         with pytest.raises(ValueError):
             DemandDistribution(mu_P=-1.0, sigma_P=10.0, protection_period_days=7,
                                 forecast_method="simple")
 
     def test_negative_sigma_validation(self):
         """sigma_P < 0 must raise ValueError."""
-        from backend.src.domain.contracts import DemandDistribution
+        from src.domain.contracts import DemandDistribution
         with pytest.raises(ValueError):
             DemandDistribution(mu_P=100.0, sigma_P=-5.0, protection_period_days=7,
                                 forecast_method="simple")
@@ -631,12 +631,12 @@ class TestDemandDistributionContract:
 class TestInventoryPositionContract:
 
     def test_inventory_position_property(self):
-        from backend.src.domain.contracts import InventoryPosition
+        from src.domain.contracts import InventoryPosition
         pos = InventoryPosition(on_hand=50.0, on_order=20.0, unfulfilled=5.0)
         assert pos.inventory_position == 65.0
 
     def test_ip_asof_filters_pipeline(self):
-        from backend.src.domain.contracts import InventoryPosition
+        from src.domain.contracts import InventoryPosition
         pipeline = [
             {"receipt_date": date(2026, 2, 20), "qty": 30},
             {"receipt_date": date(2026, 2, 27), "qty": 70},
@@ -648,7 +648,7 @@ class TestInventoryPositionContract:
         assert ip == 50.0 + 30.0
 
     def test_negative_on_hand_validation(self):
-        from backend.src.domain.contracts import InventoryPosition
+        from src.domain.contracts import InventoryPosition
         with pytest.raises(ValueError):
             InventoryPosition(on_hand=-1.0, on_order=0.0)
 
@@ -665,7 +665,7 @@ class TestDemandBuilderSimple:
 
     def test_simple_mu_P_approximately_correct(self):
         """With 10 units/day and P=14, mu_P ≈ 140."""
-        from backend.src.domain.demand_builder import build_demand_distribution
+        from src.domain.demand_builder import build_demand_distribution
         demand = build_demand_distribution(
             method="simple",
             history=self._make_history(days=60, daily_qty=10.0),
@@ -678,7 +678,7 @@ class TestDemandBuilderSimple:
         assert demand.protection_period_days == 14
 
     def test_empty_history_returns_zero_demand(self):
-        from backend.src.domain.demand_builder import build_demand_distribution
+        from src.domain.demand_builder import build_demand_distribution
         demand = build_demand_distribution(
             method="simple",
             history=[],
@@ -690,7 +690,7 @@ class TestDemandBuilderSimple:
 
     def test_unknown_method_falls_back_to_simple(self):
         """Unknown method string falls back to simple without raising."""
-        from backend.src.domain.demand_builder import build_demand_distribution
+        from src.domain.demand_builder import build_demand_distribution
         demand = build_demand_distribution(
             method="totally_unknown_method",
             history=self._make_history(),
@@ -701,7 +701,7 @@ class TestDemandBuilderSimple:
         assert demand.forecast_method == "simple"
 
     def test_zero_protection_period_returns_zero(self):
-        from backend.src.domain.demand_builder import build_demand_distribution
+        from src.domain.demand_builder import build_demand_distribution
         demand = build_demand_distribution(
             method="simple",
             history=self._make_history(),

@@ -7,7 +7,7 @@ Test comprehensive error formatting, user-friendly messages, and recovery guidan
 import pytest
 import sqlite3
 from datetime import date
-from backend.src.utils.error_formatting import (
+from src.utils.error_formatting import (
     ErrorContext,
     ErrorSeverity,
     ErrorFormatter,
@@ -17,7 +17,7 @@ from backend.src.utils.error_formatting import (
     validate_positive_integer,
     validate_float_range,
 )
-from backend.src.repositories import (
+from src.repositories import (
     DuplicateKeyError,
     ForeignKeyError,
     NotFoundError,
@@ -784,7 +784,7 @@ def test_all_error_codes_unique():
 
 def test_error_formatting_comprehensive_coverage():
     """TEST 44: Error formatting covers all major exception types."""
-    from backend.src.repositories import RepositoryError
+    from src.repositories import RepositoryError
     
     # Repository errors
     assert ErrorFormatter.format_repository_error(DuplicateKeyError("dup"), "op")

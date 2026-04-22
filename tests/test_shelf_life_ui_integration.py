@@ -13,8 +13,8 @@ import tempfile
 import shutil
 import json
 
-from backend.src.domain.models import SKU, DemandVariability, OrderProposal
-from backend.src.persistence.csv_layer import CSVLayer
+from src.domain.models import SKU, DemandVariability, OrderProposal
+from src.persistence.csv_layer import CSVLayer
 
 
 class TestShelfLifeSettingsPersistence:

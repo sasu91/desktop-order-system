@@ -51,7 +51,7 @@ import argparse
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend.src.db import (
+from src.db import (
     open_connection,
     get_current_schema_version,
     get_database_stats,

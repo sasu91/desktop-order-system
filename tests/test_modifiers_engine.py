@@ -28,7 +28,7 @@ import pytest
 # Module under test
 # ---------------------------------------------------------------------------
 try:
-    from backend.src.domain.contracts import (
+    from src.domain.contracts import (
         AppliedModifier,
         DemandDistribution,
         DATE_BASIS_DELIVERY,
@@ -36,7 +36,7 @@ try:
         Modifier,
         ModifierContext,
     )
-    from backend.src.domain.modifier_builder import (
+    from src.domain.modifier_builder import (
         _ModifierWithMeta,           # internal – imported for unit tests
         _apply_single_modifier,
         _effective_multiplier,

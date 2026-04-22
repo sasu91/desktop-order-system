@@ -13,8 +13,8 @@ from datetime import date, timedelta
 from dataclasses import dataclass
 import pytest
 
-from backend.src.forecast import baseline_forecast, baseline_forecast_mc, fit_forecast_model, predict_single_day
-from backend.src.domain.models import SalesRecord, Transaction, EventType
+from src.forecast import baseline_forecast, baseline_forecast_mc, fit_forecast_model, predict_single_day
+from src.domain.models import SalesRecord, Transaction, EventType
 
 
 @dataclass

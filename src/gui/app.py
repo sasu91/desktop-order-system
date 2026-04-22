@@ -11346,7 +11346,7 @@ class DesktopOrderApp:
         instructions = ttk.Label(
             tab_frame,
             text="Gestisci festività e chiusure che bloccano ordini e/o ricevimenti.\n"
-                 "Le festività italiane ufficiali (Natale, Pasqua, ecc.) sono sempre incluse automaticamente.",
+                 "Le festività 🔒 sono quelle italiane ufficiali: selezionale e premi Elimina per disabilitarle.",
             foreground="gray",
             font=("Helvetica", 9, "italic")
         )
@@ -12760,17 +12760,21 @@ class DesktopOrderApp:
     def _refresh_holidays_table(self):
         """Refresh holidays table from holidays.json."""
         self.holidays_treeview.delete(*self.holidays_treeview.get_children())
-        
+
+        # Tag styles: system holidays shown in grey; disabled ones dimmer
+        self.holidays_treeview.tag_configure("system", foreground="#6b7280")
+        self.holidays_treeview.tag_configure("system_disabled", foreground="#b0b0b0")
+
         holidays = self.csv_layer.read_holidays()
-        
-        for holiday in holidays:
+        disabled_system = set(self.csv_layer.get_disabled_system_holidays())
+
+        for i, holiday in enumerate(holidays):
             name = holiday.get("name", "")
             holiday_type = holiday.get("type", "")
             scope = holiday.get("scope", "")
             effect = holiday.get("effect", "")
             params = holiday.get("params", {})
-            
-            # Format dates based on type
+
             if holiday_type == "single":
                 date_str = params.get("date", "")
             elif holiday_type == "range":
@@ -12782,27 +12786,55 @@ class DesktopOrderApp:
                 date_str = f"Giorno {day} di ogni mese"
             else:
                 date_str = str(params)
-            
-            # Format effect
+
             effect_labels = {
                 "no_order": "No Ordini",
                 "no_receipt": "No Ricevimenti",
                 "both": "Entrambi"
             }
             effect_label = effect_labels.get(effect, effect)
-            
-            # Format scope
+
             scope_labels = {
                 "logistics": "Logistica",
                 "orders": "Ordini",
-                "receipts": "Ricevimenti"
+                "receipts": "Ricevimenti",
+                "system": "Sistema",
             }
             scope_label = scope_labels.get(scope, scope)
-            
+
             self.holidays_treeview.insert(
                 "",
                 "end",
+                iid=f"custom_{i}",
                 values=(name, holiday_type, date_str, scope_label, effect_label)
+            )
+
+        # --- Show Italian system holidays (read-only, always at bottom) ---
+        system_entries = [
+            ("Capodanno",            "01/01"),
+            ("Epifania",             "06/01"),
+            ("Pasqua",               "mobile (domenica)"),
+            ("Lunedì dell'Angelo",   "mobile (lunedì)"),
+            ("Liberazione",          "25/04"),
+            ("Festa del Lavoro",     "01/05"),
+            ("Festa della Repubblica", "02/06"),
+            ("Ferragosto",           "15/08"),
+            ("Ognissanti",           "01/11"),
+            ("Immacolata Concezione", "08/12"),
+            ("Natale",               "25/12"),
+            ("Santo Stefano",        "26/12"),
+        ]
+
+        for name, date_str in system_entries:
+            is_disabled = name in disabled_system
+            display_name = f"🔒 {name}" if not is_disabled else f"↩️ {name} (disabilitata)"
+            tag = "system_disabled" if is_disabled else "system"
+            self.holidays_treeview.insert(
+                "",
+                "end",
+                iid=f"system_{name}",
+                values=(display_name, "sistema", date_str, "Sistema", "Entrambi"),
+                tags=(tag,)
             )
     
     def _add_holiday(self):
@@ -12815,30 +12847,77 @@ class DesktopOrderApp:
         if not selection:
             messagebox.showwarning("Nessuna selezione", "Seleziona una festività da modificare.")
             return
-        
-        # Get index of selected holiday
-        index = self.holidays_treeview.index(selection[0])
+
+        iid = selection[0]
+        if iid.startswith("system_"):
+            messagebox.showinfo(
+                "Festività di sistema",
+                "Le festività italiane ufficiali non possono essere modificate.\n"
+                "Usa il pulsante \"Elimina\" per disabilitarle o riabilitarle."
+            )
+            return
+
+        # Custom holiday: extract index from iid (e.g. "custom_3" -> 3)
+        try:
+            index = int(iid.split("_", 1)[1])
+        except (IndexError, ValueError):
+            return
+
         holidays = self.csv_layer.read_holidays()
-        
         if 0 <= index < len(holidays):
             self._show_holiday_dialog(mode="edit", index=index, holiday=holidays[index])
-    
+
     def _delete_holiday(self):
-        """Delete selected holiday."""
+        """Delete (or toggle-disable) selected holiday."""
         selection = self.holidays_treeview.selection()
         if not selection:
             messagebox.showwarning("Nessuna selezione", "Seleziona una festività da eliminare.")
             return
-        
-        # Get index of selected holiday
-        index = self.holidays_treeview.index(selection[0])
+
+        iid = selection[0]
+
+        # System holiday: toggle disabled state instead of deleting
+        if iid.startswith("system_"):
+            name = iid[len("system_"):]
+            disabled = set(self.csv_layer.get_disabled_system_holidays())
+            if name in disabled:
+                confirm = messagebox.askyesno(
+                    "Riabilita festività",
+                    f"Riabilitare la festività di sistema \u2018{name}\u2019?\n"
+                    "Tornerà a bloccare ordini/ricevimenti su quella data."
+                )
+                if confirm:
+                    disabled.discard(name)
+                    self.csv_layer.set_disabled_system_holidays(sorted(disabled))
+                    self._refresh_holidays_table()
+                    self._reload_calendar()
+                    messagebox.showinfo("Successo", f"Festività \u2018{name}\u2019 riabilitata.")
+            else:
+                confirm = messagebox.askyesno(
+                    "Disabilita festività",
+                    f"Disabilitare la festività di sistema \u2018{name}\u2019?\n"
+                    "Gli ordini e ricevimenti saranno permessi su quella data."
+                )
+                if confirm:
+                    disabled.add(name)
+                    self.csv_layer.set_disabled_system_holidays(sorted(disabled))
+                    self._refresh_holidays_table()
+                    self._reload_calendar()
+                    messagebox.showinfo("Successo", f"Festività \u2018{name}\u2019 disabilitata.")
+            return
+
+        # Custom holiday: extract index from iid (e.g. "custom_3" -> 3)
+        try:
+            index = int(iid.split("_", 1)[1])
+        except (IndexError, ValueError):
+            return
+
         holidays = self.csv_layer.read_holidays()
-        
         if 0 <= index < len(holidays):
             holiday = holidays[index]
             confirm = messagebox.askyesno(
                 "Conferma eliminazione",
-                f"Eliminare la festività '{holiday.get('name', '')}'?"
+                f"Eliminare la festività \u2018{holiday.get('name', '')}\u2019?"
             )
             if confirm:
                 try:

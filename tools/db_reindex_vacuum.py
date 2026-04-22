@@ -43,7 +43,7 @@ import time
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend.src.db import (
+from src.db import (
     open_connection,
     backup_database,
     integrity_check,
