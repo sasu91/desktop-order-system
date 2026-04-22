@@ -895,6 +895,86 @@ def calculate_file_checksum(filepath: Path) -> str:
     return sha256.hexdigest()
 
 
+def _split_sql_statements(sql: str) -> List[str]:
+    """Split a SQL migration script into individual statements.
+
+    Handles edge cases that break a naive ``sql.split(";")``:
+    - ``;`` inside ``--`` line comments (e.g. ``-- note; see docs``): comments
+      are stripped before splitting so the comment ``;`` does not cut a
+      CREATE TABLE in half.
+    - ``;`` inside ``'...'`` string literals: the splitter is string-literal
+      aware and only treats a semicolon as a separator when it is outside a
+      quoted string.
+    Block comments ``/* ... */`` are also stripped.
+    """
+    # 1. Remove block comments /* ... */ (non-greedy, multiline).
+    sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)
+    # 2. Remove line comments -- ... up to end of line. Must be done per-line
+    #    so we don't drop content that happens to contain "--" inside a
+    #    string literal. For our migrations strings don't contain "--", so a
+    #    simple per-line strip is safe and much simpler than a full parser.
+    cleaned_lines = []
+    for line in sql.splitlines():
+        # Find the first "--" that is not inside a string literal.
+        in_str = False
+        quote = ""
+        cut = None
+        i = 0
+        while i < len(line):
+            ch = line[i]
+            if in_str:
+                if ch == quote:
+                    # Handle doubled quotes (SQL escape): '' stays inside string.
+                    if i + 1 < len(line) and line[i + 1] == quote:
+                        i += 2
+                        continue
+                    in_str = False
+            else:
+                if ch in ("'", '"'):
+                    in_str = True
+                    quote = ch
+                elif ch == "-" and i + 1 < len(line) and line[i + 1] == "-":
+                    cut = i
+                    break
+            i += 1
+        cleaned_lines.append(line if cut is None else line[:cut])
+    cleaned = "\n".join(cleaned_lines)
+
+    # 3. Split on ';' outside of string literals.
+    statements: List[str] = []
+    buf: List[str] = []
+    in_str = False
+    quote = ""
+    i = 0
+    while i < len(cleaned):
+        ch = cleaned[i]
+        if in_str:
+            buf.append(ch)
+            if ch == quote:
+                if i + 1 < len(cleaned) and cleaned[i + 1] == quote:
+                    buf.append(cleaned[i + 1])
+                    i += 2
+                    continue
+                in_str = False
+        else:
+            if ch in ("'", '"'):
+                in_str = True
+                quote = ch
+                buf.append(ch)
+            elif ch == ";":
+                stmt = "".join(buf).strip()
+                if stmt:
+                    statements.append(stmt)
+                buf = []
+            else:
+                buf.append(ch)
+        i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        statements.append(tail)
+    return statements
+
+
 def apply_migrations(conn: Optional[sqlite3.Connection] = None, dry_run: bool = False) -> int:
     """
     Apply all pending migrations to database.
@@ -971,26 +1051,17 @@ def apply_migrations(conn: Optional[sqlite3.Connection] = None, dry_run: bool = 
                 # Split SQL into individual statements (ignore blank / comment-only lines).
                 # Also drop any BEGIN/COMMIT/ROLLBACK the SQL file may include, since
                 # the runner manages its own EXCLUSIVE transaction below.
-                raw_statements = [s.strip() for s in migration_sql.split(";")]
+                # Robust splitter: strips comments (line/block) and respects
+                # string literals so ';' inside comments or strings does not
+                # cut a statement in half.
+                raw_statements = _split_sql_statements(migration_sql)
                 statements = []
                 for s in raw_statements:
                     if not s:
                         continue
-                    # Skip if every non-empty line is a SQL comment
-                    if all(line.strip().startswith("--") or line.strip() == ""
-                           for line in s.splitlines()):
-                        continue
-                    # Strip top-level transaction control: the runner owns BEGIN/COMMIT.
-                    # A "statement" may be a comment block + keyword (e.g. the file header
-                    # comments immediately followed by BEGIN TRANSACTION with no separating
-                    # semicolon). Strip all SQL line-comments before comparing so we catch
-                    # mixed comment+keyword blocks as well as bare keywords.
-                    _content_lines = [
-                        ln for ln in s.splitlines()
-                        if ln.strip() and not ln.strip().startswith("--")
-                    ]
-                    _clean_sql = " ".join(_content_lines).strip().upper()
-                    if _clean_sql in ("BEGIN", "BEGIN TRANSACTION", "COMMIT", "ROLLBACK"):
+                    normalized = s.strip().upper()
+                    if normalized in ("BEGIN", "BEGIN TRANSACTION", "COMMIT", "ROLLBACK"):
+                        # Runner owns its own BEGIN EXCLUSIVE/COMMIT.
                         continue
                     statements.append(s)
 
