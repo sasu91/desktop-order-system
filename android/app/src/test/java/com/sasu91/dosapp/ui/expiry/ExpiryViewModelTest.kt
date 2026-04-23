@@ -735,6 +735,28 @@ class ExpiryViewModelTest {
         assertEquals("SKU_FAR", state.upcomingItems.first().sku)
     }
 
+    @Test
+    fun `criticalCountByDate counts only entries with expiryDate lte today`() = runTest {
+        val today    = java.time.LocalDate.now()
+        val future   = today.plusDays(5)
+
+        val todayEntry1  = fakeEntry("SKU001", today.toString())
+        val todayEntry2  = fakeEntry("SKU002", today.toString())
+        val futureEntry  = fakeEntry("SKU003", future.toString())
+
+        coEvery { repo.observeByDates(any()) } returns flowOf(emptyList())
+        coEvery { repo.observeUpcomingFrom(any()) } returns
+            flowOf(listOf(todayEntry1, todayEntry2, futureEntry))
+
+        val vm = ExpiryViewModel(repo)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val state = vm.state.value
+        // Two critical entries today, none for future date
+        assertEquals(2, state.criticalCountByDate[today.toString()])
+        assertNull(state.criticalCountByDate[future.toString()])
+    }
+
     // ── Edit / delete ─────────────────────────────────────────────────────────
 
     @Test

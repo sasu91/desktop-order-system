@@ -171,20 +171,60 @@ private fun ListModeContent(
                 }
             }
         } else {
-            items(state.upcomingItems, key = { it.id }) { entry ->
-                val color = when (entry.expiryDate) {
+            // Group by date and render one card per day
+            val groupedByDate = remember(state.upcomingItems) {
+                state.upcomingItems.groupBy { it.expiryDate }
+            }
+            groupedByDate.forEach { (date, entries) ->
+                val color = when (date) {
                     today.toString()    -> COLOR_TODAY
                     tomorrow.toString() -> COLOR_TOMORROW
                     dayAfter.toString() -> COLOR_DAY_AFTER
                     else                -> COLOR_FUTURE
                 }
-                ExpiryEntryCard(
-                    entry    = entry,
-                    color    = color,
-                    onEdit   = { viewModel.startEdit(entry) },
-                    onDelete = { viewModel.deleteEntry(entry.id) },
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp),
-                )
+                val criticalCount = state.criticalCountByDate[date] ?: 0
+                val preview = entries
+                    .take(3)
+                    .joinToString(" · ") { it.description.ifBlank { it.sku } }
+                    .let { if (entries.size > 3) "$it …" else it }
+                item(key = "header_$date") {
+                    ExpiryDayHeader(
+                        date               = date,
+                        color              = color,
+                        count              = entries.size,
+                        criticalCount      = criticalCount,
+                        descriptionPreview = preview,
+                        modifier           = Modifier.padding(horizontal = 16.dp, top = 12.dp, bottom = 2.dp),
+                    )
+                }
+                item(key = "card_$date") {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 2.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = color.copy(alpha = 0.05f),
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(0.5.dp, color.copy(alpha = 0.25f)),
+                    ) {
+                        Column(modifier = Modifier.padding(vertical = 4.dp, horizontal = 4.dp)) {
+                            entries.forEachIndexed { idx, entry ->
+                                ExpiryDayRow(
+                                    entry    = entry,
+                                    color    = color,
+                                    onEdit   = { viewModel.startEdit(entry) },
+                                    onDelete = { viewModel.deleteEntry(entry.id) },
+                                )
+                                if (idx < entries.lastIndex) {
+                                    HorizontalDivider(
+                                        color    = color.copy(alpha = 0.15f),
+                                        modifier = Modifier.padding(horizontal = 8.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -490,7 +530,7 @@ private fun PendingEntriesSection(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text     = "• ${entry.expiryDate}" + (entry.qtyColli?.let { " · $it colli" } ?: "") + "  [${entry.source}]",
+                        text     = "• ${entry.expiryDate}" + (entry.qtyColli?.let { " · $it colli" } ?: ""),
                         modifier = Modifier.weight(1f),
                         style    = MaterialTheme.typography.bodySmall,
                     )
@@ -601,8 +641,7 @@ private fun PendingDraftsGroupedPanel(
                         ) {
                             Text(
                                 text     = "• ${entry.expiryDate}" +
-                                    (entry.qtyColli?.let { " · $it colli" } ?: "") +
-                                    "  [${entry.source}]",
+                                    (entry.qtyColli?.let { " · $it colli" } ?: ""),
                                 modifier = Modifier.weight(1f),
                                 style    = MaterialTheme.typography.bodySmall,
                             )
@@ -622,6 +661,144 @@ private fun PendingDraftsGroupedPanel(
                     )
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Day-grouped agenda composables
+// ---------------------------------------------------------------------------
+
+/**
+ * Header row for a single expiry-date group. Shows:
+ *  - Colored date label with item count
+ *  - Red warning badge with critical count (entries <= today)
+ *  - One-line preview of article descriptions (ellipsis if too long)
+ */
+@Composable
+private fun ExpiryDayHeader(
+    date: String,
+    color: Color,
+    count: Int,
+    criticalCount: Int,
+    descriptionPreview: String,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier          = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // Colored date pill
+        Surface(
+            color = color,
+            shape = MaterialTheme.shapes.small,
+        ) {
+            Text(
+                text       = " $date  $count ",
+                style      = MaterialTheme.typography.labelMedium,
+                color      = Color.White,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        // Critical badge
+        if (criticalCount > 0) {
+            Surface(
+                color = MaterialTheme.colorScheme.error,
+                shape = MaterialTheme.shapes.extraSmall,
+            ) {
+                Text(
+                    text  = " ⚠ $criticalCount ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+        // Description preview
+        Text(
+            text     = descriptionPreview,
+            style    = MaterialTheme.typography.bodySmall,
+            color    = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/**
+ * Compact single-line row for one expiry entry inside a day group.
+ * Description is truncated to one line; date badge is omitted (shown in group header).
+ */
+@Composable
+private fun ExpiryDayRow(
+    entry: LocalExpiryEntity,
+    color: Color,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var deleteConfirm by remember { mutableStateOf(false) }
+
+    if (deleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { deleteConfirm = false },
+            title            = { Text("Elimina scadenza?") },
+            text             = { Text("${entry.description} — ${entry.expiryDate}") },
+            confirmButton    = {
+                TextButton(onClick = { deleteConfirm = false; onDelete() }) { Text("Elimina") }
+            },
+            dismissButton    = {
+                TextButton(onClick = { deleteConfirm = false }) { Text("Annulla") }
+            },
+        )
+    }
+
+    Row(
+        modifier          = modifier
+            .fillMaxWidth()
+            .padding(start = 8.dp, end = 0.dp, top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text       = entry.description.ifBlank { entry.sku },
+                style      = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                maxLines   = 1,
+                overflow   = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text  = entry.sku,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                if (entry.qtyColli != null) {
+                    Text(
+                        text  = "${entry.qtyColli} colli",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+            }
+        }
+        IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
+            Icon(
+                imageVector        = Icons.Default.Edit,
+                contentDescription = "Modifica",
+                tint               = MaterialTheme.colorScheme.primary,
+                modifier           = Modifier.size(16.dp),
+            )
+        }
+        IconButton(onClick = { deleteConfirm = true }, modifier = Modifier.size(32.dp)) {
+            Icon(
+                imageVector        = Icons.Default.Delete,
+                contentDescription = "Elimina",
+                tint               = MaterialTheme.colorScheme.error,
+                modifier           = Modifier.size(16.dp),
+            )
         }
     }
 }
@@ -697,11 +874,7 @@ private fun ExpiryEntryCard(
                             color = MaterialTheme.colorScheme.outline,
                         )
                     }
-                    Text(
-                        text  = entry.source,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = color.copy(alpha = 0.7f),
-                    )
+
                 }
             }
             // Edit and delete action buttons

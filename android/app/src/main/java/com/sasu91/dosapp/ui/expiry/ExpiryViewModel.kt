@@ -90,6 +90,8 @@ data class ExpiryUiState(
     val tomorrowItems: List<LocalExpiryEntity> = emptyList(),
     val dayAfterItems: List<LocalExpiryEntity> = emptyList(),
     val upcomingItems: List<LocalExpiryEntity> = emptyList(),
+    /** Number of critical entries (expiryDate <= today) keyed by ISO date string. */
+    val criticalCountByDate: Map<String, Int> = emptyMap(),
     val feedbackMessage: String? = null,
     val editingEntry: LocalExpiryEntity? = null,
 )
@@ -211,7 +213,13 @@ class ExpiryViewModel @Inject constructor(
         // Full upcoming list (today onwards, ordered by date asc) for the complete agenda
         viewModelScope.launch {
             repo.observeUpcomingFrom(today.toString()).collectLatest { all ->
-                _state.update { s -> s.copy(upcomingItems = all) }
+                // criticalCountByDate: for each date, count entries where expiryDate <= today
+                val todayStr = today.toString()
+                val criticalMap = all
+                    .filter { it.expiryDate <= todayStr }
+                    .groupBy { it.expiryDate }
+                    .mapValues { (_, v) -> v.size }
+                _state.update { s -> s.copy(upcomingItems = all, criticalCountByDate = criticalMap) }
             }
         }
     }
