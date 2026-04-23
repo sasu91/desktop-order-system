@@ -4,6 +4,7 @@ import android.util.Log
 import com.sasu91.dosapp.data.api.DosApiService
 import com.sasu91.dosapp.data.api.dto.AddArticleRequestDto
 import com.sasu91.dosapp.data.api.dto.AddArticleResponseDto
+import com.sasu91.dosapp.data.db.dao.CachedSkuDao
 import com.sasu91.dosapp.data.db.dao.LocalArticleDao
 import com.sasu91.dosapp.data.db.dao.PendingAddArticleDao
 import com.sasu91.dosapp.data.db.entity.LocalArticleEntity
@@ -45,6 +46,7 @@ class AddArticleRepository @Inject constructor(
     private val pendingDao: PendingAddArticleDao,
     private val localDao: LocalArticleDao,
     private val skuCache: SkuCacheRepository,
+    private val cachedSkuDao: CachedSkuDao,
 ) {
 
     // -----------------------------------------------------------------------
@@ -105,6 +107,33 @@ class AddArticleRepository @Inject constructor(
             when (val r = validateAndNormalizeEan(eanSecondaryRaw.trim())) {
                 is EanResult.Valid   -> r.normalized
                 is EanResult.Invalid -> return EnqueueResult.ValidationError("EAN secondario non valido: ${r.reason}")
+            }
+        }
+
+        // ── EAN uniqueness check ─────────────────────────────────────────────
+        // Mirrors desktop check_ean_unique(): reject before writing to local DB
+        // so that getByEan(LIMIT 1) in SkuLookupRepository always resolves unambiguously.
+        for ((candidateEan, fieldLabel) in listOf(
+            eanPrimary   to "EAN primario",
+            eanSecondary to "EAN secondario",
+        )) {
+            if (candidateEan.isBlank()) continue
+            val localConflict = localDao.getByEan(candidateEan)
+            if (localConflict != null) {
+                return EnqueueResult.ValidationError(
+                    "$fieldLabel '$candidateEan' è già in uso localmente dallo SKU '${localConflict.sku}'"
+                )
+            }
+            // Check cached_skus — covers articles synced from the server
+            val cachedConflict = if (candidateEan.length == 13) {
+                cachedSkuDao.getByEanOrShort(candidateEan, candidateEan.dropLast(1))
+            } else {
+                cachedSkuDao.getByEan(candidateEan)
+            }
+            if (cachedConflict != null) {
+                return EnqueueResult.ValidationError(
+                    "$fieldLabel '$candidateEan' è già associato allo SKU '${cachedConflict.sku}'"
+                )
             }
         }
 
