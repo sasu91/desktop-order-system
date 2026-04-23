@@ -175,4 +175,7 @@ class SkuEanBindRepository @Inject constructor(
     fun observeAll(): Flow<List<PendingBindEntity>> = bindDao.observeAll()
     fun observePendingCount(): Flow<Int> = bindDao.observePendingCount()
     suspend fun deleteSent() = bindDao.deleteSent()
+
+    /** Delete a single bind row by id — operator-initiated discard. */
+    suspend fun deleteById(id: String) = bindDao.deleteById(id)
 }

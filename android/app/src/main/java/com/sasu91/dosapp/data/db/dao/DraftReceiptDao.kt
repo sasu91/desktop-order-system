@@ -69,4 +69,8 @@ interface DraftReceiptDao {
     /** Purge all successfully sent drafts (housekeeping). */
     @Query("DELETE FROM draft_receipts WHERE status = 'SENT'")
     suspend fun deleteSent()
+
+    /** Delete a single draft row regardless of status — operator explicit action. */
+    @Query("DELETE FROM draft_receipts WHERE client_receipt_id = :id")
+    suspend fun deleteById(id: String)
 }

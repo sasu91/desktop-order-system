@@ -75,4 +75,8 @@ interface PendingAddArticleDao {
 
     @Query("DELETE FROM pending_add_articles WHERE status = 'SENT'")
     suspend fun deleteSent()
+
+    /** Delete a single add-article row regardless of status — operator explicit action. */
+    @Query("DELETE FROM pending_add_articles WHERE client_add_id = :id")
+    suspend fun deleteById(id: String)
 }

@@ -103,6 +103,9 @@ class EodRepository @Inject constructor(
     /** Purge SENT EOD drafts (housekeeping). */
     suspend fun deleteSent() = dao.deleteSent()
 
+    /** Delete a single EOD draft by id — operator-initiated discard. */
+    suspend fun deleteById(id: String) = dao.deleteById(id)
+
     /**
      * Persist [request] directly to the Room queue **without** attempting an
      * API call.  Always succeeds (unless Room itself throws).

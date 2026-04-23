@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -60,9 +61,10 @@ fun OfflineQueueScreen(
             ) {
                 items(state.items, key = { it.id }) { item ->
                     QueueItemCard(
-                        item    = item,
-                        isBusy  = item.id in state.busyIds,
-                        onRetry = { viewModel.retry(item) },
+                        item     = item,
+                        isBusy   = item.id in state.busyIds,
+                        onRetry  = { viewModel.retry(item) },
+                        onRemove = { viewModel.remove(item) },
                     )
                 }
             }
@@ -75,7 +77,28 @@ private fun QueueItemCard(
     item: QueueItem,
     isBusy: Boolean,
     onRetry: () -> Unit,
+    onRemove: () -> Unit,
 ) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title   = { Text("Elimina dalla coda?") },
+            text    = { Text(item.summary) },
+            confirmButton = {
+                TextButton(onClick = { showDeleteConfirm = false; onRemove() }) {
+                    Text("Elimina")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Annulla")
+                }
+            },
+        )
+    }
+
     val containerColor = when (item.status) {
         QueueStatus.FAILED -> MaterialTheme.colorScheme.errorContainer
         QueueStatus.SENT   -> MaterialTheme.colorScheme.surfaceVariant
@@ -144,6 +167,18 @@ private fun QueueItemCard(
                         Icon(Icons.Default.Refresh, contentDescription = "Riprova")
                     }
                 }
+            }
+
+            // Delete button — always visible, disabled while item is being retried
+            IconButton(
+                onClick  = { showDeleteConfirm = true },
+                enabled  = !isBusy,
+            ) {
+                Icon(
+                    imageVector        = Icons.Default.Delete,
+                    contentDescription = "Elimina dalla coda",
+                    tint               = MaterialTheme.colorScheme.error,
+                )
             }
         }
     }

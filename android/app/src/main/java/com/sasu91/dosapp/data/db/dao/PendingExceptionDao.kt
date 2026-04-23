@@ -67,4 +67,8 @@ interface PendingExceptionDao {
     /** Purge all successfully sent exceptions (housekeeping). */
     @Query("DELETE FROM pending_exceptions WHERE status = 'SENT'")
     suspend fun deleteSent()
+
+    /** Delete a single exception row regardless of status — operator explicit action. */
+    @Query("DELETE FROM pending_exceptions WHERE client_event_id = :id")
+    suspend fun deleteById(id: String)
 }

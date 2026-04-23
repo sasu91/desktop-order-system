@@ -24,6 +24,17 @@ interface LocalExpiryDao {
     fun observeByDates(dates: List<String>): Flow<List<LocalExpiryEntity>>
 
     /**
+     * Observe all upcoming expiry entries whose date is >= [fromDate] (ISO-8601).
+     * Ordered expiry_date ASC, description ASC — used by the full agenda list.
+     */
+    @Query("""
+        SELECT * FROM local_expiry_entries
+        WHERE  expiry_date >= :fromDate
+        ORDER  BY expiry_date ASC, description ASC
+    """)
+    fun observeUpcomingFrom(fromDate: String): Flow<List<LocalExpiryEntity>>
+
+    /**
      * Find an existing row by the logical key (sku + expiryDate).
      * Returns null when no match exists.
      */

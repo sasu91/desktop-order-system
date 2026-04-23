@@ -61,4 +61,8 @@ interface DraftEodDao {
     /** Purge all successfully sent EOD drafts (housekeeping). */
     @Query("DELETE FROM draft_eod WHERE status = 'SENT'")
     suspend fun deleteSent()
+
+    /** Delete a single EOD draft row regardless of status — operator explicit action. */
+    @Query("DELETE FROM draft_eod WHERE client_eod_id = :id")
+    suspend fun deleteById(id: String)
 }

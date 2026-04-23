@@ -53,4 +53,8 @@ interface PendingBindDao {
 
     @Query("DELETE FROM pending_binds WHERE status = 'SENT'")
     suspend fun deleteSent()
+
+    /** Delete a single bind row regardless of status — operator explicit action. */
+    @Query("DELETE FROM pending_binds WHERE client_bind_id = :id")
+    suspend fun deleteById(id: String)
 }

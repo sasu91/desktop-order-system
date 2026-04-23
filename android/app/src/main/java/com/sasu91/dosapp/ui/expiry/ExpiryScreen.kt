@@ -31,6 +31,7 @@ import java.time.ZoneId
 private val COLOR_TODAY      = Color(0xFFB71C1C)   // deep red
 private val COLOR_TOMORROW   = Color(0xFFE65100)   // deep orange
 private val COLOR_DAY_AFTER  = Color(0xFFF9A825)   // amber
+private val COLOR_FUTURE     = Color(0xFF1565C0)   // blue (beyond day-after)
 
 /**
  * Scadenze screen — local-only expiry date tracking.
@@ -103,6 +104,10 @@ private fun ListModeContent(
     viewModel: ExpiryViewModel,
     padding: PaddingValues,
 ) {
+    val today    = remember { java.time.LocalDate.now() }
+    val tomorrow = remember { today.plusDays(1) }
+    val dayAfter = remember { today.plusDays(2) }
+
     LazyColumn(
         modifier       = Modifier
             .padding(padding)
@@ -123,47 +128,34 @@ private fun ListModeContent(
             }
         }
 
+        // Cross-SKU pending drafts panel — visible also without any scanned
+        // article, so drafts staged previously are never hidden.
+        if (state.pendingGroups.isNotEmpty()) {
+            item {
+                PendingDraftsGroupedPanel(
+                    groups        = state.pendingGroups,
+                    excludeSku    = null,
+                    onRemoveEntry = viewModel::removePendingEntry,
+                    onSaveSku     = viewModel::saveDraftsForSku,
+                    onDiscardSku  = viewModel::discardDraftsForSku,
+                    onSaveAll     = viewModel::saveAllPendingDrafts,
+                    onDiscardAll  = viewModel::discardAllPendingDrafts,
+                    modifier      = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+        }
+
         // Agenda header
         item {
             Text(
-                text       = "Agenda scadenze",
+                text       = "Agenda scadenze (${state.upcomingItems.size})",
                 style      = MaterialTheme.typography.titleSmall,
                 modifier   = Modifier.padding(horizontal = 16.dp),
                 fontWeight = FontWeight.SemiBold,
             )
         }
 
-        item {
-            BucketSection(
-                label    = "Oggi",
-                color    = COLOR_TODAY,
-                items    = state.todayItems,
-                onEdit   = viewModel::startEdit,
-                onDelete = viewModel::deleteEntry,
-            )
-        }
-
-        item {
-            BucketSection(
-                label    = "Domani",
-                color    = COLOR_TOMORROW,
-                items    = state.tomorrowItems,
-                onEdit   = viewModel::startEdit,
-                onDelete = viewModel::deleteEntry,
-            )
-        }
-
-        item {
-            BucketSection(
-                label    = "Dopodomani",
-                color    = COLOR_DAY_AFTER,
-                items    = state.dayAfterItems,
-                onEdit   = viewModel::startEdit,
-                onDelete = viewModel::deleteEntry,
-            )
-        }
-
-        if (state.todayItems.isEmpty() && state.tomorrowItems.isEmpty() && state.dayAfterItems.isEmpty()) {
+        if (state.upcomingItems.isEmpty()) {
             item {
                 Box(
                     modifier         = Modifier
@@ -172,11 +164,27 @@ private fun ListModeContent(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text  = "Nessuna scadenza nei prossimi 3 giorni",
+                        text  = "Nessuna scadenza futura registrata",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.outline,
                     )
                 }
+            }
+        } else {
+            items(state.upcomingItems, key = { it.id }) { entry ->
+                val color = when (entry.expiryDate) {
+                    today.toString()    -> COLOR_TODAY
+                    tomorrow.toString() -> COLOR_TOMORROW
+                    dayAfter.toString() -> COLOR_DAY_AFTER
+                    else                -> COLOR_FUTURE
+                }
+                ExpiryEntryCard(
+                    entry    = entry,
+                    color    = color,
+                    onEdit   = { viewModel.startEdit(entry) },
+                    onDelete = { viewModel.deleteEntry(entry.id) },
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp),
+                )
             }
         }
     }
@@ -342,6 +350,23 @@ private fun ResultModeContent(
                     )
                 }
             }
+
+            // Drafts from other SKUs staged earlier — kept visible so the operator
+            // knows what's still pending while working on the current article.
+            if (state.pendingGroups.any { it.sku != state.scannedSku }) {
+                item {
+                    PendingDraftsGroupedPanel(
+                        groups        = state.pendingGroups,
+                        excludeSku    = state.scannedSku,
+                        onRemoveEntry = viewModel::removePendingEntry,
+                        onSaveSku     = viewModel::saveDraftsForSku,
+                        onDiscardSku  = viewModel::discardDraftsForSku,
+                        onSaveAll     = viewModel::saveAllPendingDrafts,
+                        onDiscardAll  = viewModel::discardAllPendingDrafts,
+                        modifier      = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -496,69 +521,106 @@ private fun PendingEntriesSection(
 }
 
 // ---------------------------------------------------------------------------
-// Agenda bucket section
+// Grouped pending drafts panel (multi-SKU, cross-article)
 // ---------------------------------------------------------------------------
 
+/**
+ * Renders pending drafts for multiple SKUs in a single panel, grouped per
+ * article. Allows the operator to see staged entries even after switching
+ * article, and to save/discard each group or all groups at once.
+ *
+ * Groups matching [excludeSku] are hidden (used to avoid duplicate rendering
+ * when the ScannedSkuCard is already showing the same SKU's drafts).
+ */
 @Composable
-private fun BucketSection(
-    label: String,
-    color: Color,
-    items: List<LocalExpiryEntity>,
-    onEdit: (LocalExpiryEntity) -> Unit,
-    onDelete: (String) -> Unit,
+private fun PendingDraftsGroupedPanel(
+    groups: List<PendingSkuGroup>,
+    excludeSku: String?,
+    onRemoveEntry: (String) -> Unit,
+    onSaveSku: (String) -> Unit,
+    onDiscardSku: (String) -> Unit,
+    onSaveAll: () -> Unit,
+    onDiscardAll: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-    ) {
-        // Colored header with item count badge
-        Surface(
-            color  = color.copy(alpha = 0.15f),
-            shape  = MaterialTheme.shapes.small,
-            modifier = Modifier.fillMaxWidth(),
+    val visible = groups.filter { it.sku != excludeSku }
+    if (visible.isEmpty()) return
+    val total = visible.sumOf { it.entries.size }
+
+    Card(modifier = modifier.fillMaxWidth()) {
+        Column(
+            modifier            = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(
-                modifier          = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Surface(
-                    color  = color,
-                    shape  = MaterialTheme.shapes.extraSmall,
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text       = "Bozze in attesa ($total)",
+                    style      = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier   = Modifier.weight(1f),
+                )
+                if (visible.size > 1) {
+                    TextButton(onClick = onDiscardAll) {
+                        Text("Scarta tutte", style = MaterialTheme.typography.labelSmall)
+                    }
+                    Button(onClick = onSaveAll) {
+                        Text("Salva tutte")
+                    }
+                }
+            }
+
+            visible.forEach { group ->
+                Column(
+                    modifier            = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    Text(
-                        text     = " $label ",
-                        style    = MaterialTheme.typography.labelSmall,
-                        color    = Color.White,
-                        fontWeight = FontWeight.Bold,
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text       = group.description.ifBlank { group.sku },
+                                style      = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text  = "${group.sku} · ${group.entries.size} ${if (group.entries.size == 1) "data" else "date"}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                        TextButton(onClick = { onDiscardSku(group.sku) }) {
+                            Text("Scarta", style = MaterialTheme.typography.labelSmall)
+                        }
+                        Button(onClick = { onSaveSku(group.sku) }) {
+                            Text("Salva")
+                        }
+                    }
+                    group.entries.forEach { entry ->
+                        Row(
+                            modifier          = Modifier.fillMaxWidth().padding(start = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text     = "• ${entry.expiryDate}" +
+                                    (entry.qtyColli?.let { " · $it colli" } ?: "") +
+                                    "  [${entry.source}]",
+                                modifier = Modifier.weight(1f),
+                                style    = MaterialTheme.typography.bodySmall,
+                            )
+                            IconButton(onClick = { onRemoveEntry(entry.id) }) {
+                                Icon(
+                                    imageVector        = Icons.Default.Delete,
+                                    contentDescription = "Rimuovi",
+                                    tint               = MaterialTheme.colorScheme.outline,
+                                    modifier           = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                    }
+                    HorizontalDivider(
+                        color    = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.padding(top = 4.dp),
                     )
                 }
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text  = if (items.isEmpty()) "—" else "${items.size} art.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = color,
-                )
-            }
-        }
-
-        if (items.isEmpty()) {
-            Text(
-                text     = "Nessuna scadenza",
-                style    = MaterialTheme.typography.bodySmall,
-                color    = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.padding(start = 12.dp, top = 4.dp, bottom = 4.dp),
-            )
-        } else {
-            Spacer(Modifier.height(4.dp))
-            items.forEach { entry ->
-                ExpiryEntryCard(
-                    entry    = entry,
-                    color    = color,
-                    onEdit   = { onEdit(entry) },
-                    onDelete = { onDelete(entry.id) },
-                )
-                Spacer(Modifier.height(4.dp))
             }
         }
     }
@@ -574,6 +636,7 @@ private fun ExpiryEntryCard(
     color: Color,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var deleteConfirm by remember { mutableStateOf(false) }
 
@@ -592,7 +655,7 @@ private fun ExpiryEntryCard(
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         colors   = CardDefaults.cardColors(
             containerColor = color.copy(alpha = 0.06f),
         ),
@@ -602,6 +665,19 @@ private fun ExpiryEntryCard(
             modifier          = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Colored date badge on the left
+            Surface(
+                color  = color,
+                shape  = MaterialTheme.shapes.extraSmall,
+                modifier = Modifier.padding(end = 8.dp),
+            ) {
+                Text(
+                    text     = " ${entry.expiryDate} ",
+                    style    = MaterialTheme.typography.labelSmall,
+                    color    = Color.White,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text       = entry.description.ifBlank { entry.sku },

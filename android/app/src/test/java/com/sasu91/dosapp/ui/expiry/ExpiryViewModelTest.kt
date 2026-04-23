@@ -39,26 +39,30 @@ class ExpiryViewModelTest {
     private lateinit var viewModel: ExpiryViewModel
 
     /**
-     * In-memory draft store keyed by sku → flow. [setup] wires [repo] so that
-     * `addDraft`, `deleteDraft`, `discardDraftsForSku`, and `commitDraftsForSku`
-     * mutate these flows, and `observeDraftsBySku(sku)` returns the matching
-     * flow. This mirrors the real DB-backed behaviour the VM relies on.
+     * Single in-memory store of every draft across every SKU. [setup] wires
+     * [repo] so that `addDraft`, `deleteDraft`, `discardDraftsForSku`,
+     * `commitDraftsForSku`, `commitAllDrafts` and `discardAllDrafts` mutate
+     * this flow, and `observeAllDrafts()` returns it directly. This mirrors
+     * the real DB-backed behaviour the VM relies on.
      */
-    private val draftFlows = mutableMapOf<String, MutableStateFlow<List<DraftPendingExpiryEntity>>>()
+    private val allDrafts = MutableStateFlow<List<DraftPendingExpiryEntity>>(emptyList())
 
-    private fun draftFlow(sku: String) =
-        draftFlows.getOrPut(sku) { MutableStateFlow(emptyList()) }
+    /** Snapshot of drafts for a given [sku] (test helper). */
+    private fun draftsBySku(sku: String): List<DraftPendingExpiryEntity> =
+        allDrafts.value.filter { it.sku == sku }
 
     @Before
     fun setup() {
         Dispatchers.setMain(testDispatcher)
-        draftFlows.clear()
+        allDrafts.value = emptyList()
         repo = mockk(relaxed = true)
         // Default: observeByDates returns empty list; purgeExpired is a no-op
         coEvery { repo.observeByDates(any()) } returns flowOf(emptyList())
+        coEvery { repo.observeUpcomingFrom(any()) } returns flowOf(emptyList())
         coJustRun { repo.purgeExpired(any()) }
 
-        coEvery { repo.observeDraftsBySku(any()) } answers { draftFlow(firstArg()) }
+        // Global drafts observation (the VM now subscribes only to this).
+        coEvery { repo.observeAllDrafts() } returns allDrafts
 
         coEvery { repo.addDraft(any(), any(), any(), any(), any(), any()) } answers {
             val sku  = firstArg<String>()
@@ -67,10 +71,9 @@ class ExpiryViewModelTest {
             val date = arg<String>(3)
             val qty  = arg<Int?>(4)
             val src  = arg<String>(5)
-            val flow = draftFlow(sku)
             val now  = System.currentTimeMillis()
-            val current = flow.value
-            val existing = current.firstOrNull { it.expiryDate == date }
+            val current = allDrafts.value
+            val existing = current.firstOrNull { it.sku == sku && it.expiryDate == date }
             val entity = DraftPendingExpiryEntity(
                 id          = existing?.id ?: UUID.randomUUID().toString(),
                 sku         = sku,
@@ -81,28 +84,37 @@ class ExpiryViewModelTest {
                 source      = src,
                 createdAt   = existing?.createdAt ?: now,
             )
-            flow.value = if (existing == null) current + entity
-                         else current.map { if (it.id == entity.id) entity else it }
+            allDrafts.value = if (existing == null) current + entity
+                              else current.map { if (it.id == entity.id) entity else it }
             ExpiryRepository.DraftResult.Inserted(entity.id)
         }
 
         coEvery { repo.deleteDraft(any()) } answers {
             val id = firstArg<String>()
-            draftFlows.values.forEach { flow ->
-                flow.value = flow.value.filterNot { it.id == id }
-            }
+            allDrafts.value = allDrafts.value.filterNot { it.id == id }
         }
 
         coEvery { repo.discardDraftsForSku(any()) } answers {
             val sku = firstArg<String>()
-            draftFlow(sku).value = emptyList()
+            allDrafts.value = allDrafts.value.filterNot { it.sku == sku }
         }
 
         coEvery { repo.commitDraftsForSku(any()) } answers {
             val sku = firstArg<String>()
-            val n = draftFlow(sku).value.size
-            draftFlow(sku).value = emptyList()
+            val matching = allDrafts.value.filter { it.sku == sku }
+            allDrafts.value = allDrafts.value.filterNot { it.sku == sku }
+            matching.size
+        }
+
+        coEvery { repo.commitAllDrafts() } answers {
+            val n = allDrafts.value.size
+            allDrafts.value = emptyList()
             n
+        }
+
+        coJustRun { repo.discardAllDrafts() }
+        coEvery { repo.discardAllDrafts() } answers {
+            allDrafts.value = emptyList()
         }
 
         viewModel = ExpiryViewModel(repo)
@@ -342,7 +354,7 @@ class ExpiryViewModelTest {
         assertTrue(viewModel.state.value.pendingEntries.isEmpty())
 
         // 3. DB must still hold the drafts (no discard happened).
-        assertEquals(2, draftFlow("SKU001").value.size)
+        assertEquals(2, draftsBySku("SKU001").size)
 
         // 4. Scan SKU001 again → drafts re-appear via Flow.
         viewModel.onBarcodeDetected("EAN1")
@@ -371,7 +383,7 @@ class ExpiryViewModelTest {
 
         // SKU002 has no drafts, SKU001's are intact on disk
         assertEquals(0, viewModel.state.value.pendingEntries.size)
-        assertEquals(1, draftFlow("SKU001").value.size)
+        assertEquals(1, draftsBySku("SKU001").size)
 
         viewModel.addPendingEntry("2026-04-20", 5)
         testDispatcher.scheduler.advanceUntilIdle()
@@ -382,8 +394,8 @@ class ExpiryViewModelTest {
 
         coVerify(exactly = 1) { repo.commitDraftsForSku("SKU002") }
         coVerify(exactly = 0) { repo.commitDraftsForSku("SKU001") }
-        assertEquals(1, draftFlow("SKU001").value.size)
-        assertEquals(0, draftFlow("SKU002").value.size)
+        assertEquals(1, draftsBySku("SKU001").size)
+        assertEquals(0, draftsBySku("SKU002").size)
     }
 
     @Test
@@ -398,7 +410,7 @@ class ExpiryViewModelTest {
         viewModel.exitScanMode()
         testDispatcher.scheduler.advanceUntilIdle()
 
-        assertEquals(1, draftFlow("SKU001").value.size)
+        assertEquals(1, draftsBySku("SKU001").size)
         coVerify(exactly = 0) { repo.discardDraftsForSku(any()) }
     }
 
@@ -417,7 +429,166 @@ class ExpiryViewModelTest {
         testDispatcher.scheduler.advanceUntilIdle()
 
         assertTrue(viewModel.state.value.pendingEntries.isEmpty())
-        assertEquals(0, draftFlow("SKU001").value.size)
+        assertEquals(0, draftsBySku("SKU001").size)
+    }
+
+    // ── Multi-SKU pending panel (cross-article visibility) ────────────────────
+
+    @Test
+    fun `pendingGroups shows drafts for every SKU regardless of scanned article`() = runTest {
+        coEvery { repo.resolveEanCacheOnly("EAN1") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN1")
+        coEvery { repo.resolveEanCacheOnly("EAN2") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU002", "Burro", "EAN2")
+
+        viewModel.onBarcodeDetected("EAN1")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-16", 2)
+        viewModel.addPendingEntry("2026-04-17", 3)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Switch article — SKU001 drafts MUST remain visible in pendingGroups.
+        viewModel.resetScan()
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.onBarcodeDetected("EAN2")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-20", 5)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.state.value
+        val groupsBySku = state.pendingGroups.associateBy { it.sku }
+        assertEquals(2, groupsBySku.size)
+        assertEquals(2, groupsBySku.getValue("SKU001").entries.size)
+        assertEquals(1, groupsBySku.getValue("SKU002").entries.size)
+        // Current-SKU filter still works for the scanner card.
+        assertEquals(1, state.pendingEntries.size)
+        assertEquals("SKU002", state.scannedSku)
+    }
+
+    @Test
+    fun `pendingGroups stays visible after resetScan with no active SKU`() = runTest {
+        coEvery { repo.resolveEanCacheOnly("EAN1") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN1")
+
+        viewModel.onBarcodeDetected("EAN1")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-16", 1)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.resetScan()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.state.value
+        assertNull(state.scannedSku)
+        assertTrue(state.pendingEntries.isEmpty())
+        // Cross-SKU pending panel still shows the staged draft.
+        assertEquals(1, state.pendingGroups.size)
+        assertEquals("SKU001", state.pendingGroups.first().sku)
+        assertEquals(1, state.pendingGroups.first().entries.size)
+    }
+
+    @Test
+    fun `saveAllPendingDrafts commits every SKU and empties the panel`() = runTest {
+        coEvery { repo.resolveEanCacheOnly("EAN1") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN1")
+        coEvery { repo.resolveEanCacheOnly("EAN2") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU002", "Burro", "EAN2")
+
+        viewModel.onBarcodeDetected("EAN1")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-16", 1)
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.resetScan()
+        viewModel.onBarcodeDetected("EAN2")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-18", 2)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.saveAllPendingDrafts()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        coVerify(exactly = 1) { repo.commitAllDrafts() }
+        assertTrue(viewModel.state.value.pendingGroups.isEmpty())
+        assertTrue(viewModel.state.value.pendingEntries.isEmpty())
+        assertEquals(0, draftsBySku("SKU001").size)
+        assertEquals(0, draftsBySku("SKU002").size)
+    }
+
+    @Test
+    fun `saveDraftsForSku commits only the target SKU`() = runTest {
+        coEvery { repo.resolveEanCacheOnly("EAN1") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN1")
+        coEvery { repo.resolveEanCacheOnly("EAN2") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU002", "Burro", "EAN2")
+
+        viewModel.onBarcodeDetected("EAN1")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-16", 1)
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.resetScan()
+        viewModel.onBarcodeDetected("EAN2")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-18", 2)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.saveDraftsForSku("SKU001")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        coVerify(exactly = 1) { repo.commitDraftsForSku("SKU001") }
+        assertEquals(0, draftsBySku("SKU001").size)
+        assertEquals(1, draftsBySku("SKU002").size)
+        assertEquals(1, viewModel.state.value.pendingGroups.size)
+    }
+
+    @Test
+    fun `discardAllPendingDrafts empties every SKU`() = runTest {
+        coEvery { repo.resolveEanCacheOnly("EAN1") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN1")
+        coEvery { repo.resolveEanCacheOnly("EAN2") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU002", "Burro", "EAN2")
+
+        viewModel.onBarcodeDetected("EAN1")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-16", 1)
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.resetScan()
+        viewModel.onBarcodeDetected("EAN2")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-18", 2)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.discardAllPendingDrafts()
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        coVerify(exactly = 1) { repo.discardAllDrafts() }
+        assertTrue(viewModel.state.value.pendingGroups.isEmpty())
+        assertEquals(0, draftsBySku("SKU001").size)
+        assertEquals(0, draftsBySku("SKU002").size)
+    }
+
+    @Test
+    fun `discardDraftsForSku removes only that SKU from the grouped panel`() = runTest {
+        coEvery { repo.resolveEanCacheOnly("EAN1") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU001", "Latte", "EAN1")
+        coEvery { repo.resolveEanCacheOnly("EAN2") } returns
+            ExpiryRepository.CachedSkuResult.Hit("SKU002", "Burro", "EAN2")
+
+        viewModel.onBarcodeDetected("EAN1")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-16", 1)
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.resetScan()
+        viewModel.onBarcodeDetected("EAN2")
+        testDispatcher.scheduler.advanceUntilIdle()
+        viewModel.addPendingEntry("2026-04-18", 2)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.discardDraftsForSku("SKU001")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        coVerify(exactly = 1) { repo.discardDraftsForSku("SKU001") }
+        assertEquals(1, viewModel.state.value.pendingGroups.size)
+        assertEquals("SKU002", viewModel.state.value.pendingGroups.first().sku)
     }
 
     // ── Screen mode transitions ───────────────────────────────────────────────
@@ -516,19 +687,23 @@ class ExpiryViewModelTest {
     // ── Bucket classification ─────────────────────────────────────────────────
 
     @Test
-    fun `buckets are populated from repository observations`() = runTest {
+    fun `buckets and upcomingItems are populated from repository observations`() = runTest {
         val today     = java.time.LocalDate.now()
         val tomorrow  = today.plusDays(1)
         val dayAfter  = today.plusDays(2)
+        val future    = today.plusDays(10)
 
         val todayEntry    = fakeEntry("SKU001", today.toString())
         val tomorrowEntry = fakeEntry("SKU002", tomorrow.toString())
         val dayAfterEntry = fakeEntry("SKU003", dayAfter.toString())
+        val futureEntry   = fakeEntry("SKU004", future.toString())
 
         coEvery { repo.observeByDates(any()) } returns
             flowOf(listOf(todayEntry, tomorrowEntry, dayAfterEntry))
+        coEvery { repo.observeUpcomingFrom(any()) } returns
+            flowOf(listOf(todayEntry, tomorrowEntry, dayAfterEntry, futureEntry))
 
-        // Re-create ViewModel to pick up the new flow stub
+        // Re-create ViewModel to pick up the new flow stubs
         val vm = ExpiryViewModel(repo)
         testDispatcher.scheduler.advanceUntilIdle()
 
@@ -537,6 +712,27 @@ class ExpiryViewModelTest {
         assertEquals(1, state.tomorrowItems.size)
         assertEquals(1, state.dayAfterItems.size)
         assertEquals("SKU001", state.todayItems.first().sku)
+        // Full upcoming list must include all 4 entries (including the far-future one)
+        assertEquals(4, state.upcomingItems.size)
+        assertEquals("SKU004", state.upcomingItems.last().sku)
+    }
+
+    @Test
+    fun `upcomingItems includes entries beyond day-after-tomorrow`() = runTest {
+        val today  = java.time.LocalDate.now()
+        val future = today.plusDays(30)
+
+        coEvery { repo.observeByDates(any()) } returns flowOf(emptyList())
+        coEvery { repo.observeUpcomingFrom(any()) } returns
+            flowOf(listOf(fakeEntry("SKU_FAR", future.toString())))
+
+        val vm = ExpiryViewModel(repo)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        val state = vm.state.value
+        assertEquals(0, state.todayItems.size)   // not in 3-day bucket
+        assertEquals(1, state.upcomingItems.size) // but appears in full list
+        assertEquals("SKU_FAR", state.upcomingItems.first().sku)
     }
 
     // ── Edit / delete ─────────────────────────────────────────────────────────

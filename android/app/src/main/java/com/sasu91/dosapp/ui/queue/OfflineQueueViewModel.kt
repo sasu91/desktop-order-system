@@ -258,4 +258,24 @@ class OfflineQueueViewModel @Inject constructor(
             addArticleRepo.deleteSent()
         }
     }
+
+    /**
+     * Delete a single queue item — operator-initiated discard.
+     *
+     * Removes the row from the underlying typed table regardless of its status.
+     * For [QueueType.ARTICLE] items still pending sync, also removes the
+     * associated local-article cache entry (handled inside [AddArticleRepository]).
+     */
+    fun remove(item: QueueItem) {
+        if (_busyIds.value.contains(item.id)) return  // guard: don't delete while retrying
+        viewModelScope.launch {
+            when (item.type) {
+                QueueType.EXCEPTION -> exceptionRepo.deleteById(item.id)
+                QueueType.RECEIPT   -> receivingRepo.deleteById(item.id)
+                QueueType.EOD       -> eodRepo.deleteById(item.id)
+                QueueType.BIND      -> bindRepo.deleteById(item.id)
+                QueueType.ARTICLE   -> addArticleRepo.deleteById(item.id)
+            }
+        }
+    }
 }

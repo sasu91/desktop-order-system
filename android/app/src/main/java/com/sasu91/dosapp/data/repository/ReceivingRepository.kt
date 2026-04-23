@@ -95,6 +95,9 @@ class ReceivingRepository @Inject constructor(
     /** Purge SENT drafts (housekeeping). */
     suspend fun deleteSent() = dao.deleteSent()
 
+    /** Delete a single draft by id — operator-initiated discard. */
+    suspend fun deleteById(id: String) = dao.deleteById(id)
+
     /**
      * Queue-first submit: always persist locally without attempting a live API call.
      *

@@ -231,6 +231,22 @@ class AddArticleRepository @Inject constructor(
     fun observePendingCount(): Flow<Int> = pendingDao.observePendingCount()
     suspend fun deleteSent() = pendingDao.deleteSent()
 
+    /**
+     * Delete a single queued add-article row by id — operator-initiated discard.
+     *
+     * Also removes the associated [LocalArticleEntity] when the article is still
+     * pending sync (isPendingSync=true), so no ghost entries remain in local search/scan.
+     * If the article was already synced (SENT row, isPendingSync=false) the local
+     * cache entry is left intact — the server already knows the article.
+     */
+    suspend fun deleteById(id: String) {
+        val row = pendingDao.getById(id)
+        pendingDao.deleteById(id)
+        if (row != null && row.status != PendingAddArticleEntity.Status.SENT) {
+            localDao.delete(id)
+        }
+    }
+
     // ── Local article read model (consumed by search/scan screens) ───────────
 
     /** Full live list of locally created articles (pending + synced). */

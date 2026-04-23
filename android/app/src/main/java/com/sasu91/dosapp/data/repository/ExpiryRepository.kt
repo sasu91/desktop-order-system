@@ -116,6 +116,16 @@ class ExpiryRepository @Inject constructor(
     fun observeByDates(dates: List<String>): Flow<List<LocalExpiryEntity>> =
         dao.observeByDates(dates)
 
+    /**
+     * Observe all upcoming expiry entries with date >= [fromDate] (ISO-8601),
+     * ordered by date ASC then description ASC.
+     *
+     * Used by the full agenda list which shows all future scadenze — not just
+     * the 3-day window.
+     */
+    fun observeUpcomingFrom(fromDate: String): Flow<List<LocalExpiryEntity>> =
+        dao.observeUpcomingFrom(fromDate)
+
     // ── Write ─────────────────────────────────────────────────────────────────
 
     /**
@@ -224,6 +234,15 @@ class ExpiryRepository @Inject constructor(
     fun observeDraftsBySku(sku: String): Flow<List<DraftPendingExpiryEntity>> =
         draftDao.observeBySku(sku)
 
+    /**
+     * Observe ALL unsaved drafts across every SKU, ordered by insertion time.
+     *
+     * Enables the Scadenze UI to display pending entries for multiple articles
+     * at once (operator can prepare several SKUs before saving).
+     */
+    fun observeAllDrafts(): Flow<List<DraftPendingExpiryEntity>> =
+        draftDao.observeAll()
+
     /** Snapshot of drafts for [sku] (non-Flow). */
     suspend fun getDraftsBySku(sku: String): List<DraftPendingExpiryEntity> =
         draftDao.getBySku(sku)
@@ -323,5 +342,35 @@ class ExpiryRepository @Inject constructor(
         draftDao.deleteAllBySku(sku)
         Log.d(TAG, "Committed ${drafts.size} drafts for sku=$sku")
         return drafts.size
+    }
+
+    /**
+     * Commit EVERY draft across all SKUs into `local_expiry_entries`
+     * (applying normal merge semantics) and clear the full staging table.
+     *
+     * Returns the total number of draft rows committed.
+     */
+    suspend fun commitAllDrafts(): Int {
+        val drafts = draftDao.getAll()
+        if (drafts.isEmpty()) return 0
+        for (d in drafts) {
+            addOrMerge(
+                sku         = d.sku,
+                description = d.description,
+                ean         = d.ean,
+                expiryDate  = d.expiryDate,
+                qtyColli    = d.qtyColli,
+                source      = d.source,
+            )
+        }
+        draftDao.deleteAll()
+        Log.d(TAG, "Committed ${drafts.size} drafts across all SKUs")
+        return drafts.size
+    }
+
+    /** Discard EVERY draft across all SKUs — explicit user action. */
+    suspend fun discardAllDrafts() {
+        draftDao.deleteAll()
+        Log.d(TAG, "Discarded all drafts across all SKUs")
     }
 }
