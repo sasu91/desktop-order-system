@@ -107,6 +107,9 @@ private fun ListModeContent(
     val today    = remember { java.time.LocalDate.now() }
     val tomorrow = remember { today.plusDays(1) }
     val dayAfter = remember { today.plusDays(2) }
+    val groupedByDate = remember(state.upcomingItems) {
+        state.upcomingItems.groupBy { it.expiryDate }
+    }
 
     LazyColumn(
         modifier       = Modifier
@@ -172,9 +175,6 @@ private fun ListModeContent(
             }
         } else {
             // Group by date and render one card per day
-            val groupedByDate = remember(state.upcomingItems) {
-                state.upcomingItems.groupBy { it.expiryDate }
-            }
             groupedByDate.forEach { (date, entries) ->
                 val color = when (date) {
                     today.toString()    -> COLOR_TODAY
