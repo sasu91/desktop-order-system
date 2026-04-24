@@ -194,7 +194,7 @@ private fun ListModeContent(
                         count              = entries.size,
                         criticalCount      = criticalCount,
                         descriptionPreview = preview,
-                        modifier           = Modifier.padding(horizontal = 16.dp, top = 12.dp, bottom = 2.dp),
+                        modifier           = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 2.dp),
                     )
                 }
                 item(key = "card_$date") {
